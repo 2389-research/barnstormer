@@ -920,8 +920,8 @@ pub struct TranscriptQuery {
 /// user-controlled values rendered into script tags and HTMX attributes.
 fn sanitize_container_id(raw: &str) -> String {
     match raw {
-        "activity-transcript" | "chat-transcript" => raw.to_string(),
-        _ => "activity-transcript".to_string(),
+        "activity-transcript" | "chat-transcript" | "mission-ticker" => raw.to_string(),
+        _ => "mission-ticker".to_string(),
     }
 }
 
@@ -1631,6 +1631,24 @@ pub async fn provider_status(State(state): State<SharedState>) -> ProviderStatus
     }
 }
 
+/// Mission ticker template — compact activity list for the mission strip.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/mission_ticker.html")]
+pub struct MissionTickerTemplate {
+    pub spec_id: String,
+    pub ticker_entries: Vec<TranscriptEntry>,
+    pub pending_question: Option<QuestionData>,
+}
+
+/// Agent LED indicators template for the command bar.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/agent_leds.html")]
+pub struct AgentLedsTemplate {
+    pub spec_id: String,
+    pub running: bool,
+    pub started: bool,
+}
+
 /// Agent status partial template.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/agent_status.html")]
@@ -1639,6 +1657,82 @@ pub struct AgentStatusTemplate {
     pub running: bool,
     pub started: bool,
     pub agent_count: usize,
+}
+
+/// GET /web/specs/{id}/ticker - Render the mission strip ticker content.
+pub async fn ticker(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    let spec_state = handle.read_state().await;
+
+    // Show last 10 transcript entries
+    let ticker_entries: Vec<TranscriptEntry> = spec_state
+        .transcript
+        .iter()
+        .rev()
+        .take(10)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(to_transcript_entry)
+        .collect();
+
+    let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
+
+    MissionTickerTemplate {
+        spec_id: id,
+        ticker_entries,
+        pending_question,
+    }
+    .into_response()
+}
+
+/// GET /web/specs/{id}/agents/leds - Render agent LED indicators.
+pub async fn agent_leds(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let swarms = state.swarms.read().await;
+    match swarms.get(&spec_id) {
+        Some(swarm_handle) => {
+            let swarm = swarm_handle.swarm.lock().await;
+            AgentLedsTemplate {
+                spec_id: id,
+                running: !swarm.is_paused(),
+                started: true,
+            }
+            .into_response()
+        }
+        None => AgentLedsTemplate {
+            spec_id: id,
+            running: false,
+            started: false,
+        }
+        .into_response(),
+    }
 }
 
 /// POST /web/specs/{id}/agents/start - Start agents for a spec.
@@ -3448,9 +3542,10 @@ mod tests {
     fn sanitize_container_id_rejects_unknown_values() {
         assert_eq!(sanitize_container_id("activity-transcript"), "activity-transcript");
         assert_eq!(sanitize_container_id("chat-transcript"), "chat-transcript");
-        assert_eq!(sanitize_container_id("'); alert('xss'); //"), "activity-transcript");
-        assert_eq!(sanitize_container_id("malicious-id"), "activity-transcript");
-        assert_eq!(sanitize_container_id(""), "activity-transcript");
+        assert_eq!(sanitize_container_id("mission-ticker"), "mission-ticker");
+        assert_eq!(sanitize_container_id("'); alert('xss'); //"), "mission-ticker");
+        assert_eq!(sanitize_container_id("malicious-id"), "mission-ticker");
+        assert_eq!(sanitize_container_id(""), "mission-ticker");
     }
 
     // ---- sender_display tests ----
