@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
 use specd_agent::SwarmOrchestrator;
-use specd_core::{Command, SpecState, spawn};
+use specd_core::{Command, MessageKind, SpecState, spawn};
 use specd_store::{JsonlLog, SnapshotData, save_snapshot};
 use chrono::Utc;
 use ulid::Ulid;
@@ -776,9 +776,24 @@ pub struct TranscriptEntry {
     pub sender: String,
     pub sender_label: String,
     pub is_human: bool,
+    pub is_step: bool,
     pub role_class: String,
     pub content: String,
     pub timestamp: String,
+}
+
+/// Convert a TranscriptMessage to a TranscriptEntry for template rendering.
+fn to_transcript_entry(m: &specd_core::TranscriptMessage) -> TranscriptEntry {
+    let (sender_label, is_human, role_class) = sender_display(&m.sender);
+    TranscriptEntry {
+        sender: m.sender.clone(),
+        sender_label,
+        is_human,
+        is_step: m.kind != MessageKind::Chat,
+        role_class,
+        content: m.content.clone(),
+        timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+    }
 }
 
 /// Returns true if the sender is part of the human ↔ manager conversation.
@@ -948,17 +963,7 @@ pub async fn activity(
     let transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
-        .map(|m| {
-            let (sender_label, is_human, role_class) = sender_display(&m.sender);
-            TranscriptEntry {
-                sender: m.sender.clone(),
-                sender_label,
-                is_human,
-                role_class,
-                content: m.content.clone(),
-                timestamp: m.timestamp.format("%H:%M:%S").to_string(),
-            }
-        })
+        .map(to_transcript_entry)
         .collect();
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
@@ -1010,17 +1015,7 @@ pub async fn activity_transcript(
         .transcript
         .iter()
         .filter(|m| !is_chat || is_chat_participant(&m.sender))
-        .map(|m| {
-            let (sender_label, is_human, role_class) = sender_display(&m.sender);
-            TranscriptEntry {
-                sender: m.sender.clone(),
-                sender_label,
-                is_human,
-                role_class,
-                content: m.content.clone(),
-                timestamp: m.timestamp.format("%H:%M:%S").to_string(),
-            }
-        })
+        .map(to_transcript_entry)
         .collect();
 
     if is_chat {
@@ -1091,17 +1086,7 @@ pub async fn chat_panel(
         .transcript
         .iter()
         .filter(|m| is_chat_participant(&m.sender))
-        .map(|m| {
-            let (sender_label, is_human, role_class) = sender_display(&m.sender);
-            TranscriptEntry {
-                sender: m.sender.clone(),
-                sender_label,
-                is_human,
-                role_class,
-                content: m.content.clone(),
-                timestamp: m.timestamp.format("%H:%M:%S").to_string(),
-            }
-        })
+        .map(to_transcript_entry)
         .collect();
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
@@ -1402,17 +1387,7 @@ pub async fn answer_question(
         .transcript
         .iter()
         .filter(|m| !is_chat || is_chat_participant(&m.sender))
-        .map(|m| {
-            let (sender_label, is_human, role_class) = sender_display(&m.sender);
-            TranscriptEntry {
-                sender: m.sender.clone(),
-                sender_label,
-                is_human,
-                role_class,
-                content: m.content.clone(),
-                timestamp: m.timestamp.format("%H:%M:%S").to_string(),
-            }
-        })
+        .map(to_transcript_entry)
         .collect();
 
     if is_chat {
@@ -1546,17 +1521,7 @@ pub async fn chat(
         .transcript
         .iter()
         .filter(|m| !is_chat || is_chat_participant(&m.sender))
-        .map(|m| {
-            let (sender_label, is_human, role_class) = sender_display(&m.sender);
-            TranscriptEntry {
-                sender: m.sender.clone(),
-                sender_label,
-                is_human,
-                role_class,
-                content: m.content.clone(),
-                timestamp: m.timestamp.format("%H:%M:%S").to_string(),
-            }
-        })
+        .map(to_transcript_entry)
         .collect();
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
@@ -2244,6 +2209,7 @@ mod tests {
                 sender: "agent-1".to_string(),
                 sender_label: "Agent-1".to_string(),
                 is_human: false,
+                is_step: false,
                 role_class: "agent".to_string(),
                 content: "Started analysis".to_string(),
                 timestamp: "12:34:56".to_string(),
@@ -2397,6 +2363,7 @@ mod tests {
                 sender: "agent-1".to_string(),
                 sender_label: "Agent-1".to_string(),
                 is_human: false,
+                is_step: false,
                 role_class: "agent".to_string(),
                 content: "Started analysis".to_string(),
                 timestamp: "12:34:56".to_string(),
@@ -2418,6 +2385,7 @@ mod tests {
                 sender: "human".to_string(),
                 sender_label: "You".to_string(),
                 is_human: true,
+                is_step: false,
                 role_class: "human".to_string(),
                 content: "Hello chat".to_string(),
                 timestamp: "12:00:00".to_string(),
@@ -2873,6 +2841,7 @@ mod tests {
                     sender: "human".to_string(),
                     sender_label: "You".to_string(),
                     is_human: true,
+                    is_step: false,
                     role_class: "human".to_string(),
                     content: "Hello from human".to_string(),
                     timestamp: "12:34:56".to_string(),
@@ -2881,6 +2850,7 @@ mod tests {
                     sender: "manager-01HAGENT".to_string(),
                     sender_label: "Manager".to_string(),
                     is_human: false,
+                    is_step: false,
                     role_class: "manager".to_string(),
                     content: "Agent response here".to_string(),
                     timestamp: "12:35:00".to_string(),
