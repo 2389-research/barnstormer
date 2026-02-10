@@ -74,16 +74,19 @@ pub struct CreateSpecForm {
 
 /// Extract a placeholder title from free-text description.
 /// Takes the first sentence (ending in . ! ?) or first 60 chars, whichever is shorter.
+/// Uses floor_char_boundary to avoid panicking on multi-byte UTF-8 characters.
 fn extract_placeholder_title(description: &str) -> String {
     let trimmed = description.trim();
     if trimmed.is_empty() {
         return String::from("Untitled Spec");
     }
-    let end = trimmed
+    let sentence_end = trimmed
         .find(['.', '!', '?'])
         .map(|i| i + 1)
-        .unwrap_or(trimmed.len())
-        .min(60);
+        .unwrap_or(trimmed.len());
+    // Use floor_char_boundary to avoid slicing in the middle of a multi-byte char
+    let max_len = trimmed.floor_char_boundary(60);
+    let end = sentence_end.min(max_len);
     let mut title = trimmed[..end].to_string();
     if title.len() < trimmed.len() && !title.ends_with(['.', '!', '?']) {
         title.push_str("...");
@@ -2103,6 +2106,22 @@ mod tests {
     }
 
     #[test]
+    fn extract_placeholder_title_multibyte_utf8() {
+        // Ensure we don't panic on multi-byte characters near the 60-byte boundary
+        let emoji_text = format!("{}🚀🚀🚀🚀🚀 more text after emojis", "a".repeat(55));
+        let result = extract_placeholder_title(&emoji_text);
+        // Should truncate at a character boundary, not panic
+        assert!(result.len() <= 63); // max 60 + "..."
+        assert!(result.ends_with("..."));
+
+        // CJK characters (3 bytes each)
+        let cjk = "你好世界你好世界你好世界你好世界你好世界你好世界你好世界你好世界你好世界你好世界";
+        let result = extract_placeholder_title(cjk);
+        assert!(result.ends_with("..."));
+        // Should not panic - the key assertion is that we get here
+    }
+
+    #[test]
     fn board_template_renders_empty_lanes() {
         let tmpl = BoardTemplate {
             spec_id: "01HTEST".to_string(),
@@ -2329,7 +2348,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_web_specs_creates_and_returns_list() {
+    async fn post_web_specs_creates_and_returns_spec_view() {
         let state = test_state();
         let app = create_router(Arc::clone(&state), None);
 
@@ -2344,6 +2363,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), 200);
+        // Verify HX-Push-Url header is set for auto-navigation
+        let hx_push = resp.headers().get("hx-push-url");
+        assert!(hx_push.is_some(), "response should include HX-Push-Url header");
+        let url = hx_push.unwrap().to_str().unwrap();
+        assert!(url.starts_with("/web/specs/"), "HX-Push-Url should point to spec view");
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
