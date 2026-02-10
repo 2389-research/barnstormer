@@ -1,0 +1,14 @@
+{% if specs.is_empty() %}
+<p class="empty-state">No specs yet. Create one to get started.</p>
+{% else %}
+{% for spec in specs %}
+<a class="spec-list-item"
+   hx-get="/web/specs/{{ spec.spec_id }}"
+   hx-target="#main-content"
+   hx-swap="innerHTML"
+   hx-push-url="/web/specs/{{ spec.spec_id }}">
+    <h3>{{ spec.title }}</h3>
+    <span class="one-liner">{{ spec.one_liner }}</span>
+</a>
+{% endfor %}
+{% endif %}

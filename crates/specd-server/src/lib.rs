@@ -4,6 +4,7 @@
 pub mod api;
 pub mod app_state;
 pub mod routes;
+pub mod web;
 
 pub use app_state::{AppState, SharedState};
 pub use routes::create_router;

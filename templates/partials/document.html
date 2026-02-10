@@ -1,0 +1,50 @@
+<div class="document">
+    <h1>{{ title }}</h1>
+    <blockquote>{{ one_liner }}</blockquote>
+
+    <h2>Goal</h2>
+    <p>{{ goal }}</p>
+
+    {% if let Some( desc) = description %}
+    <h2>Description</h2>
+    <p>{{ desc }}</p>
+    {% endif %}
+
+    {% if let Some( c) = constraints %}
+    <h2>Constraints</h2>
+    <p>{{ c }}</p>
+    {% endif %}
+
+    {% if let Some( sc) = success_criteria %}
+    <h2>Success Criteria</h2>
+    <p>{{ sc }}</p>
+    {% endif %}
+
+    {% if let Some( r) = risks %}
+    <h2>Risks</h2>
+    <p>{{ r }}</p>
+    {% endif %}
+
+    {% if let Some( n) = notes %}
+    <h2>Notes</h2>
+    <p>{{ n }}</p>
+    {% endif %}
+
+    {% if !lanes.is_empty() %}
+    <hr>
+    {% for lane in lanes %}
+    <h2>{{ lane.name }}</h2>
+    {% if lane.cards.is_empty() %}
+    <p class="muted">No cards in this lane.</p>
+    {% else %}
+    {% for card in lane.cards %}
+    <h3>{{ card.title }} <span class="card-type badge-{{ card.card_type }}">{{ card.card_type }}</span></h3>
+    {% if let Some( body) = card.body %}
+    <p>{{ body }}</p>
+    {% endif %}
+    <p class="card-meta">by {{ card.created_by }}</p>
+    {% endfor %}
+    {% endif %}
+    {% endfor %}
+    {% endif %}
+</div>

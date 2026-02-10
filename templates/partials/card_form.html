@@ -1,0 +1,51 @@
+<div class="card" style="background: var(--bg-surface);">
+    <h4>{% if card_id.is_some() %}Edit Card{% else %}Create Card{% endif %}</h4>
+    <form {% if let Some(cid) = card_id %}
+              hx-put="/web/specs/{{ spec_id }}/cards/{{ cid }}"
+              hx-target="closest .card"
+              hx-swap="outerHTML"
+          {% else %}
+              hx-post="/web/specs/{{ spec_id }}/cards"
+              hx-target="#board"
+              hx-swap="outerHTML"
+          {% endif %}>
+        <div class="form-group">
+            <label for="card-title">Title</label>
+            <input type="text" id="card-title" name="title" value="{{ title }}" required>
+        </div>
+        <div class="form-group">
+            <label for="card-type">Type</label>
+            <select id="card-type" name="card_type">
+                <option value="idea" {% if card_type == "idea" %}selected{% endif %}>Idea</option>
+                <option value="plan" {% if card_type == "plan" %}selected{% endif %}>Plan</option>
+                <option value="task" {% if card_type == "task" %}selected{% endif %}>Task</option>
+                <option value="decision" {% if card_type == "decision" %}selected{% endif %}>Decision</option>
+                <option value="risk" {% if card_type == "risk" %}selected{% endif %}>Risk</option>
+                <option value="note" {% if card_type == "note" %}selected{% endif %}>Note</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="card-body">Body</label>
+            <textarea id="card-body" name="body" placeholder="Optional details...">{{ body }}</textarea>
+        </div>
+        <div class="form-group">
+            <label for="card-lane">Lane</label>
+            <select id="card-lane" name="lane">
+                <option value="Ideas" {% if lane == "Ideas" %}selected{% endif %}>Ideas</option>
+                <option value="Plan" {% if lane == "Plan" %}selected{% endif %}>Plan</option>
+                <option value="Done" {% if lane == "Done" %}selected{% endif %}>Done</option>
+            </select>
+        </div>
+        <div style="display: flex; gap: var(--spacing-sm);">
+            <button type="submit" class="btn btn-primary">
+                {% if card_id.is_some() %}Save{% else %}Create{% endif %}
+            </button>
+            {% if card_id.is_none() %}
+            <button type="button" class="btn"
+                    onclick="this.closest('.card').remove()">
+                Cancel
+            </button>
+            {% endif %}
+        </div>
+    </form>
+</div>

@@ -1,21 +1,47 @@
 // ABOUTME: Route definitions and handler functions for the specd HTTP API.
-// ABOUTME: Assembles all API routes into a single Axum Router with shared state.
+// ABOUTME: Assembles all API routes, web UI routes, and static file serving into a single Axum Router.
 
 use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
+use tower_http::services::ServeDir;
 
 use crate::api;
 use crate::app_state::SharedState;
+use crate::web;
 
 /// Build the complete Axum router with all routes and shared state.
 pub fn create_router(state: SharedState) -> Router {
     Router::new()
+        // Health check
         .route("/health", get(health))
+        // API routes (JSON)
         .route("/api/specs", get(api::specs::list_specs).post(api::specs::create_spec))
         .route("/api/specs/{id}/state", get(api::specs::get_spec_state))
         .route("/api/specs/{id}/commands", post(api::commands::submit_command))
         .route("/api/specs/{id}/events/stream", get(api::stream::event_stream))
         .route("/api/specs/{id}/undo", post(api::commands::undo))
+        // Web UI routes (HTML)
+        .route("/", get(web::index))
+        .route("/web/specs", get(web::spec_list).post(web::create_spec))
+        .route("/web/specs/new", get(web::create_spec_form))
+        .route("/web/specs/{id}", get(web::spec_view))
+        .route("/web/specs/{id}/board", get(web::board))
+        .route("/web/specs/{id}/document", get(web::document))
+        .route("/web/specs/{id}/activity", get(web::activity))
+        .route("/web/specs/{id}/answer", post(web::answer_question))
+        .route("/web/specs/{id}/undo", post(web::undo))
+        .route("/web/specs/{id}/cards/new", get(web::create_card_form))
+        .route("/web/specs/{id}/cards", post(web::create_card))
+        .route(
+            "/web/specs/{id}/cards/{card_id}/edit",
+            get(web::edit_card_form),
+        )
+        .route(
+            "/web/specs/{id}/cards/{card_id}",
+            put(web::update_card).delete(web::delete_card),
+        )
+        // Static file serving
+        .nest_service("/static", ServeDir::new("static"))
         .with_state(state)
 }
 

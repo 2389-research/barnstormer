@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Home{% endblock %}
+
+{% block left_rail %}
+<div class="rail-header">
+    <h2>Specs</h2>
+</div>
+<div id="spec-list" hx-get="/web/specs" hx-trigger="load" hx-swap="innerHTML">
+    <p class="loading">Loading specs...</p>
+</div>
+<div class="rail-footer">
+    <button class="btn btn-primary" hx-get="/web/specs/new" hx-target="#main-content" hx-swap="innerHTML">
+        + New Spec
+    </button>
+</div>
+{% endblock %}
+
+{% block main %}
+<div class="welcome">
+    <h1>specd</h1>
+    <p>Select a spec from the left or create a new one to get started.</p>
+</div>
+{% endblock %}
+
+{% block right_rail %}
+<div class="rail-header">
+    <h2>Activity</h2>
+</div>
+<p class="muted">Select a spec to see activity.</p>
+{% endblock %}

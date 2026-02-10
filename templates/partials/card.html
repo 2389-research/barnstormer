@@ -1,0 +1,23 @@
+<div class="card" data-card-id="{{ card.card_id }}" data-lane="{{ card.lane }}" data-order="{{ card.order }}">
+    <span class="card-type badge-{{ card.card_type }}">{{ card.card_type }}</span>
+    <h4>{{ card.title }}</h4>
+    {% if let Some(body) = card.body %}
+    <p>{{ body }}</p>
+    {% endif %}
+    <div class="card-meta">by {{ card.created_by }}</div>
+    <div class="card-actions">
+        <button class="btn btn-sm"
+                hx-get="/web/specs/{{ spec_id }}/cards/{{ card.card_id }}/edit"
+                hx-target="closest .card"
+                hx-swap="outerHTML">
+            Edit
+        </button>
+        <button class="btn btn-sm btn-danger"
+                hx-delete="/web/specs/{{ spec_id }}/cards/{{ card.card_id }}"
+                hx-target="closest .card"
+                hx-swap="outerHTML"
+                hx-confirm="Delete this card?">
+            Delete
+        </button>
+    </div>
+</div>

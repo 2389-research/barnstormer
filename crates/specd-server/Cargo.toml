@@ -8,6 +8,7 @@ specd-core.workspace = true
 specd-store.workspace = true
 specd-agent.workspace = true
 axum.workspace = true
+axum-core.workspace = true
 tower.workspace = true
 tower-http.workspace = true
 askama.workspace = true

@@ -1,0 +1,43 @@
+<div class="spec-header">
+    <h1>{{ title }}</h1>
+    <p class="one-liner">{{ one_liner }}</p>
+</div>
+
+<div class="tab-bar">
+    <button class="tab active"
+            hx-get="/web/specs/{{ spec_id }}/board"
+            hx-target="#spec-content"
+            hx-swap="innerHTML">
+        Board
+    </button>
+    <button class="tab"
+            hx-get="/web/specs/{{ spec_id }}/document"
+            hx-target="#spec-content"
+            hx-swap="innerHTML">
+        Document
+    </button>
+    <button class="btn btn-sm"
+            hx-get="/web/specs/{{ spec_id }}/cards/new"
+            hx-target="#spec-content"
+            hx-swap="beforeend">
+        + Card
+    </button>
+    <button class="btn btn-sm"
+            hx-post="/web/specs/{{ spec_id }}/undo"
+            hx-target="#spec-content"
+            hx-swap="innerHTML">
+        Undo
+    </button>
+</div>
+
+<div id="spec-content"
+     hx-ext="sse"
+     sse-connect="/api/specs/{{ spec_id }}/events/stream">
+    {% include "partials/board.html" %}
+</div>
+
+<script>
+    // Load the activity panel into the right rail when a spec is viewed
+    document.getElementById('right-rail').innerHTML = '<div class="rail-header"><h2>Activity</h2></div><div hx-get="/web/specs/{{ spec_id }}/activity" hx-trigger="load" hx-swap="innerHTML" id="activity-container"></div>';
+    htmx.process(document.getElementById('right-rail'));
+</script>
