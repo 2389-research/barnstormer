@@ -35,6 +35,40 @@ impl AgentRunner {
             context,
         }
     }
+
+    /// Create a temporary placeholder runner used when temporarily swapping
+    /// an agent out of the vec so async work can proceed without holding the
+    /// mutex. The placeholder should never actually run a step.
+    pub fn placeholder() -> Self {
+        Self {
+            role: AgentRole::Manager,
+            runtime: Box::new(PlaceholderRuntime),
+            context: AgentContext::new(
+                Ulid::nil(),
+                "placeholder".to_string(),
+                AgentRole::Manager,
+            ),
+        }
+    }
+}
+
+/// A no-op runtime used only as a temporary stand-in while the real runner is
+/// borrowed outside the mutex. Calling run_step on this always returns Done.
+struct PlaceholderRuntime;
+
+#[async_trait::async_trait]
+impl AgentRuntime for PlaceholderRuntime {
+    async fn run_step(&self, _context: &AgentContext) -> Result<AgentAction, AgentError> {
+        Ok(AgentAction::Done)
+    }
+
+    fn provider_name(&self) -> &str {
+        "placeholder"
+    }
+
+    fn model_name(&self) -> &str {
+        "placeholder"
+    }
 }
 
 /// Orchestrates a swarm of agents working on a single spec.

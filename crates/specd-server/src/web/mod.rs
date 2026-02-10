@@ -7,7 +7,7 @@ use axum::extract::{Form, Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
-use specd_agent::SwarmOrchestrator;
+use specd_agent::{AgentRunner, SwarmOrchestrator};
 use specd_core::{Command, SpecState, spawn};
 use specd_store::JsonlLog;
 use ulid::Ulid;
@@ -197,7 +197,7 @@ fn cards_by_lane(spec_state: &SpecState) -> Vec<LaneData> {
     }
 
     // Any extra lanes with cards, alphabetically
-    let mut extra_lane_names: Vec<String> = spec_state
+    let extra_lane_names: Vec<String> = spec_state
         .cards
         .values()
         .map(|c| c.lane.clone())
@@ -205,7 +205,6 @@ fn cards_by_lane(spec_state: &SpecState) -> Vec<LaneData> {
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
-    extra_lane_names.sort();
 
     for lane_name in extra_lane_names {
         let mut cards: Vec<CardData> = spec_state
@@ -926,7 +925,7 @@ pub async fn chat(
         )
             .into_response();
     }
-    if message.len() > CHAT_MAX_LENGTH {
+    if message.chars().count() > CHAT_MAX_LENGTH {
         return (
             StatusCode::BAD_REQUEST,
             Html(format!(
@@ -1322,28 +1321,42 @@ fn spawn_agent_loop(
                     break;
                 }
 
-                // Refresh context and run step under lock.
-                // Clone Arc fields before taking &mut agents to satisfy borrow checker.
-                let should_continue = {
+                // Extract agent and Arc fields, then drop the lock so async
+                // operations (actor reads, LLM API calls) do not block other
+                // tasks that need the swarm.
+                let (mut runner, actor_ref, question_pending) = {
                     let mut s = swarm.lock().await;
                     let actor_ref = Arc::clone(&s.actor);
                     let question_pending = Arc::clone(&s.question_pending);
-
-                    SwarmOrchestrator::refresh_context_with_flag(
+                    // Temporarily swap out the agent runner so we can work on
+                    // it without holding the mutex.
+                    let runner = std::mem::replace(
                         &mut s.agents[i],
-                        &actor_ref,
-                        &mut event_rx,
-                        Some(&question_pending),
-                    )
-                    .await;
-
-                    SwarmOrchestrator::run_single_step(
-                        &mut s.agents[i],
-                        &actor_ref,
-                        &question_pending,
-                    )
-                    .await
+                        AgentRunner::placeholder(),
+                    );
+                    (runner, actor_ref, question_pending)
                 };
+
+                SwarmOrchestrator::refresh_context_with_flag(
+                    &mut runner,
+                    &actor_ref,
+                    &mut event_rx,
+                    Some(&question_pending),
+                )
+                .await;
+
+                let should_continue = SwarmOrchestrator::run_single_step(
+                    &mut runner,
+                    &actor_ref,
+                    &question_pending,
+                )
+                .await;
+
+                // Put the agent runner back
+                {
+                    let mut s = swarm.lock().await;
+                    s.agents[i] = runner;
+                }
 
                 if should_continue {
                     // Agent did work, small delay before next

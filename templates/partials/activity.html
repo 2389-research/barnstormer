@@ -1,8 +1,10 @@
 <div class="activity-feed" id="activity-feed"
      hx-ext="sse"
      sse-connect="/api/specs/{{ spec_id }}/events/stream"
-     sse-swap="transcript_appended,agent_step_started,agent_step_finished,question_asked,question_answered"
-     hx-swap="beforeend">
+     hx-trigger="sse:transcript_appended, sse:question_asked, sse:question_answered"
+     hx-get="/web/specs/{{ spec_id }}/activity"
+     hx-target="#activity-container"
+     hx-swap="innerHTML">
     {% for entry in transcript %}
     <div class="activity-entry">
         <span class="sender">{{ entry.sender }}</span>

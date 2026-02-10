@@ -148,8 +148,11 @@ html, body {
     background: var(--accent);
     border-color: var(--accent);
     color: #fff;
-    width: 100%;
     text-align: center;
+}
+
+.rail-footer .btn-primary {
+    width: 100%;
 }
 
 .btn-primary:hover {

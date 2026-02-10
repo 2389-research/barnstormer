@@ -1,7 +1,7 @@
-// ABOUTME: Initializes SortableJS on board lanes for drag-and-drop card management.
-// ABOUTME: Handles reordering within lanes and moving cards between lanes via the API.
+// ABOUTME: Board drag-and-drop initialization using SortableJS.
+// ABOUTME: Exposes initBoard() for re-initialization after HTMX swaps.
 
-(function () {
+function initBoard() {
     'use strict';
 
     var boardEl = document.getElementById('board');
@@ -61,4 +61,14 @@
             }
         });
     });
-})();
+}
+
+// Initialize on first load
+initBoard();
+
+// Re-initialize after HTMX swaps that contain board content
+document.addEventListener('htmx:afterSwap', function (event) {
+    if (event.detail.target.id === 'spec-content') {
+        initBoard();
+    }
+});
