@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
 use specd_agent::SwarmOrchestrator;
-use specd_core::{Command, MessageKind, SpecState, spawn};
+use specd_core::{Command, SpecState, spawn};
 use specd_store::{JsonlLog, SnapshotData, save_snapshot};
 use chrono::Utc;
 use ulid::Ulid;
@@ -74,7 +74,6 @@ pub struct CreateSpecForm {
 
 /// Extract a placeholder title from free-text description.
 /// Takes the first sentence (ending in . ! ?) or first 60 chars, whichever is shorter.
-/// Uses floor_char_boundary to avoid panicking on multi-byte UTF-8 characters.
 fn extract_placeholder_title(description: &str) -> String {
     let trimmed = description.trim();
     if trimmed.is_empty() {
@@ -84,11 +83,15 @@ fn extract_placeholder_title(description: &str) -> String {
         .find(['.', '!', '?'])
         .map(|i| i + 1)
         .unwrap_or(trimmed.len());
-    // Use floor_char_boundary to avoid slicing in the middle of a multi-byte char
-    let max_len = trimmed.floor_char_boundary(60);
-    let end = sentence_end.min(max_len);
+    // Truncate by character count (not bytes) for consistent title length.
+    let char_boundary = trimmed
+        .char_indices()
+        .nth(60)
+        .map(|(i, _)| i)
+        .unwrap_or(trimmed.len());
+    let end = sentence_end.min(char_boundary);
     let mut title = trimmed[..end].to_string();
-    if title.len() < trimmed.len() && !title.ends_with(['.', '!', '?']) {
+    if end < trimmed.len() && !title.ends_with(['.', '!', '?']) {
         title.push_str("...");
     }
     title
@@ -205,7 +208,16 @@ pub async fn create_spec(
     };
 
     let lanes = cards_by_lane(&spec_state);
-    let core = spec_state.core.as_ref().unwrap();
+    let core = match spec_state.core.as_ref() {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html("<p class=\"error-msg\">Spec created but core data is missing.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
     let spec_id_str = spec_id.to_string();
 
     let mut response = SpecViewTemplate {
@@ -789,7 +801,7 @@ fn to_transcript_entry(m: &specd_core::TranscriptMessage) -> TranscriptEntry {
         sender: m.sender.clone(),
         sender_label,
         is_human,
-        is_step: m.kind != MessageKind::Chat,
+        is_step: m.kind.is_step(),
         role_class,
         content: m.content.clone(),
         timestamp: m.timestamp.format("%H:%M:%S").to_string(),
@@ -2039,7 +2051,7 @@ mod tests {
     fn extract_placeholder_title_truncates_long_text() {
         let long = "a".repeat(80);
         let result = extract_placeholder_title(&long);
-        assert_eq!(result.len(), 63); // 60 chars + "..."
+        assert_eq!(result.chars().count(), 63); // 60 chars + "..."
         assert!(result.ends_with("..."));
     }
 
@@ -2076,14 +2088,19 @@ mod tests {
         let emoji_text = format!("{}🚀🚀🚀🚀🚀 more text after emojis", "a".repeat(55));
         let result = extract_placeholder_title(&emoji_text);
         // Should truncate at a character boundary, not panic
-        assert!(result.len() <= 63); // max 60 + "..."
+        assert!(result.chars().count() <= 63); // max 60 + "..."
         assert!(result.ends_with("..."));
 
-        // CJK characters (3 bytes each)
-        let cjk = "你好世界你好世界你好世界你好世界你好世界你好世界你好世界你好世界你好世界你好世界";
-        let result = extract_placeholder_title(cjk);
+        // CJK characters (3 bytes each) — 40 chars fits within the 60-char limit
+        let cjk_short = "你好世界你好世界你好世界你好世界你好世界你好世界你好世界你好世界你好世界你好世界";
+        let result = extract_placeholder_title(cjk_short);
+        assert_eq!(result, cjk_short); // 40 chars, no truncation needed
+
+        // CJK characters exceeding 60-char limit (65 chars)
+        let cjk_long: String = "你好世界你".repeat(13); // 65 chars
+        let result = extract_placeholder_title(&cjk_long);
         assert!(result.ends_with("..."));
-        // Should not panic - the key assertion is that we get here
+        assert!(result.chars().count() <= 63); // max 60 + "..."
     }
 
     #[test]

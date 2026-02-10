@@ -37,7 +37,17 @@
                 container.innerHTML = '';
                 container.appendChild(svg);
             } catch (e) {
-                container.innerHTML = '<p class="error-msg">Failed to render diagram: ' + e.message + '</p><pre class="artifact-source"><code>' + dot.replace(/</g, '&lt;') + '</code></pre>';
+                container.innerHTML = '';
+                var errP = document.createElement('p');
+                errP.className = 'error-msg';
+                errP.textContent = 'Failed to render diagram: ' + e.message;
+                container.appendChild(errP);
+                var pre = document.createElement('pre');
+                pre.className = 'artifact-source';
+                var code = document.createElement('code');
+                code.textContent = dot;
+                pre.appendChild(code);
+                container.appendChild(pre);
             }
         });
 

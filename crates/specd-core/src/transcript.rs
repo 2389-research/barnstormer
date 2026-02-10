@@ -15,6 +15,22 @@ pub enum MessageKind {
     StepFinished,
 }
 
+impl MessageKind {
+    /// Returns true for step variants (StepStarted, StepFinished).
+    pub fn is_step(&self) -> bool {
+        matches!(self, MessageKind::StepStarted | MessageKind::StepFinished)
+    }
+
+    /// Returns the display prefix used when formatting transcripts for LLM context.
+    pub fn prefix(&self) -> &'static str {
+        match self {
+            MessageKind::StepStarted => "[step started] ",
+            MessageKind::StepFinished => "[step finished] ",
+            MessageKind::Chat => "",
+        }
+    }
+}
+
 /// A single message in the conversation transcript between humans, agents, and the system.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptMessage {
@@ -175,5 +191,19 @@ mod tests {
         let deser: TranscriptMessage = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(deser.kind, MessageKind::StepStarted);
         assert_eq!(deser.content, "Reasoning about goals");
+    }
+
+    #[test]
+    fn message_kind_is_step() {
+        assert!(!MessageKind::Chat.is_step());
+        assert!(MessageKind::StepStarted.is_step());
+        assert!(MessageKind::StepFinished.is_step());
+    }
+
+    #[test]
+    fn message_kind_prefix() {
+        assert_eq!(MessageKind::Chat.prefix(), "");
+        assert_eq!(MessageKind::StepStarted.prefix(), "[step started] ");
+        assert_eq!(MessageKind::StepFinished.prefix(), "[step finished] ");
     }
 }

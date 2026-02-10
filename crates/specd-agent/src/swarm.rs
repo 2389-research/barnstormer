@@ -19,7 +19,7 @@ use crate::mux_tools;
 use specd_core::actor::SpecActorHandle;
 use specd_core::command::Command;
 use specd_core::event::Event;
-use specd_core::transcript::MessageKind;
+
 
 /// System prompt for the Manager agent role.
 const MANAGER_SYSTEM_PROMPT: &str = "You are the manager agent for a product specification. \
@@ -560,14 +560,15 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
             _ = tokio::time::sleep(sleep_duration) => {}
             _ = notify.notified() => {
                 // Human message arrived — run the manager agent immediately
-                // before starting the next full cycle.
-                let manager_idx = {
+                // before starting the next full cycle, unless paused.
+                let (manager_idx, is_paused) = {
                     let s = swarm.lock().await;
-                    find_manager_index(&s)
+                    (find_manager_index(&s), s.is_paused())
                 };
-                if let Some(idx) = manager_idx {
-                    tracing::info!("human message received, prioritising manager agent");
-                    run_agent_by_index(&swarm, idx).await;
+                if !is_paused
+                    && let Some(idx) = manager_idx {
+                        tracing::info!("human message received, prioritising manager agent");
+                        run_agent_by_index(&swarm, idx).await;
                 }
             }
         }
@@ -606,11 +607,7 @@ fn build_task_prompt(ctx: &AgentContext) -> String {
             .recent_transcript
             .iter()
             .map(|msg| {
-                let prefix = match msg.kind {
-                    MessageKind::StepStarted => "[step started] ",
-                    MessageKind::StepFinished => "[step finished] ",
-                    MessageKind::Chat => "",
-                };
+                let prefix = msg.kind.prefix();
                 format!("  [{}]: {}{}", msg.sender, prefix, msg.content)
             })
             .collect();
