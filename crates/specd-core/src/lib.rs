@@ -16,4 +16,4 @@ pub use command::Command;
 pub use event::{Event, EventPayload};
 pub use model::SpecCore;
 pub use state::{SpecState, UndoEntry};
-pub use transcript::{TranscriptMessage, UserQuestion};
+pub use transcript::{MessageKind, TranscriptMessage, UserQuestion};

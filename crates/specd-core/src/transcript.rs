@@ -5,12 +5,24 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
+/// Classifies how a transcript message should be displayed.
+/// Chat messages render as full bubbles; step variants render as compact status lines.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum MessageKind {
+    #[default]
+    Chat,
+    StepStarted,
+    StepFinished,
+}
+
 /// A single message in the conversation transcript between humans, agents, and the system.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptMessage {
     pub message_id: Ulid,
     pub sender: String,
     pub content: String,
+    #[serde(default)]
+    pub kind: MessageKind,
     pub timestamp: DateTime<Utc>,
 }
 
@@ -21,6 +33,7 @@ impl TranscriptMessage {
             message_id: Ulid::new(),
             sender,
             content,
+            kind: MessageKind::Chat,
             timestamp: Utc::now(),
         }
     }
@@ -124,5 +137,43 @@ mod tests {
         assert_eq!(msg.message_id, deser.message_id);
         assert_eq!(deser.sender, "human");
         assert_eq!(deser.content, "Hello agent!");
+        assert_eq!(deser.kind, MessageKind::Chat);
+    }
+
+    #[test]
+    fn message_kind_serde_round_trip_all_variants() {
+        for kind in [MessageKind::Chat, MessageKind::StepStarted, MessageKind::StepFinished] {
+            let json = serde_json::to_string(&kind).expect("serialize");
+            let deser: MessageKind = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(kind, deser);
+        }
+    }
+
+    #[test]
+    fn message_kind_defaults_to_chat_when_missing() {
+        // Simulate an old TranscriptMessage JSON that lacks the `kind` field.
+        let json = r#"{
+            "message_id": "01HTEST0000000000000000000",
+            "sender": "human",
+            "content": "Legacy message",
+            "timestamp": "2025-01-01T00:00:00Z"
+        }"#;
+        let deser: TranscriptMessage = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(deser.kind, MessageKind::Chat);
+    }
+
+    #[test]
+    fn transcript_message_round_trip_with_step_kind() {
+        let msg = TranscriptMessage {
+            message_id: Ulid::new(),
+            sender: "manager-01HTEST".to_string(),
+            content: "Reasoning about goals".to_string(),
+            kind: MessageKind::StepStarted,
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let deser: TranscriptMessage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(deser.kind, MessageKind::StepStarted);
+        assert_eq!(deser.content, "Reasoning about goals");
     }
 }

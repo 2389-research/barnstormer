@@ -9,7 +9,7 @@ use ulid::Ulid;
 use crate::card::Card;
 use crate::event::{Event, EventPayload};
 use crate::model::SpecCore;
-use crate::transcript::{TranscriptMessage, UserQuestion};
+use crate::transcript::{MessageKind, TranscriptMessage, UserQuestion};
 
 /// Stores the inverse operations needed to undo a mutation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +213,7 @@ impl SpecState {
                     message_id: *question_id,
                     sender: "human".to_string(),
                     content: answer.clone(),
+                    kind: MessageKind::Chat,
                     timestamp: event.timestamp,
                 });
             }
@@ -224,7 +225,8 @@ impl SpecState {
                 self.transcript.push(TranscriptMessage {
                     message_id: Ulid::new(),
                     sender: agent_id.clone(),
-                    content: format!("[step started] {}", description),
+                    content: description.clone(),
+                    kind: MessageKind::StepStarted,
                     timestamp: event.timestamp,
                 });
             }
@@ -236,7 +238,8 @@ impl SpecState {
                 self.transcript.push(TranscriptMessage {
                     message_id: Ulid::new(),
                     sender: agent_id.clone(),
-                    content: format!("[step finished] {}", diff_summary),
+                    content: diff_summary.clone(),
+                    kind: MessageKind::StepFinished,
                     timestamp: event.timestamp,
                 });
             }
@@ -624,6 +627,42 @@ mod tests {
             0,
             "undo_stack should be empty after UndoApplied"
         );
+    }
+
+    #[test]
+    fn apply_agent_step_started_sets_step_started_kind() {
+        let mut state = SpecState::new();
+        let spec_id = make_spec_id();
+        state.apply(&make_event(
+            1,
+            spec_id,
+            EventPayload::AgentStepStarted {
+                agent_id: "manager-01HTEST".to_string(),
+                description: "Manager reasoning step".to_string(),
+            },
+        ));
+        assert_eq!(state.transcript.len(), 1);
+        assert_eq!(state.transcript[0].kind, crate::transcript::MessageKind::StepStarted);
+        assert_eq!(state.transcript[0].content, "Manager reasoning step");
+        assert!(!state.transcript[0].content.contains("[step started]"));
+    }
+
+    #[test]
+    fn apply_agent_step_finished_sets_step_finished_kind() {
+        let mut state = SpecState::new();
+        let spec_id = make_spec_id();
+        state.apply(&make_event(
+            1,
+            spec_id,
+            EventPayload::AgentStepFinished {
+                agent_id: "manager-01HTEST".to_string(),
+                diff_summary: "Updated goal and added 3 cards".to_string(),
+            },
+        ));
+        assert_eq!(state.transcript.len(), 1);
+        assert_eq!(state.transcript[0].kind, crate::transcript::MessageKind::StepFinished);
+        assert_eq!(state.transcript[0].content, "Updated goal and added 3 cards");
+        assert!(!state.transcript[0].content.contains("[step finished]"));
     }
 
     #[test]
