@@ -1,5 +1,5 @@
-// ABOUTME: SwarmOrchestrator manages multiple agents per spec, routing actions and enforcing question queue.
-// ABOUTME: Each agent runs in its own tokio task, coordinated by pause/resume flags and event subscriptions.
+// ABOUTME: SwarmOrchestrator manages multiple agents per spec, using mux SubAgent for LLM execution.
+// ABOUTME: Each agent runs as a mux SubAgent with domain tools, coordinated by pause/resume flags and event subscriptions.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,66 +8,71 @@ use tokio::sync::broadcast;
 use tracing;
 use ulid::Ulid;
 
+use mux::agent::{AgentDefinition, SubAgent};
+use mux::llm::LlmClient;
+
+use crate::client;
 use crate::context::{AgentContext, AgentRole};
-use crate::providers::anthropic::AnthropicRuntime;
-use crate::providers::gemini::GeminiRuntime;
-use crate::providers::openai::OpenAIRuntime;
-use crate::runtime::{AgentAction, AgentError, AgentRuntime};
+use crate::mux_tools;
+use crate::runtime::AgentError;
 use specd_core::actor::SpecActorHandle;
 use specd_core::command::Command;
 use specd_core::event::Event;
 
-/// Wraps a single agent's runtime, role, and mutable context.
+/// System prompt for the Manager agent role.
+const MANAGER_SYSTEM_PROMPT: &str = "You are the manager agent for a product specification. \
+    You coordinate the spec refinement process, ensure all aspects are covered, and ask the user \
+    questions when clarification is needed. You have access to tools for reading state, writing \
+    commands, asking questions, and narrating your reasoning.";
+
+/// System prompt for the Brainstormer agent role.
+const BRAINSTORMER_SYSTEM_PROMPT: &str = "You are the brainstormer agent. Your job is to generate \
+    creative ideas, explore possibilities, and create idea cards. Focus on breadth over depth.";
+
+/// System prompt for the Planner agent role.
+const PLANNER_SYSTEM_PROMPT: &str = "You are the planner agent. Your job is to organize ideas into \
+    structured plans, move cards between lanes, and ensure the spec has clear goals and constraints.";
+
+/// System prompt for the DotGenerator agent role.
+const DOT_GENERATOR_SYSTEM_PROMPT: &str = "You are the DOT diagram generator. Your job is to read \
+    the current spec state and generate Graphviz DOT notation representing the spec's structure \
+    and relationships.";
+
+/// System prompt for the Critic agent role.
+const CRITIC_SYSTEM_PROMPT: &str = "You are the critic agent. Your job is to review the spec for \
+    gaps, inconsistencies, and potential issues. Provide constructive feedback and suggestions.";
+
+/// Return the system prompt for a given agent role.
+pub fn system_prompt_for_role(role: &AgentRole) -> &'static str {
+    match role {
+        AgentRole::Manager => MANAGER_SYSTEM_PROMPT,
+        AgentRole::Brainstormer => BRAINSTORMER_SYSTEM_PROMPT,
+        AgentRole::Planner => PLANNER_SYSTEM_PROMPT,
+        AgentRole::DotGenerator => DOT_GENERATOR_SYSTEM_PROMPT,
+        AgentRole::Critic => CRITIC_SYSTEM_PROMPT,
+    }
+}
+
+/// Wraps a single agent's role and mutable context.
+///
+/// The LLM runtime is handled by creating a mux SubAgent per step,
+/// using the shared LLM client from SwarmOrchestrator.
 pub struct AgentRunner {
     pub role: AgentRole,
-    pub runtime: Box<dyn AgentRuntime>,
     pub context: AgentContext,
+    pub agent_id: String,
 }
 
 impl AgentRunner {
-    /// Create a new runner for the given role and runtime.
-    pub fn new(spec_id: Ulid, role: AgentRole, runtime: Box<dyn AgentRuntime>) -> Self {
+    /// Create a new runner for the given role.
+    pub fn new(spec_id: Ulid, role: AgentRole) -> Self {
         let agent_id = format!("{}-{}", role.label(), Ulid::new());
-        let context = AgentContext::new(spec_id, agent_id, role);
+        let context = AgentContext::new(spec_id, agent_id.clone(), role);
         Self {
             role,
-            runtime,
             context,
+            agent_id,
         }
-    }
-
-    /// Create a temporary placeholder runner used when temporarily swapping
-    /// an agent out of the vec so async work can proceed without holding the
-    /// mutex. The placeholder should never actually run a step.
-    pub fn placeholder() -> Self {
-        Self {
-            role: AgentRole::Manager,
-            runtime: Box::new(PlaceholderRuntime),
-            context: AgentContext::new(
-                Ulid::nil(),
-                "placeholder".to_string(),
-                AgentRole::Manager,
-            ),
-        }
-    }
-}
-
-/// A no-op runtime used only as a temporary stand-in while the real runner is
-/// borrowed outside the mutex. Calling run_step on this always returns Done.
-struct PlaceholderRuntime;
-
-#[async_trait::async_trait]
-impl AgentRuntime for PlaceholderRuntime {
-    async fn run_step(&self, _context: &AgentContext) -> Result<AgentAction, AgentError> {
-        Ok(AgentAction::Done)
-    }
-
-    fn provider_name(&self) -> &str {
-        "placeholder"
-    }
-
-    fn model_name(&self) -> &str {
-        "placeholder"
     }
 }
 
@@ -79,6 +84,8 @@ pub struct SwarmOrchestrator {
     pub agents: Vec<AgentRunner>,
     pub paused: Arc<AtomicBool>,
     pub question_pending: Arc<AtomicBool>,
+    pub client: Arc<dyn LlmClient>,
+    pub model: String,
 }
 
 impl SwarmOrchestrator {
@@ -87,7 +94,12 @@ impl SwarmOrchestrator {
     pub fn with_defaults(spec_id: Ulid, actor: SpecActorHandle) -> Result<Self, AgentError> {
         let provider =
             std::env::var("SPECD_DEFAULT_PROVIDER").unwrap_or_else(|_| "anthropic".to_string());
-        let model = std::env::var("SPECD_DEFAULT_MODEL").ok();
+        let model_override = std::env::var("SPECD_DEFAULT_MODEL").ok();
+
+        let (llm_client, resolved_model) =
+            client::create_llm_client(&provider, model_override.as_deref()).map_err(|e| {
+                AgentError::ProviderError(e.to_string())
+            })?;
 
         let actor = Arc::new(actor);
 
@@ -98,11 +110,10 @@ impl SwarmOrchestrator {
             AgentRole::DotGenerator,
         ];
 
-        let mut agents = Vec::new();
-        for role in &roles {
-            let runtime = create_runtime(&provider, model.as_deref())?;
-            agents.push(AgentRunner::new(spec_id, *role, runtime));
-        }
+        let agents: Vec<AgentRunner> = roles
+            .iter()
+            .map(|role| AgentRunner::new(spec_id, *role))
+            .collect();
 
         Ok(Self {
             spec_id,
@@ -110,17 +121,27 @@ impl SwarmOrchestrator {
             agents,
             paused: Arc::new(AtomicBool::new(false)),
             question_pending: Arc::new(AtomicBool::new(false)),
+            client: llm_client,
+            model: resolved_model,
         })
     }
 
-    /// Create an orchestrator with a specific set of agent runners.
-    pub fn with_agents(spec_id: Ulid, actor: SpecActorHandle, agents: Vec<AgentRunner>) -> Self {
+    /// Create an orchestrator with a specific set of agent runners and LLM client.
+    pub fn with_agents(
+        spec_id: Ulid,
+        actor: SpecActorHandle,
+        agents: Vec<AgentRunner>,
+        client: Arc<dyn LlmClient>,
+        model: String,
+    ) -> Self {
         Self {
             spec_id,
             actor: Arc::new(actor),
             agents,
             paused: Arc::new(AtomicBool::new(false)),
             question_pending: Arc::new(AtomicBool::new(false)),
+            client,
+            model,
         }
     }
 
@@ -147,136 +168,86 @@ impl SwarmOrchestrator {
         self.question_pending.load(Ordering::SeqCst)
     }
 
-    /// Process a single AgentAction produced by an agent, submitting commands
-    /// to the actor and managing the question queue. Returns true if the agent
-    /// should continue working, false if it should idle.
-    pub async fn process_action(
-        actor: &SpecActorHandle,
-        action: AgentAction,
-        agent_id: &str,
-        question_pending: &AtomicBool,
-    ) -> bool {
-        match action {
-            AgentAction::EmitNarration(text) => {
-                let cmd = Command::AppendTranscript {
-                    sender: agent_id.to_string(),
-                    content: text,
-                };
-                if let Err(e) = actor.send_command(cmd).await {
-                    tracing::warn!(agent = agent_id, error = %e, "failed to emit narration");
-                }
-                true
-            }
-
-            AgentAction::WriteCommands(commands) => {
-                for cmd in commands {
-                    if let Err(e) = actor.send_command(cmd).await {
-                        tracing::warn!(agent = agent_id, error = %e, "failed to write command");
-                    }
-                }
-                true
-            }
-
-            AgentAction::AskUser(question) => {
-                // Only one pending question at a time
-                if question_pending.load(Ordering::SeqCst) {
-                    tracing::debug!(agent = agent_id, "question already pending, skipping ask");
-                    // Create an assumption card instead
-                    let assumption_cmd = Command::CreateCard {
-                        card_type: "assumption".to_string(),
-                        title: format!("Assumed answer (question queued by {})", agent_id),
-                        body: None,
-                        lane: Some("Ideas".to_string()),
-                        created_by: agent_id.to_string(),
-                    };
-                    if let Err(e) = actor.send_command(assumption_cmd).await {
-                        tracing::warn!(
-                            agent = agent_id,
-                            error = %e,
-                            "failed to create assumption card"
-                        );
-                    }
-                    true
-                } else {
-                    question_pending.store(true, Ordering::SeqCst);
-                    let cmd = Command::AskQuestion { question };
-                    if let Err(e) = actor.send_command(cmd).await {
-                        tracing::warn!(agent = agent_id, error = %e, "failed to ask question");
-                        question_pending.store(false, Ordering::SeqCst);
-                    }
-                    true
-                }
-            }
-
-            AgentAction::AskAgent {
-                agent_id: target_agent_id,
-                question,
-            } => {
-                // Route as a transcript message addressed to the target agent
-                let cmd = Command::AppendTranscript {
-                    sender: agent_id.to_string(),
-                    content: format!("@{}: {}", target_agent_id, question),
-                };
-                if let Err(e) = actor.send_command(cmd).await {
-                    tracing::warn!(agent = agent_id, error = %e, "failed to route inter-agent message");
-                }
-                true
-            }
-
-            AgentAction::EmitDiffSummary(summary) => {
-                let cmd = Command::FinishAgentStep {
-                    agent_id: agent_id.to_string(),
-                    diff_summary: summary,
-                };
-                if let Err(e) = actor.send_command(cmd).await {
-                    tracing::warn!(agent = agent_id, error = %e, "failed to emit diff summary");
-                }
-                true
-            }
-
-            AgentAction::Done => {
-                tracing::debug!(agent = agent_id, "agent signaled done, going idle");
-                false
-            }
-        }
-    }
-
-    /// Run a single agent step: call the runtime, process the action.
-    /// Returns true if the agent should continue, false to idle.
-    pub async fn run_single_step(
+    /// Run a single agent step using a mux SubAgent.
+    ///
+    /// Creates a fresh SubAgent with the domain tool registry, sends it the
+    /// agent's context as a task prompt, and lets mux handle the think-act loop.
+    /// Returns true if the agent produced useful work, false if idle/error.
+    pub async fn run_agent_step(
         runner: &mut AgentRunner,
-        actor: &SpecActorHandle,
-        question_pending: &AtomicBool,
+        actor: &Arc<SpecActorHandle>,
+        question_pending: &Arc<AtomicBool>,
+        client: &Arc<dyn LlmClient>,
+        model: &str,
     ) -> bool {
         // Start agent step
         let start_cmd = Command::StartAgentStep {
-            agent_id: runner.context.agent_id.clone(),
+            agent_id: runner.agent_id.clone(),
             description: format!("{} reasoning step", runner.role.label()),
         };
         if let Err(e) = actor.send_command(start_cmd).await {
             tracing::warn!(
-                agent = %runner.context.agent_id,
+                agent = %runner.agent_id,
                 error = %e,
                 "failed to start agent step"
             );
         }
 
-        match runner.runtime.run_step(&runner.context).await {
-            Ok(action) => {
-                Self::process_action(actor, action, &runner.context.agent_id, question_pending)
-                    .await
-            }
-            Err(AgentError::RateLimited) => {
-                tracing::warn!(
-                    agent = %runner.context.agent_id,
-                    "rate limited, will retry"
+        // Build tool registry for this agent
+        let registry = mux_tools::build_registry(
+            Arc::clone(actor),
+            Arc::clone(question_pending),
+            runner.agent_id.clone(),
+        )
+        .await;
+
+        // Create agent definition with role-specific system prompt
+        let definition = AgentDefinition::new(
+            runner.role.label(),
+            system_prompt_for_role(&runner.role),
+        )
+        .model(model)
+        .max_iterations(10);
+
+        // Create a fresh SubAgent
+        let mut sub_agent = SubAgent::new(
+            definition,
+            Arc::clone(client),
+            registry,
+        );
+
+        // Build task prompt from context
+        let task_prompt = build_task_prompt(&runner.context);
+
+        // Run the agent
+        match sub_agent.run(&task_prompt).await {
+            Ok(result) => {
+                tracing::info!(
+                    agent = %runner.agent_id,
+                    iterations = result.iterations,
+                    tool_calls = result.tool_use_count,
+                    "agent step completed"
                 );
-                // Signal to continue (caller can add backoff)
-                true
+
+                // Emit a diff summary with the result content
+                let finish_cmd = Command::FinishAgentStep {
+                    agent_id: runner.agent_id.clone(),
+                    diff_summary: result.content,
+                };
+                if let Err(e) = actor.send_command(finish_cmd).await {
+                    tracing::warn!(
+                        agent = %runner.agent_id,
+                        error = %e,
+                        "failed to finish agent step"
+                    );
+                }
+
+                // Agent did work if it used any tools
+                result.tool_use_count > 0
             }
             Err(e) => {
                 tracing::error!(
-                    agent = %runner.context.agent_id,
+                    agent = %runner.agent_id,
                     error = %e,
                     "agent step failed"
                 );
@@ -334,60 +305,69 @@ impl SwarmOrchestrator {
     }
 }
 
-/// Create a runtime for the given provider name and optional model override.
-pub fn create_runtime(
-    provider: &str,
-    model: Option<&str>,
-) -> Result<Box<dyn AgentRuntime>, AgentError> {
-    match provider {
-        "anthropic" => {
-            let api_key = std::env::var("ANTHROPIC_API_KEY")
-                .map_err(|_| AgentError::ProviderError("ANTHROPIC_API_KEY not set".to_string()))?;
-            let base_url = std::env::var("ANTHROPIC_BASE_URL")
-                .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
-            let model_str = model
-                .map(String::from)
-                .or_else(|| std::env::var("ANTHROPIC_MODEL").ok())
-                .unwrap_or_else(|| "claude-sonnet-4-5-20250929".to_string());
-            Ok(Box::new(AnthropicRuntime::new(
-                api_key, base_url, model_str,
-            )))
-        }
+/// Build a task prompt string from the agent's current context.
+///
+/// Combines the state summary, recent events, and rolling summary into
+/// a single prompt that the mux SubAgent will work with.
+fn build_task_prompt(ctx: &AgentContext) -> String {
+    let mut parts = Vec::new();
 
-        "openai" => {
-            let api_key = std::env::var("OPENAI_API_KEY")
-                .map_err(|_| AgentError::ProviderError("OPENAI_API_KEY not set".to_string()))?;
-            let base_url = std::env::var("OPENAI_BASE_URL")
-                .unwrap_or_else(|_| "https://api.openai.com".to_string());
-            let model_str = model
-                .map(String::from)
-                .or_else(|| std::env::var("OPENAI_MODEL").ok())
-                .unwrap_or_else(|| "gpt-4o".to_string());
-            Ok(Box::new(OpenAIRuntime::new(api_key, base_url, model_str)))
-        }
+    if !ctx.state_summary.is_empty() {
+        parts.push(format!("Current state: {}", ctx.state_summary));
+    }
 
-        "gemini" => {
-            let api_key = std::env::var("GEMINI_API_KEY")
-                .map_err(|_| AgentError::ProviderError("GEMINI_API_KEY not set".to_string()))?;
-            let base_url = std::env::var("GEMINI_BASE_URL")
-                .unwrap_or_else(|_| "https://generativelanguage.googleapis.com".to_string());
-            let model_str = model
-                .map(String::from)
-                .or_else(|| std::env::var("GEMINI_MODEL").ok())
-                .unwrap_or_else(|| "gemini-2.0-flash".to_string());
-            Ok(Box::new(GeminiRuntime::new(api_key, base_url, model_str)))
-        }
+    if !ctx.rolling_summary.is_empty() {
+        parts.push(format!("Your accumulated context: {}", ctx.rolling_summary));
+    }
 
-        other => Err(AgentError::ProviderError(format!(
-            "unknown provider: {}",
-            other
-        ))),
+    if !ctx.recent_events.is_empty() {
+        let event_descriptions: Vec<String> = ctx
+            .recent_events
+            .iter()
+            .map(|e| format!("  - {:?}", e.payload))
+            .collect();
+        parts.push(format!(
+            "Recent events:\n{}",
+            event_descriptions.join("\n")
+        ));
+    }
+
+    if !ctx.recent_transcript.is_empty() {
+        let transcript_lines: Vec<String> = ctx
+            .recent_transcript
+            .iter()
+            .map(|msg| format!("  [{}]: {}", msg.sender, msg.content))
+            .collect();
+        parts.push(format!(
+            "Recent transcript:\n{}",
+            transcript_lines.join("\n")
+        ));
+    }
+
+    if !ctx.key_decisions.is_empty() {
+        let decisions: Vec<String> = ctx
+            .key_decisions
+            .iter()
+            .map(|d| format!("  - {}", d))
+            .collect();
+        parts.push(format!(
+            "Key decisions so far:\n{}",
+            decisions.join("\n")
+        ));
+    }
+
+    if parts.is_empty() {
+        "The spec was just created. Begin your work by reading the current state and taking appropriate action for your role.".to_string()
+    } else {
+        parts.push("\nReview the above context and take the next appropriate action for your role. Use the available tools to read state, write commands, narrate your reasoning, or ask the user questions.".to_string());
+        parts.join("\n\n")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::StubLlmClient;
     use specd_core::state::SpecState;
     use std::sync::atomic::Ordering;
 
@@ -397,27 +377,12 @@ mod tests {
         (spec_id, handle)
     }
 
-    /// A test runtime that always returns Done.
-    struct StubRuntime;
-
-    #[async_trait::async_trait]
-    impl AgentRuntime for StubRuntime {
-        async fn run_step(&self, _context: &AgentContext) -> Result<AgentAction, AgentError> {
-            Ok(AgentAction::Done)
-        }
-
-        fn provider_name(&self) -> &str {
-            "stub"
-        }
-
-        fn model_name(&self) -> &str {
-            "stub-v1"
-        }
+    fn make_test_client() -> Arc<dyn LlmClient> {
+        Arc::new(StubLlmClient::done())
     }
 
     #[tokio::test]
     async fn swarm_creates_default_agents() {
-        // Use with_agents to test the default role configuration without env vars
         let (spec_id, actor) = make_test_actor();
 
         let roles = [
@@ -429,10 +394,16 @@ mod tests {
 
         let agents: Vec<AgentRunner> = roles
             .iter()
-            .map(|role| AgentRunner::new(spec_id, *role, Box::new(StubRuntime)))
+            .map(|role| AgentRunner::new(spec_id, *role))
             .collect();
 
-        let swarm = SwarmOrchestrator::with_agents(spec_id, actor, agents);
+        let swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            actor,
+            agents,
+            make_test_client(),
+            "stub-model".to_string(),
+        );
 
         assert_eq!(swarm.agents.len(), 4);
         assert_eq!(swarm.agents[0].role, AgentRole::Manager);
@@ -447,7 +418,13 @@ mod tests {
     #[tokio::test]
     async fn swarm_pause_resume() {
         let (spec_id, actor) = make_test_actor();
-        let swarm = SwarmOrchestrator::with_agents(spec_id, actor, Vec::new());
+        let swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            actor,
+            Vec::new(),
+            make_test_client(),
+            "stub-model".to_string(),
+        );
 
         assert!(!swarm.is_paused());
 
@@ -458,246 +435,26 @@ mod tests {
         assert!(!swarm.is_paused());
     }
 
-    #[test]
-    fn create_runtime_selects_provider() {
-        // SAFETY: These env var mutations are isolated to test code
-        // and tests in this module run sequentially via test serialization.
-        unsafe {
-            // Test anthropic
-            std::env::set_var("ANTHROPIC_API_KEY", "test-key");
-            let runtime = create_runtime("anthropic", None).unwrap();
-            assert_eq!(runtime.provider_name(), "anthropic");
-            assert_eq!(runtime.model_name(), "claude-sonnet-4-5-20250929");
-            std::env::remove_var("ANTHROPIC_API_KEY");
-
-            // Test openai
-            std::env::set_var("OPENAI_API_KEY", "test-key");
-            let runtime = create_runtime("openai", None).unwrap();
-            assert_eq!(runtime.provider_name(), "openai");
-            assert_eq!(runtime.model_name(), "gpt-4o");
-            std::env::remove_var("OPENAI_API_KEY");
-
-            // Test gemini
-            std::env::set_var("GEMINI_API_KEY", "test-key");
-            let runtime = create_runtime("gemini", None).unwrap();
-            assert_eq!(runtime.provider_name(), "gemini");
-            assert_eq!(runtime.model_name(), "gemini-2.0-flash");
-            std::env::remove_var("GEMINI_API_KEY");
-        }
-
-        // Test unknown provider (no env vars needed)
-        let err = create_runtime("unknown_provider", None);
-        assert!(err.is_err());
-        match err {
-            Err(e) => assert!(e.to_string().contains("unknown provider")),
-            Ok(_) => panic!("expected error for unknown provider"),
-        }
-    }
-
-    #[test]
-    fn create_runtime_with_model_override() {
-        // SAFETY: Isolated test env var mutation
-        unsafe {
-            std::env::set_var("ANTHROPIC_API_KEY", "test-key");
-            let runtime = create_runtime("anthropic", Some("claude-opus-4-20250514")).unwrap();
-            assert_eq!(runtime.model_name(), "claude-opus-4-20250514");
-            std::env::remove_var("ANTHROPIC_API_KEY");
-        }
-    }
-
     #[tokio::test]
-    async fn process_action_emit_narration() {
-        let (_, actor) = make_test_actor();
-        let question_pending = AtomicBool::new(false);
-
-        let cont = SwarmOrchestrator::process_action(
-            &actor,
-            AgentAction::EmitNarration("Testing narration".to_string()),
-            "test-agent",
-            &question_pending,
-        )
-        .await;
-
-        assert!(cont, "should continue after narration");
-
-        // Check transcript was updated
-        let state = actor.read_state().await;
-        assert_eq!(state.transcript.len(), 1);
-        assert_eq!(state.transcript[0].content, "Testing narration");
-        assert_eq!(state.transcript[0].sender, "test-agent");
-    }
-
-    #[tokio::test]
-    async fn process_action_done_returns_false() {
-        let (_, actor) = make_test_actor();
-        let question_pending = AtomicBool::new(false);
-
-        let cont = SwarmOrchestrator::process_action(
-            &actor,
-            AgentAction::Done,
-            "test-agent",
-            &question_pending,
-        )
-        .await;
-
-        assert!(!cont, "should stop after Done");
-    }
-
-    #[tokio::test]
-    async fn process_action_ask_user_sets_pending() {
-        let (_, actor) = make_test_actor();
-        let question_pending = AtomicBool::new(false);
-
-        let question = specd_core::transcript::UserQuestion::Boolean {
-            question_id: Ulid::new(),
-            question: "Continue?".to_string(),
-            default: None,
-        };
-
-        let cont = SwarmOrchestrator::process_action(
-            &actor,
-            AgentAction::AskUser(question),
-            "test-agent",
-            &question_pending,
-        )
-        .await;
-
-        assert!(cont);
-        assert!(question_pending.load(Ordering::SeqCst));
-
-        let state = actor.read_state().await;
-        assert!(state.pending_question.is_some());
-    }
-
-    #[tokio::test]
-    async fn process_action_ask_user_skips_when_pending() {
-        let (_, actor) = make_test_actor();
-        let question_pending = AtomicBool::new(true);
-
-        let question = specd_core::transcript::UserQuestion::Boolean {
-            question_id: Ulid::new(),
-            question: "This should be skipped".to_string(),
-            default: None,
-        };
-
-        let cont = SwarmOrchestrator::process_action(
-            &actor,
-            AgentAction::AskUser(question),
-            "test-agent",
-            &question_pending,
-        )
-        .await;
-
-        assert!(cont);
-        // Should have created an assumption card instead
-        let state = actor.read_state().await;
-        assert!(state.pending_question.is_none()); // No question was asked
-        assert_eq!(state.cards.len(), 1);
-        assert_eq!(state.cards.values().next().unwrap().card_type, "assumption");
-    }
-
-    #[tokio::test]
-    async fn process_action_write_commands() {
-        let (_, actor) = make_test_actor();
-        let question_pending = AtomicBool::new(false);
-
-        // Create spec first so we can create cards
-        actor
-            .send_command(Command::CreateSpec {
-                title: "Test".to_string(),
-                one_liner: "Test spec".to_string(),
-                goal: "Testing".to_string(),
-            })
-            .await
-            .unwrap();
-
-        let commands = vec![Command::CreateCard {
-            card_type: "idea".to_string(),
-            title: "Test card".to_string(),
-            body: None,
-            lane: None,
-            created_by: "test-agent".to_string(),
-        }];
-
-        let cont = SwarmOrchestrator::process_action(
-            &actor,
-            AgentAction::WriteCommands(commands),
-            "test-agent",
-            &question_pending,
-        )
-        .await;
-
-        assert!(cont);
-        let state = actor.read_state().await;
-        assert_eq!(state.cards.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn run_single_step_with_stub_runtime() {
+    async fn run_agent_step_completes_with_stub() {
         let (spec_id, actor) = make_test_actor();
-        let question_pending = AtomicBool::new(false);
+        let client = make_test_client();
+        let actor_arc = Arc::new(actor);
+        let question_pending = Arc::new(AtomicBool::new(false));
 
-        let mut runner = AgentRunner::new(spec_id, AgentRole::Brainstormer, Box::new(StubRuntime));
+        let mut runner = AgentRunner::new(spec_id, AgentRole::Brainstormer);
 
-        let cont = SwarmOrchestrator::run_single_step(&mut runner, &actor, &question_pending).await;
-
-        // StubRuntime returns Done, so agent should idle
-        assert!(!cont);
-    }
-
-    #[tokio::test]
-    async fn question_pending_cleared_after_answer() {
-        let (spec_id, actor) = make_test_actor();
-        let question_pending = AtomicBool::new(false);
-
-        // Ask a question
-        let question_id = Ulid::new();
-        let question = specd_core::transcript::UserQuestion::Freeform {
-            question_id,
-            question: "What color?".to_string(),
-            placeholder: None,
-            validation_hint: None,
-        };
-
-        SwarmOrchestrator::process_action(
-            &actor,
-            AgentAction::AskUser(question),
-            "test-agent",
-            &question_pending,
-        )
-        .await;
-
-        assert!(
-            question_pending.load(Ordering::SeqCst),
-            "question_pending should be true after AskUser"
-        );
-
-        // Answer the question
-        actor
-            .send_command(Command::AnswerQuestion {
-                question_id,
-                answer: "Blue".to_string(),
-            })
-            .await
-            .unwrap();
-
-        // refresh_context_with_flag should sync the flag from actor state
-        let mut event_rx = actor.subscribe();
-        let mut runner = AgentRunner::new(spec_id, AgentRole::Manager, Box::new(StubRuntime));
-
-        SwarmOrchestrator::refresh_context_with_flag(
+        let did_work = SwarmOrchestrator::run_agent_step(
             &mut runner,
-            &actor,
-            &mut event_rx,
-            Some(&question_pending),
+            &actor_arc,
+            &question_pending,
+            &client,
+            "stub-model",
         )
         .await;
 
-        // After the answer, the flag should be cleared
-        assert!(
-            !question_pending.load(Ordering::SeqCst),
-            "question_pending should be false after answer and refresh"
-        );
+        // StubLlmClient returns text-only (no tool use), so agent does no tool work
+        assert!(!did_work);
     }
 
     #[tokio::test]
@@ -705,7 +462,7 @@ mod tests {
         let (spec_id, actor) = make_test_actor();
         let mut event_rx = actor.subscribe();
 
-        let mut runner = AgentRunner::new(spec_id, AgentRole::Manager, Box::new(StubRuntime));
+        let mut runner = AgentRunner::new(spec_id, AgentRole::Manager);
 
         // Create a spec so there's state to read
         actor
@@ -721,5 +478,104 @@ mod tests {
 
         assert!(runner.context.state_summary.contains("Context Test"));
         assert!(runner.context.last_event_seen > 0);
+    }
+
+    #[test]
+    fn system_prompt_for_role_returns_non_empty() {
+        let roles = [
+            AgentRole::Manager,
+            AgentRole::Brainstormer,
+            AgentRole::Planner,
+            AgentRole::DotGenerator,
+            AgentRole::Critic,
+        ];
+
+        for role in &roles {
+            let prompt = system_prompt_for_role(role);
+            assert!(
+                !prompt.is_empty(),
+                "system prompt for {:?} should not be empty",
+                role
+            );
+        }
+    }
+
+    #[test]
+    fn agent_runner_new_generates_unique_ids() {
+        let spec_id = Ulid::new();
+        let a = AgentRunner::new(spec_id, AgentRole::Manager);
+        let b = AgentRunner::new(spec_id, AgentRole::Manager);
+
+        assert_ne!(a.agent_id, b.agent_id, "each runner should get a unique agent_id");
+        assert!(a.agent_id.starts_with("manager-"));
+        assert!(b.agent_id.starts_with("manager-"));
+    }
+
+    #[test]
+    fn build_task_prompt_empty_context() {
+        let ctx = AgentContext::new(Ulid::new(), "test-agent".to_string(), AgentRole::Manager);
+        let prompt = build_task_prompt(&ctx);
+        assert!(prompt.contains("just created"), "empty context should produce intro prompt");
+    }
+
+    #[test]
+    fn build_task_prompt_with_state_summary() {
+        let mut ctx = AgentContext::new(Ulid::new(), "test-agent".to_string(), AgentRole::Manager);
+        ctx.state_summary = "Title: Foo. Goal: Bar.".to_string();
+
+        let prompt = build_task_prompt(&ctx);
+        assert!(prompt.contains("Current state: Title: Foo"));
+        assert!(prompt.contains("take the next appropriate action"));
+    }
+
+    #[tokio::test]
+    async fn question_pending_cleared_after_answer() {
+        let (spec_id, actor) = make_test_actor();
+        let question_pending = AtomicBool::new(false);
+
+        // Ask a question via actor command directly
+        let question_id = Ulid::new();
+        actor
+            .send_command(Command::AskQuestion {
+                question: specd_core::transcript::UserQuestion::Freeform {
+                    question_id,
+                    question: "What color?".to_string(),
+                    placeholder: None,
+                    validation_hint: None,
+                },
+            })
+            .await
+            .unwrap();
+
+        // Manually set flag (simulating what the tool would do)
+        question_pending.store(true, Ordering::SeqCst);
+        assert!(question_pending.load(Ordering::SeqCst));
+
+        // Answer the question
+        actor
+            .send_command(Command::AnswerQuestion {
+                question_id,
+                answer: "Blue".to_string(),
+            })
+            .await
+            .unwrap();
+
+        // refresh_context_with_flag should sync the flag from actor state
+        let mut event_rx = actor.subscribe();
+        let mut runner = AgentRunner::new(spec_id, AgentRole::Manager);
+
+        SwarmOrchestrator::refresh_context_with_flag(
+            &mut runner,
+            &actor,
+            &mut event_rx,
+            Some(&question_pending),
+        )
+        .await;
+
+        // After the answer, the flag should be cleared
+        assert!(
+            !question_pending.load(Ordering::SeqCst),
+            "question_pending should be false after answer and refresh"
+        );
     }
 }

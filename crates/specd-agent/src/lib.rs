@@ -12,5 +12,5 @@ pub mod tools;
 
 pub use context::{AgentContext, AgentRole, contexts_from_snapshot_map, contexts_to_snapshot_map};
 pub use runtime::{AgentAction, AgentError, AgentRuntime};
-pub use swarm::{AgentRunner, SwarmOrchestrator, create_runtime};
+pub use swarm::{AgentRunner, SwarmOrchestrator, system_prompt_for_role};
 pub use tools::all_tool_definitions;
