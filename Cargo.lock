@@ -1094,6 +1094,7 @@ dependencies = [
 name = "specd"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "clap",
  "dotenvy",
  "specd-server",
@@ -1272,6 +1273,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
