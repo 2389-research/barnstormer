@@ -11,6 +11,8 @@ use ulid::Ulid;
 use mux::agent::{AgentDefinition, SubAgent};
 use mux::llm::LlmClient;
 
+use std::collections::HashMap;
+
 use crate::client;
 use crate::context::{AgentContext, AgentRole};
 use crate::mux_tools;
@@ -185,6 +187,34 @@ impl SwarmOrchestrator {
     /// Returns true if a question is currently pending for the user.
     pub fn has_pending_question(&self) -> bool {
         self.question_pending.load(Ordering::SeqCst)
+    }
+
+    /// Collect all agent contexts for inclusion in a snapshot.
+    pub fn collect_agent_contexts(&self) -> HashMap<String, serde_json::Value> {
+        let contexts: Vec<AgentContext> = self
+            .agents
+            .iter()
+            .filter_map(|opt| opt.as_ref().map(|r| r.context.clone()))
+            .collect();
+        crate::context::contexts_to_snapshot_map(&contexts)
+    }
+
+    /// Restore agent contexts from a snapshot map.
+    /// Matches by agent_role, since agent_ids may differ between sessions.
+    pub fn restore_agent_contexts(&mut self, map: &HashMap<String, serde_json::Value>) {
+        let restored = crate::context::contexts_from_snapshot_map(map);
+        for ctx in restored {
+            for agent_opt in &mut self.agents {
+                if let Some(runner) = agent_opt.as_mut()
+                    && runner.role == ctx.agent_role
+                {
+                    runner.context.rolling_summary = ctx.rolling_summary.clone();
+                    runner.context.key_decisions = ctx.key_decisions.clone();
+                    runner.context.last_event_seen = ctx.last_event_seen;
+                    break;
+                }
+            }
+        }
     }
 
     /// Run a single agent step using a mux SubAgent.
@@ -733,5 +763,166 @@ mod tests {
             2,
             "each agent should have its own event receiver"
         );
+    }
+
+    #[tokio::test]
+    async fn collect_agent_contexts_returns_all_agents() {
+        let (spec_id, actor) = make_test_actor();
+
+        let mut manager = AgentRunner::new(spec_id, AgentRole::Manager);
+        manager.context.rolling_summary = "Manager saw events".to_string();
+        manager.context.last_event_seen = 10;
+        manager.context.add_decision("Use gRPC".to_string());
+
+        let mut brainstormer = AgentRunner::new(spec_id, AgentRole::Brainstormer);
+        brainstormer.context.rolling_summary = "Brainstormer explored ideas".to_string();
+        brainstormer.context.last_event_seen = 7;
+
+        let mut planner = AgentRunner::new(spec_id, AgentRole::Planner);
+        planner.context.rolling_summary = "Planner organized tasks".to_string();
+        planner.context.last_event_seen = 5;
+
+        let manager_id = manager.agent_id.clone();
+        let brainstormer_id = brainstormer.agent_id.clone();
+        let planner_id = planner.agent_id.clone();
+
+        let swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            actor,
+            vec![manager, brainstormer, planner],
+            make_test_client(),
+            "stub-model".to_string(),
+        );
+
+        let map = swarm.collect_agent_contexts();
+
+        assert_eq!(map.len(), 3, "should have one entry per agent");
+        assert!(map.contains_key(&manager_id));
+        assert!(map.contains_key(&brainstormer_id));
+        assert!(map.contains_key(&planner_id));
+
+        // Verify content is properly serialized
+        let manager_val = &map[&manager_id];
+        assert_eq!(
+            manager_val["rolling_summary"],
+            serde_json::json!("Manager saw events")
+        );
+        assert_eq!(manager_val["last_event_seen"], serde_json::json!(10));
+    }
+
+    #[tokio::test]
+    async fn restore_agent_contexts_round_trip() {
+        let (spec_id, actor) = make_test_actor();
+
+        let mut manager = AgentRunner::new(spec_id, AgentRole::Manager);
+        manager.context.rolling_summary = "Manager memory".to_string();
+        manager.context.last_event_seen = 15;
+        manager.context.add_decision("Ship it".to_string());
+
+        let mut brainstormer = AgentRunner::new(spec_id, AgentRole::Brainstormer);
+        brainstormer.context.rolling_summary = "Brainstormer memory".to_string();
+        brainstormer.context.last_event_seen = 12;
+        brainstormer.context.add_decision("Add caching layer".to_string());
+
+        let agents = vec![manager, brainstormer];
+        let mut swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            actor,
+            agents,
+            make_test_client(),
+            "stub-model".to_string(),
+        );
+
+        // Collect contexts
+        let map = swarm.collect_agent_contexts();
+        assert_eq!(map.len(), 2);
+
+        // Clear contexts on the agents to simulate a fresh session
+        for agent_opt in &mut swarm.agents {
+            if let Some(runner) = agent_opt.as_mut() {
+                runner.context.rolling_summary.clear();
+                runner.context.key_decisions.clear();
+                runner.context.last_event_seen = 0;
+            }
+        }
+
+        // Restore from the collected map
+        swarm.restore_agent_contexts(&map);
+
+        // Verify contexts were restored
+        let mgr = swarm.agents[0].as_ref().unwrap();
+        assert_eq!(mgr.role, AgentRole::Manager);
+        assert_eq!(mgr.context.rolling_summary, "Manager memory");
+        assert_eq!(mgr.context.last_event_seen, 15);
+        assert_eq!(mgr.context.key_decisions, vec!["Ship it"]);
+
+        let brain = swarm.agents[1].as_ref().unwrap();
+        assert_eq!(brain.role, AgentRole::Brainstormer);
+        assert_eq!(brain.context.rolling_summary, "Brainstormer memory");
+        assert_eq!(brain.context.last_event_seen, 12);
+        assert_eq!(brain.context.key_decisions, vec!["Add caching layer"]);
+    }
+
+    #[tokio::test]
+    async fn restore_agent_contexts_matches_by_role() {
+        let (spec_id, actor) = make_test_actor();
+
+        // Create agents with known contexts
+        let mut original_manager = AgentRunner::new(spec_id, AgentRole::Manager);
+        original_manager.context.rolling_summary = "Original manager context".to_string();
+        original_manager.context.last_event_seen = 20;
+        original_manager.context.add_decision("Decision A".to_string());
+
+        let mut original_planner = AgentRunner::new(spec_id, AgentRole::Planner);
+        original_planner.context.rolling_summary = "Original planner context".to_string();
+        original_planner.context.last_event_seen = 18;
+        original_planner.context.add_decision("Decision B".to_string());
+
+        // Collect the snapshot from the originals
+        let contexts: Vec<AgentContext> = vec![
+            original_manager.context.clone(),
+            original_planner.context.clone(),
+        ];
+        let map = crate::context::contexts_to_snapshot_map(&contexts);
+
+        // Create a fresh swarm with new agents (different agent_ids)
+        let new_manager = AgentRunner::new(spec_id, AgentRole::Manager);
+        let new_planner = AgentRunner::new(spec_id, AgentRole::Planner);
+
+        // Verify the new agents have different IDs from the originals
+        assert_ne!(new_manager.agent_id, original_manager.agent_id);
+        assert_ne!(new_planner.agent_id, original_planner.agent_id);
+
+        // Verify the new agents start with empty contexts
+        assert!(new_manager.context.rolling_summary.is_empty());
+        assert!(new_planner.context.rolling_summary.is_empty());
+
+        let mut swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            actor,
+            vec![new_manager, new_planner],
+            make_test_client(),
+            "stub-model".to_string(),
+        );
+
+        // Restore the old contexts onto the new agents
+        swarm.restore_agent_contexts(&map);
+
+        // Manager should have the original manager's context
+        let mgr = swarm.agents[0].as_ref().unwrap();
+        assert_eq!(mgr.role, AgentRole::Manager);
+        assert_eq!(mgr.context.rolling_summary, "Original manager context");
+        assert_eq!(mgr.context.last_event_seen, 20);
+        assert_eq!(mgr.context.key_decisions, vec!["Decision A"]);
+        // But the agent_id should NOT have changed
+        assert_ne!(mgr.agent_id, original_manager.agent_id);
+
+        // Planner should have the original planner's context
+        let plnr = swarm.agents[1].as_ref().unwrap();
+        assert_eq!(plnr.role, AgentRole::Planner);
+        assert_eq!(plnr.context.rolling_summary, "Original planner context");
+        assert_eq!(plnr.context.last_event_seen, 18);
+        assert_eq!(plnr.context.key_decisions, vec!["Decision B"]);
+        assert_ne!(plnr.agent_id, original_planner.agent_id);
     }
 }
