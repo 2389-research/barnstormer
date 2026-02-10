@@ -1,10 +1,13 @@
 // ABOUTME: Web UI route handlers serving HTML via Askama templates and HTMX.
 // ABOUTME: Provides browser-friendly views for spec management, board, documents, and activity.
 
+use std::sync::Arc;
+
 use axum::extract::{Form, Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
+use specd_agent::SwarmOrchestrator;
 use specd_core::{Command, SpecState, spawn};
 use specd_store::JsonlLog;
 use ulid::Ulid;
@@ -1063,6 +1066,263 @@ pub async fn provider_status(State(state): State<SharedState>) -> ProviderStatus
     }
 }
 
+/// Agent status partial template.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/agent_status.html")]
+pub struct AgentStatusTemplate {
+    pub spec_id: String,
+    pub running: bool,
+    pub started: bool,
+    pub agent_count: usize,
+}
+
+/// POST /web/specs/{id}/agents/start - Start agents for a spec.
+pub async fn start_agents(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    // Check if swarm already exists
+    {
+        let swarms = state.swarms.read().await;
+        if let Some(swarm_mutex) = swarms.get(&spec_id) {
+            let swarm = swarm_mutex.lock().await;
+            return AgentStatusTemplate {
+                spec_id: id,
+                running: !swarm.is_paused(),
+                started: true,
+                agent_count: swarm.agents.len(),
+            }
+            .into_response();
+        }
+    }
+
+    // Get actor handle -- we need to subscribe before creating the swarm
+    let actors = state.actors.read().await;
+    let actor_handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    // Subscribe to events before creating the swarm (needed for refresh_context)
+    let event_rx = actor_handle.subscribe();
+
+    // Create the SpecActorHandle for the swarm -- we need a separate handle
+    // since SwarmOrchestrator::with_defaults takes ownership.
+    // Re-spawn an actor view using the current state.
+    let current_state_guard = actor_handle.read_state().await;
+    let current_state = current_state_guard.clone();
+    drop(current_state_guard);
+    drop(actors);
+
+    let swarm_actor_handle = specd_core::spawn(spec_id, current_state);
+
+    // Create swarm
+    let swarm = match SwarmOrchestrator::with_defaults(spec_id, swarm_actor_handle) {
+        Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(format!(
+                    "<p class=\"error-msg\">Failed to start agents: {}</p>",
+                    e
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    let agent_count = {
+        let s = swarm.lock().await;
+        s.agents.len()
+    };
+
+    // Spawn agent loop task
+    let swarm_clone = Arc::clone(&swarm);
+    tokio::spawn(async move {
+        let mut event_rx = event_rx;
+        loop {
+            // Check if paused without holding the lock long
+            let is_paused = {
+                let s = swarm_clone.lock().await;
+                s.is_paused()
+            };
+
+            if is_paused {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                continue;
+            }
+
+            let agent_count = {
+                let s = swarm_clone.lock().await;
+                s.agents.len()
+            };
+
+            for i in 0..agent_count {
+                // Check pause again before each agent step
+                let is_paused = {
+                    let s = swarm_clone.lock().await;
+                    s.is_paused()
+                };
+                if is_paused {
+                    break;
+                }
+
+                // Refresh context and run step under lock.
+                // Clone Arc fields before taking &mut agents to satisfy borrow checker.
+                let should_continue = {
+                    let mut s = swarm_clone.lock().await;
+                    let actor_ref = Arc::clone(&s.actor);
+                    let question_pending = Arc::clone(&s.question_pending);
+
+                    SwarmOrchestrator::refresh_context_with_flag(
+                        &mut s.agents[i],
+                        &actor_ref,
+                        &mut event_rx,
+                        Some(&question_pending),
+                    )
+                    .await;
+
+                    SwarmOrchestrator::run_single_step(
+                        &mut s.agents[i],
+                        &actor_ref,
+                        &question_pending,
+                    )
+                    .await
+                };
+
+                if should_continue {
+                    // Agent did work, small delay before next
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                } else {
+                    // Agent is done/idle, longer delay
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    });
+
+    // Store swarm
+    state.swarms.write().await.insert(spec_id, swarm);
+
+    AgentStatusTemplate {
+        spec_id: id,
+        running: true,
+        started: true,
+        agent_count,
+    }
+    .into_response()
+}
+
+/// POST /web/specs/{id}/agents/pause - Pause agents.
+pub async fn pause_agents(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let swarms = state.swarms.read().await;
+    match swarms.get(&spec_id) {
+        Some(swarm_mutex) => {
+            let swarm = swarm_mutex.lock().await;
+            swarm.pause();
+            AgentStatusTemplate {
+                spec_id: id,
+                running: false,
+                started: true,
+                agent_count: swarm.agents.len(),
+            }
+            .into_response()
+        }
+        None => AgentStatusTemplate {
+            spec_id: id,
+            running: false,
+            started: false,
+            agent_count: 0,
+        }
+        .into_response(),
+    }
+}
+
+/// POST /web/specs/{id}/agents/resume - Resume agents.
+pub async fn resume_agents(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let swarms = state.swarms.read().await;
+    match swarms.get(&spec_id) {
+        Some(swarm_mutex) => {
+            let swarm = swarm_mutex.lock().await;
+            swarm.resume();
+            AgentStatusTemplate {
+                spec_id: id,
+                running: true,
+                started: true,
+                agent_count: swarm.agents.len(),
+            }
+            .into_response()
+        }
+        None => AgentStatusTemplate {
+            spec_id: id,
+            running: false,
+            started: false,
+            agent_count: 0,
+        }
+        .into_response(),
+    }
+}
+
+/// GET /web/specs/{id}/agents/status - Get current agent status.
+pub async fn agent_status(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let swarms = state.swarms.read().await;
+    match swarms.get(&spec_id) {
+        Some(swarm_mutex) => {
+            let swarm = swarm_mutex.lock().await;
+            AgentStatusTemplate {
+                spec_id: id,
+                running: !swarm.is_paused(),
+                started: true,
+                agent_count: swarm.agents.len(),
+            }
+            .into_response()
+        }
+        None => AgentStatusTemplate {
+            spec_id: id,
+            running: false,
+            started: false,
+            agent_count: 0,
+        }
+        .into_response(),
+    }
+}
+
 /// Helper to persist events to the JSONL log.
 fn persist_events(state: &SharedState, spec_id: Ulid, events: &[specd_core::Event]) {
     let log_path = state
@@ -1451,6 +1711,213 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[test]
+    fn agent_status_template_renders_stopped() {
+        let tmpl = AgentStatusTemplate {
+            spec_id: "01HTEST".to_string(),
+            running: false,
+            started: false,
+            agent_count: 0,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("agent-status"), "should contain agent-status id");
+        assert!(rendered.contains("Agents stopped"), "should show stopped state");
+        assert!(rendered.contains("Start Agents"), "should show start button");
+        assert!(rendered.contains("/agents/start"), "should have start action URL");
+    }
+
+    #[test]
+    fn agent_status_template_renders_running() {
+        let tmpl = AgentStatusTemplate {
+            spec_id: "01HTEST".to_string(),
+            running: true,
+            started: true,
+            agent_count: 4,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Agents running (4)"), "should show running state with count");
+        assert!(rendered.contains("Pause"), "should show pause button");
+        assert!(rendered.contains("/agents/pause"), "should have pause action URL");
+    }
+
+    #[test]
+    fn agent_status_template_renders_paused() {
+        let tmpl = AgentStatusTemplate {
+            spec_id: "01HTEST".to_string(),
+            running: false,
+            started: true,
+            agent_count: 4,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Agents paused"), "should show paused state");
+        assert!(rendered.contains("Resume"), "should show resume button");
+        assert!(rendered.contains("/agents/resume"), "should have resume action URL");
+    }
+
+    #[tokio::test]
+    async fn get_agent_status_returns_stopped_when_no_swarm() {
+        let state = test_state();
+
+        // Create a spec first
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("title=Agent+Test&one_liner=Testing+agents&goal=Verify+agents"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        // Get agent status (no swarm started)
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}/agents/status", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Agents stopped"), "should show stopped when no swarm: {}", html);
+    }
+
+    #[tokio::test]
+    async fn pause_agents_returns_stopped_when_no_swarm() {
+        let state = test_state();
+
+        // Create a spec
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("title=Pause+Test&one_liner=Test&goal=Test"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        // Pause without starting returns stopped state
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::post(&format!("/web/specs/{}/agents/pause", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Agents stopped"), "pause with no swarm should show stopped: {}", html);
+    }
+
+    #[tokio::test]
+    async fn resume_agents_returns_stopped_when_no_swarm() {
+        let state = test_state();
+
+        // Create a spec
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("title=Resume+Test&one_liner=Test&goal=Test"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        // Resume without starting returns stopped state
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::post(&format!("/web/specs/{}/agents/resume", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Agents stopped"), "resume with no swarm should show stopped: {}", html);
+    }
+
+    #[tokio::test]
+    async fn agent_status_for_nonexistent_spec_returns_stopped() {
+        let state = test_state();
+        let app = create_router(state, None);
+        let fake_id = ulid::Ulid::new();
+
+        let resp = app
+            .oneshot(
+                Request::get(&format!("/web/specs/{}/agents/status", fake_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Agents stopped"), "nonexistent spec should show stopped: {}", html);
+    }
+
+    #[tokio::test]
+    async fn start_agents_for_nonexistent_spec_returns_404() {
+        let state = test_state();
+        let app = create_router(state, None);
+        let fake_id = ulid::Ulid::new();
+
+        let resp = app
+            .oneshot(
+                Request::post(&format!("/web/specs/{}/agents/start", fake_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
         assert_eq!(resp.status(), 404);
     }
 }

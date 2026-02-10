@@ -1,0 +1,36 @@
+<div class="agent-status" id="agent-status">
+    {% if running %}
+    <div class="agent-status-active">
+        <span class="status-dot connected"></span>
+        <span>Agents running ({{ agent_count }})</span>
+        <button class="btn btn-sm btn-danger"
+                hx-post="/web/specs/{{ spec_id }}/agents/pause"
+                hx-target="#agent-status"
+                hx-swap="outerHTML">
+            Pause
+        </button>
+    </div>
+    {% else if started %}
+    <div class="agent-status-paused">
+        <span class="status-dot disconnected"></span>
+        <span>Agents paused</span>
+        <button class="btn btn-sm btn-success"
+                hx-post="/web/specs/{{ spec_id }}/agents/resume"
+                hx-target="#agent-status"
+                hx-swap="outerHTML">
+            Resume
+        </button>
+    </div>
+    {% else %}
+    <div class="agent-status-stopped">
+        <span class="status-dot disconnected"></span>
+        <span>Agents stopped</span>
+        <button class="btn btn-sm btn-primary"
+                hx-post="/web/specs/{{ spec_id }}/agents/start"
+                hx-target="#agent-status"
+                hx-swap="outerHTML">
+            Start Agents
+        </button>
+    </div>
+    {% endif %}
+</div>

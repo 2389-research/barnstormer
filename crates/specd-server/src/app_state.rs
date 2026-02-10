@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use specd_agent::SwarmOrchestrator;
 use specd_core::SpecActorHandle;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use ulid::Ulid;
 
 use crate::providers::ProviderStatus;
@@ -16,7 +16,7 @@ use crate::providers::ProviderStatus;
 /// Stores a map of spec actors keyed by their ULID and the SPECD_HOME directory.
 pub struct AppState {
     pub actors: Arc<RwLock<HashMap<Ulid, SpecActorHandle>>>,
-    pub swarms: Arc<RwLock<HashMap<Ulid, Arc<SwarmOrchestrator>>>>,
+    pub swarms: Arc<RwLock<HashMap<Ulid, Arc<Mutex<SwarmOrchestrator>>>>>,
     pub specd_home: PathBuf,
     pub provider_status: ProviderStatus,
 }
