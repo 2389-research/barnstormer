@@ -4,8 +4,10 @@
 pub mod context;
 pub mod providers;
 pub mod runtime;
+pub mod swarm;
 pub mod tools;
 
 pub use context::{AgentContext, AgentRole};
 pub use runtime::{AgentAction, AgentError, AgentRuntime};
+pub use swarm::{AgentRunner, SwarmOrchestrator, create_runtime};
 pub use tools::all_tool_definitions;
