@@ -1319,6 +1319,57 @@ html, body {
     flex-shrink: 0;
 }
 
+/* --- Diagram tab --- */
+.diagram-panel {
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.diagram-toolbar {
+    display: flex;
+    gap: var(--spacing-sm);
+    justify-content: flex-end;
+    margin-bottom: var(--spacing-sm);
+}
+
+.diagram-toolbar .btn-copy,
+.diagram-toolbar .btn-download {
+    font-size: 0.72rem;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-radius: 12px;
+    text-decoration: none;
+    color: var(--text-primary);
+}
+
+.diagram-container {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: var(--spacing-md);
+    min-height: 200px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.diagram-container svg {
+    max-width: 100%;
+    height: auto;
+    max-height: 70vh;
+}
+
+.diagram-empty {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    text-align: center;
+    padding: var(--spacing-xl);
+}
+
+.diagram-container .error-msg {
+    color: var(--danger);
+    font-size: 0.85rem;
+}
+
 /* --- Activity container (fills right rail when chat input is removed) --- */
 #activity-container {
     flex: 1;

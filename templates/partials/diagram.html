@@ -1,0 +1,55 @@
+{# ABOUTME: Diagram tab that renders the spec's DOT graph visually using viz.js. #}
+{# ABOUTME: Fetches DOT source from the server and renders it as an SVG in the browser. #}
+
+<div class="diagram-panel">
+    <div class="diagram-toolbar">
+        <button class="btn btn-sm btn-copy" id="diagram-copy-dot" title="Copy DOT source">Copy DOT</button>
+        <a href="/web/specs/{{ spec_id }}/export/dot" download="spec.dot" class="btn btn-sm btn-download">Download DOT</a>
+    </div>
+    <div class="diagram-container" id="diagram-render">
+        {% if dot_content.is_empty() %}
+        <div class="diagram-empty">
+            <p>No diagram data yet. Agents will generate a DOT graph as the spec develops.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+    (function() {
+        var dot = {{ dot_content|json }};
+        if (!dot || dot.trim() === '') return;
+
+        var container = document.getElementById('diagram-render');
+        if (!container) return;
+
+        if (typeof Viz === 'undefined') {
+            container.innerHTML = '<p class="error-msg">Viz.js not loaded. Cannot render diagram.</p>';
+            return;
+        }
+
+        Viz.instance().then(function(viz) {
+            try {
+                var svg = viz.renderSVGElement(dot);
+                svg.style.width = '100%';
+                svg.style.height = 'auto';
+                svg.style.maxHeight = '70vh';
+                container.innerHTML = '';
+                container.appendChild(svg);
+            } catch (e) {
+                container.innerHTML = '<p class="error-msg">Failed to render diagram: ' + e.message + '</p><pre class="artifact-source"><code>' + dot.replace(/</g, '&lt;') + '</code></pre>';
+            }
+        });
+
+        // Copy DOT source
+        var copyBtn = document.getElementById('diagram-copy-dot');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', function() {
+                navigator.clipboard.writeText(dot).then(function() {
+                    copyBtn.textContent = 'Copied!';
+                    setTimeout(function() { copyBtn.textContent = 'Copy DOT'; }, 2000);
+                });
+            });
+        }
+    })();
+</script>

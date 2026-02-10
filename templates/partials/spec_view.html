@@ -4,7 +4,13 @@
 </div>
 
 <div class="tab-bar">
-    <button class="tab active" data-tab="board"
+    <button class="tab active" data-tab="chat"
+            hx-get="/web/specs/{{ spec_id }}/chat-panel"
+            hx-target="#spec-content"
+            hx-swap="innerHTML">
+        Chat
+    </button>
+    <button class="tab" data-tab="board"
             hx-get="/web/specs/{{ spec_id }}/board"
             hx-target="#spec-content"
             hx-swap="innerHTML">
@@ -16,11 +22,11 @@
             hx-swap="innerHTML">
         Document
     </button>
-    <button class="tab" data-tab="chat"
-            hx-get="/web/specs/{{ spec_id }}/chat-panel"
+    <button class="tab" data-tab="diagram"
+            hx-get="/web/specs/{{ spec_id }}/diagram"
             hx-target="#spec-content"
             hx-swap="innerHTML">
-        Chat
+        Diagram
     </button>
     <button class="tab" data-tab="artifacts"
             hx-get="/web/specs/{{ spec_id }}/artifacts"
@@ -28,16 +34,12 @@
             hx-swap="innerHTML">
         Artifacts
     </button>
-    <button class="btn btn-sm"
-            hx-get="/web/specs/{{ spec_id }}/cards/new"
-            hx-target="#spec-content"
-            hx-swap="beforeend">
-        + Card
-    </button>
 </div>
 
-<div id="spec-content">
-    {% include "partials/board.html" %}
+<div id="spec-content"
+     hx-get="/web/specs/{{ spec_id }}/chat-panel"
+     hx-trigger="load"
+     hx-swap="innerHTML">
 </div>
 
 <script>

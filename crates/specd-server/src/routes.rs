@@ -45,6 +45,7 @@ pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
         .route("/web/specs/{id}/answer", post(web::answer_question))
         .route("/web/specs/{id}/chat", post(web::chat))
         .route("/web/specs/{id}/chat-panel", get(web::chat_panel))
+        .route("/web/specs/{id}/diagram", get(web::diagram))
         .route("/web/specs/{id}/artifacts", get(web::artifacts))
         .route("/web/specs/{id}/export/markdown", get(web::export_markdown))
         .route("/web/specs/{id}/export/yaml", get(web::export_yaml))

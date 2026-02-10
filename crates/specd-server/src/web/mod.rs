@@ -1104,6 +1104,46 @@ pub async fn artifacts(
     .into_response()
 }
 
+/// Diagram tab template showing a visual rendering of the DOT graph.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/diagram.html")]
+pub struct DiagramTemplate {
+    pub spec_id: String,
+    pub dot_content: String,
+}
+
+/// GET /web/specs/{id}/diagram - Render the Diagram tab with viz.js DOT visualization.
+pub async fn diagram(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    let spec_state = handle.read_state().await;
+    let dot_content = specd_core::export::export_dot(&spec_state);
+
+    DiagramTemplate {
+        spec_id: id,
+        dot_content,
+    }
+    .into_response()
+}
+
 /// GET /web/specs/{id}/export/markdown - Download spec as Markdown file.
 pub async fn export_markdown(
     State(state): State<SharedState>,
@@ -2297,7 +2337,7 @@ mod tests {
     }
 
     #[test]
-    fn spec_view_template_contains_all_four_tabs() {
+    fn spec_view_template_contains_all_five_tabs() {
         let tmpl = SpecViewTemplate {
             spec_id: "01HTEST".to_string(),
             title: "Test Spec".to_string(),
@@ -2309,11 +2349,19 @@ mod tests {
         assert!(rendered.contains("Board"), "should contain Board tab");
         assert!(rendered.contains("Document"), "should contain Document tab");
         assert!(rendered.contains("Chat"), "should contain Chat tab");
+        assert!(rendered.contains("Diagram"), "should contain Diagram tab");
         assert!(rendered.contains("Artifacts"), "should contain Artifacts tab");
+        assert!(rendered.contains("data-tab=\"chat\""), "Chat tab should have data-tab attribute");
         assert!(rendered.contains("data-tab=\"board\""), "Board tab should have data-tab attribute");
         assert!(rendered.contains("data-tab=\"document\""), "Document tab should have data-tab attribute");
-        assert!(rendered.contains("data-tab=\"chat\""), "Chat tab should have data-tab attribute");
+        assert!(rendered.contains("data-tab=\"diagram\""), "Diagram tab should have data-tab attribute");
         assert!(rendered.contains("data-tab=\"artifacts\""), "Artifacts tab should have data-tab attribute");
+        // Chat should be the first/active tab
+        let chat_pos = rendered.find("data-tab=\"chat\"").unwrap();
+        let board_pos = rendered.find("data-tab=\"board\"").unwrap();
+        assert!(chat_pos < board_pos, "Chat tab should appear before Board tab");
+        // No "+ Card" button
+        assert!(!rendered.contains("+ Card"), "should not contain + Card button");
     }
 
     #[tokio::test]
@@ -2960,6 +3008,89 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), 404);
+    }
+
+    // ---- Diagram tab tests ----
+
+    #[tokio::test]
+    async fn diagram_handler_returns_200() {
+        let state = test_state();
+
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("title=Diagram+Test&one_liner=Test&goal=Test"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(format!("/web/specs/{}/diagram", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains("diagram-panel"),
+            "diagram response should contain diagram-panel: {}",
+            html
+        );
+    }
+
+    #[tokio::test]
+    async fn diagram_for_nonexistent_spec_returns_404() {
+        let state = test_state();
+        let app = create_router(state, None);
+        let fake_id = ulid::Ulid::new();
+        let resp = app
+            .oneshot(
+                Request::get(format!("/web/specs/{}/diagram", fake_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[test]
+    fn diagram_template_renders_with_dot_content() {
+        let tmpl = DiagramTemplate {
+            spec_id: "01HTEST".to_string(),
+            dot_content: "digraph { A -> B }".to_string(),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("diagram-panel"), "should contain diagram-panel class");
+        assert!(rendered.contains("diagram-render"), "should contain diagram-render container");
+        assert!(rendered.contains("diagram-copy-dot"), "should contain copy DOT button");
+    }
+
+    #[test]
+    fn diagram_template_renders_empty_state() {
+        let tmpl = DiagramTemplate {
+            spec_id: "01HTEST".to_string(),
+            dot_content: String::new(),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("diagram-empty"), "should show empty state when no DOT content");
     }
 
     // ---- Export download tests ----
