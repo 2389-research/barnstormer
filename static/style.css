@@ -487,6 +487,38 @@ html, body {
     gap: var(--spacing-sm);
 }
 
+/* --- Chat input --- */
+.chat-input {
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-top: 1px solid var(--border);
+    background: var(--bg-secondary);
+}
+
+.chat-input-row {
+    display: flex;
+    gap: var(--spacing-sm);
+}
+
+.chat-input-row input {
+    flex: 1;
+    padding: var(--spacing-sm);
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    font-family: inherit;
+}
+
+.chat-input-row input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.chat-input-row button {
+    flex-shrink: 0;
+}
+
 /* --- Agent controls --- */
 .agent-controls {
     padding: var(--spacing-sm) var(--spacing-md);

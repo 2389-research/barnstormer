@@ -68,6 +68,17 @@
 {% when None %}
 {% endmatch %}
 
+<div class="chat-input" id="chat-input">
+    <form hx-post="/web/specs/{{ spec_id }}/chat"
+          hx-target="#activity-container"
+          hx-swap="innerHTML">
+        <div class="chat-input-row">
+            <input type="text" name="message" placeholder="Type a message..." autocomplete="off" required>
+            <button type="submit" class="btn btn-primary btn-sm">Send</button>
+        </div>
+    </form>
+</div>
+
 <div class="agent-controls">
     <button class="btn btn-sm"
             hx-post="/web/specs/{{ spec_id }}/undo"
