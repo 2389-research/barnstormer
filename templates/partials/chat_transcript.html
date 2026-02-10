@@ -11,7 +11,8 @@
         {% for entry in transcript %}
         {% if entry.is_step %}
         <div class="chat-status-line">
-            <span class="chat-status-text">{{ entry.sender_label }}: {{ entry.content }}</span>
+            <span class="status-dot dot-{{ entry.role_class }}"></span>
+            <span class="chat-status-body">{{ entry.sender_label }} {{ entry.content }}</span>
             <span class="chat-status-time">{{ entry.timestamp }}</span>
         </div>
         {% else %}
@@ -102,6 +103,7 @@
     (function() {
         var feed = document.getElementById('{{ container_id }}-feed');
         if (!feed) return;
-        feed.scrollTop = feed.scrollHeight;
+        var nearBottom = (feed.scrollHeight - feed.scrollTop - feed.clientHeight) < 80;
+        if (nearBottom) feed.scrollTop = feed.scrollHeight;
     })();
 </script>

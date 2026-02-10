@@ -602,21 +602,62 @@ html, body {
     opacity: 0.7;
 }
 
-/* --- Activity status lines (compact step indicators) --- */
+/* --- Status lines (compact step indicators, shared between panels) --- */
+
+/* Role-colored dot — the "LED indicator" for which agent acted */
+.status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--text-muted);
+}
+.dot-manager      { background: var(--badge-manager); }
+.dot-brainstormer { background: var(--badge-brainstormer); }
+.dot-planner      { background: var(--badge-planner); }
+.dot-dot_generator { background: var(--badge-dot_generator); }
+.dot-critic       { background: var(--badge-critic); }
+.dot-agent, .dot-human { background: var(--text-muted); }
+
+/* Activity feed status line — hairline divider with embedded text */
 .activity-status-line {
     display: flex;
     align-items: center;
-    gap: var(--spacing-xs);
-    padding: 4px 8px;
-    font-size: 0.72rem;
-    color: var(--text-muted);
+    gap: 8px;
+    padding: 4px 14px;
+    margin: 2px 0;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}
+.activity-status-line::before,
+.activity-status-line::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border-subtle);
+}
+.activity-status-line::before {
+    max-width: 20px;
+}
+.activity-status-badge {
+    font-weight: 600;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
 }
 .activity-status-text {
-    font-style: italic;
-    flex: 1;
+    flex-shrink: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+.activity-status-time {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 /* --- Empty state --- */
@@ -1118,18 +1159,35 @@ html, body {
     text-align: right;
 }
 
-/* Chat status lines (compact step indicators) */
+/* Chat status lines — hairline divider with embedded text, mirroring activity panel */
 .chat-status-line {
-    align-self: center;
     display: flex;
     align-items: center;
-    gap: var(--spacing-xs);
-    padding: 4px 12px;
-    font-size: 0.72rem;
-    color: var(--text-muted);
+    gap: 8px;
+    padding: 6px 16px;
+    margin: 4px 0;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
 }
-.chat-status-text { font-style: italic; }
-.chat-status-time { font-size: 0.6rem; opacity: 0.7; }
+.chat-status-line::before,
+.chat-status-line::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border-subtle);
+}
+.chat-status-body {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.chat-status-time {
+    font-size: 0.68rem;
+    opacity: 0.6;
+    white-space: nowrap;
+}
 
 /* Empty state */
 .chat-empty {

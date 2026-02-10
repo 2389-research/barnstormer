@@ -10,8 +10,10 @@
         {% for entry in transcript %}
         {% if entry.is_step %}
         <div class="activity-status-line">
-            <span class="status-badge badge-{{ entry.role_class }}">{{ entry.sender_label }}</span>
+            <span class="status-dot dot-{{ entry.role_class }}"></span>
+            <span class="activity-status-badge">{{ entry.sender_label }}</span>
             <span class="activity-status-text">{{ entry.content }}</span>
+            <span class="activity-status-time">{{ entry.timestamp }}</span>
         </div>
         {% else %}
         <div class="message {% if entry.is_human %}message-human{% else %}message-agent{% endif %}">
@@ -97,6 +99,7 @@
     (function() {
         var feed = document.getElementById('{{ container_id }}-feed');
         if (!feed) return;
-        feed.scrollTop = feed.scrollHeight;
+        var nearBottom = (feed.scrollHeight - feed.scrollTop - feed.clientHeight) < 80;
+        if (nearBottom) feed.scrollTop = feed.scrollHeight;
     })();
 </script>
