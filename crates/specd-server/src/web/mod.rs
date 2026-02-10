@@ -1371,4 +1371,86 @@ mod tests {
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("Test Spec"));
     }
+
+    #[test]
+    fn activity_template_renders_chat_input() {
+        let tmpl = ActivityTemplate {
+            spec_id: "01HTEST".to_string(),
+            transcript: vec![],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("chat-input"), "should contain chat input div");
+        assert!(rendered.contains("Type a message"), "should contain placeholder text");
+        assert!(rendered.contains("/chat"), "should contain chat form action");
+    }
+
+    #[tokio::test]
+    async fn post_chat_sends_message() {
+        let state = test_state();
+
+        // First create a spec
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("title=Chat+Test&one_liner=Testing+chat&goal=Verify+chat"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        // Get the spec_id from the actors
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        // Post a chat message
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::post(&format!("/web/specs/{}/chat", spec_id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("message=Hello+from+chat"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains("Hello from chat"),
+            "chat message should appear in activity: {}",
+            html
+        );
+        assert!(
+            html.contains("human"),
+            "sender should be 'human' in activity: {}",
+            html
+        );
+    }
+
+    #[tokio::test]
+    async fn post_chat_to_nonexistent_spec_returns_404() {
+        let state = test_state();
+        let app = create_router(state, None);
+        let fake_id = ulid::Ulid::new();
+        let resp = app
+            .oneshot(
+                Request::post(&format!("/web/specs/{}/chat", fake_id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("message=Hello"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+    }
 }
