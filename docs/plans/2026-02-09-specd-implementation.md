@@ -609,7 +609,7 @@ feat: implement spec switcher with create form in left rail
 
 **Step 1: Implement board template**
 
-Three default lanes: Ideas, Plan, Done. Cards rendered in each lane by order.
+Three default lanes: Ideas, Plan, Spec. Cards rendered in each lane by order.
 Each card shows: type badge, title, body preview.
 HTMX: SSE updates swap board content. Card click opens edit form.
 
@@ -709,7 +709,7 @@ fn export_markdown_includes_title_and_cards() {
 
 **Step 2: Implement export_markdown**
 
-Deterministic ordering per spec: header → lanes (Ideas, Plan, Done, then alpha) → cards by order then card_id.
+Deterministic ordering per spec: header → lanes (Ideas, Plan, Spec, then alpha) → cards by order then card_id.
 
 **Step 3: Tests PASS, commit**
 
@@ -761,7 +761,7 @@ Conforms to DOT Runner constrained DSL from spec Section 9.3:
 - `digraph <spec_id> { ... }`
 - `start` (Mdiamond) and `done` (Msquare)
 - Cards as nodes with shapes based on type
-- Edges based on lane ordering (Ideas → Plan → Done flow)
+- Edges based on lane ordering (Ideas → Plan → Spec flow)
 
 **Step 3: Wire up auto-export — after each event, write exports to disk**
 

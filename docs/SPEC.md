@@ -35,7 +35,7 @@ Left rail:
 - Settings (LLM providers, storage folder, server bind, auth token)
 
 Main:
-- **Board View (default)**: lanes (default 3: Ideas / Plan / Done) with draggable cards.
+- **Board View (default)**: lanes (default 3: Ideas / Plan / Spec) with draggable cards.
 - **Document View**: single scroll narrative (generated from current state).
 
 Right rail:
@@ -289,7 +289,7 @@ Snapshot policy (suggested):
 
 Deterministic ordering:
 - Spec core header
-- Board lanes in stable order (Ideas, Plan, Done first; then alpha)
+- Board lanes in stable order (Ideas, Plan, Spec first; then alpha)
 - Cards in each lane by `order`, then `card_id`
 
 Include:

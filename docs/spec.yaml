@@ -30,7 +30,7 @@ ui:
     - spec_switcher
     - agent_activity
     - pending_question
-  default_lanes: ["Ideas", "Plan", "Done"]
+  default_lanes: ["Ideas", "Plan", "Spec"]
 
 interaction_contract:
   user_question_tools:
