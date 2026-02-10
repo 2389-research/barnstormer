@@ -24,7 +24,7 @@
                 <span class="chat-time">{{ entry.timestamp }}</span>
             </div>
             {% endif %}
-            <div class="chat-body">{{ entry.content }}</div>
+            <div class="chat-body">{{ entry.content_html|safe }}</div>
         </div>
         {% endif %}
         {% endfor %}

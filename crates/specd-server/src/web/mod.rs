@@ -13,6 +13,8 @@ use specd_store::{JsonlLog, SnapshotData, save_snapshot};
 use chrono::Utc;
 use ulid::Ulid;
 
+use pulldown_cmark::{Event, Options, Parser, html};
+
 use crate::api::specs::SpecSummary;
 use crate::app_state::SharedState;
 
@@ -793,13 +795,29 @@ pub struct TranscriptEntry {
     pub is_continuation: bool,
     pub role_class: String,
     pub content: String,
+    /// Pre-rendered markdown→HTML for template use with `|safe`.
+    pub content_html: String,
     pub timestamp: String,
+}
+
+/// Render markdown content to HTML, stripping raw HTML tags from input
+/// to prevent XSS. Handles paragraphs, bold, italic, lists, code blocks,
+/// and links.
+fn render_markdown(content: &str) -> String {
+    let options = Options::empty();
+    let parser = Parser::new_ext(content, options).filter(|event| {
+        !matches!(event, Event::Html(_) | Event::InlineHtml(_))
+    });
+    let mut html_output = String::new();
+    html::push_html(&mut html_output, parser);
+    html_output
 }
 
 /// Convert a TranscriptMessage to a TranscriptEntry for template rendering.
 fn to_transcript_entry(m: &specd_core::TranscriptMessage) -> TranscriptEntry {
     let (sender_label, is_human, role_class) = sender_display(&m.sender);
     let initial = sender_label.chars().next().unwrap_or('?').to_string();
+    let content_html = render_markdown(&m.content);
     TranscriptEntry {
         sender: m.sender.clone(),
         sender_label,
@@ -809,6 +827,7 @@ fn to_transcript_entry(m: &specd_core::TranscriptMessage) -> TranscriptEntry {
         is_continuation: false,
         role_class,
         content: m.content.clone(),
+        content_html,
         timestamp: m.timestamp.format("%H:%M:%S").to_string(),
     }
 }
@@ -2386,6 +2405,7 @@ mod tests {
                 is_continuation: false,
                 role_class: "agent".to_string(),
                 content: "Started analysis".to_string(),
+                content_html: "<p>Started analysis</p>\n".to_string(),
                 timestamp: "12:34:56".to_string(),
             }],
             pending_question: None,
@@ -2542,6 +2562,7 @@ mod tests {
                 is_continuation: false,
                 role_class: "agent".to_string(),
                 content: "Started analysis".to_string(),
+                content_html: "<p>Started analysis</p>\n".to_string(),
                 timestamp: "12:34:56".to_string(),
             }],
             pending_question: None,
@@ -2566,6 +2587,7 @@ mod tests {
                 is_continuation: false,
                 role_class: "human".to_string(),
                 content: "Hello chat".to_string(),
+                content_html: "<p>Hello chat</p>\n".to_string(),
                 timestamp: "12:00:00".to_string(),
             }],
             pending_question: None,
@@ -2667,6 +2689,7 @@ mod tests {
                 is_continuation: false,
                 role_class: "manager".to_string(),
                 content: "Analyzing requirements".to_string(),
+                content_html: "<p>Analyzing requirements</p>\n".to_string(),
                 timestamp: "12:34:56".to_string(),
             }],
             pending_question: None,
@@ -3123,6 +3146,7 @@ mod tests {
                     is_continuation: false,
                     role_class: "human".to_string(),
                     content: "Hello from human".to_string(),
+                    content_html: "<p>Hello from human</p>\n".to_string(),
                     timestamp: "12:34:56".to_string(),
                 },
                 TranscriptEntry {
@@ -3134,6 +3158,7 @@ mod tests {
                     is_continuation: false,
                     role_class: "manager".to_string(),
                     content: "Agent response here".to_string(),
+                    content_html: "<p>Agent response here</p>\n".to_string(),
                     timestamp: "12:35:00".to_string(),
                 },
             ],
@@ -3928,5 +3953,50 @@ mod tests {
             "response should target chat-transcript container: {}",
             html
         );
+    }
+
+    // ---- render_markdown tests ----
+
+    #[test]
+    fn render_markdown_paragraphs() {
+        let result = render_markdown("Hello world");
+        assert_eq!(result, "<p>Hello world</p>\n");
+    }
+
+    #[test]
+    fn render_markdown_bold_and_italic() {
+        let result = render_markdown("This is **bold** and *italic*");
+        assert!(result.contains("<strong>bold</strong>"));
+        assert!(result.contains("<em>italic</em>"));
+    }
+
+    #[test]
+    fn render_markdown_multiline_paragraphs() {
+        let result = render_markdown("First paragraph\n\nSecond paragraph");
+        assert!(result.contains("<p>First paragraph</p>"));
+        assert!(result.contains("<p>Second paragraph</p>"));
+    }
+
+    #[test]
+    fn render_markdown_list() {
+        let result = render_markdown("- item one\n- item two\n- item three");
+        assert!(result.contains("<ul>"));
+        assert!(result.contains("<li>item one</li>"));
+        assert!(result.contains("<li>item three</li>"));
+    }
+
+    #[test]
+    fn render_markdown_strips_raw_html() {
+        let result = render_markdown("Hello <script>alert('xss')</script> world");
+        assert!(!result.contains("<script>"), "raw HTML should be stripped");
+        assert!(result.contains("Hello"));
+        assert!(result.contains("world"));
+    }
+
+    #[test]
+    fn render_markdown_code_block() {
+        let result = render_markdown("```\nlet x = 1;\n```");
+        assert!(result.contains("<code>"));
+        assert!(result.contains("let x = 1;"));
     }
 }

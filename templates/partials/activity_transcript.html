@@ -23,7 +23,7 @@
                     <span class="sender-badge badge-{{ entry.role_class }}">{{ entry.sender_label }}</span>
                 </div>
                 {% endif %}
-                <div class="message-content">{{ entry.content }}</div>
+                <div class="message-content">{{ entry.content_html|safe }}</div>
                 <div class="message-time">{{ entry.timestamp }}</div>
             </div>
         </div>
