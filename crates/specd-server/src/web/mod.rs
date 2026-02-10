@@ -2054,9 +2054,52 @@ mod tests {
     fn create_spec_form_template_renders() {
         let tmpl = CreateSpecFormTemplate {};
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("title"));
-        assert!(rendered.contains("one_liner"));
-        assert!(rendered.contains("goal"));
+        assert!(rendered.contains("description"));
+        assert!(rendered.contains("What do you want to build?"));
+        assert!(rendered.contains("Start Building"));
+    }
+
+    #[test]
+    fn extract_placeholder_title_first_sentence() {
+        assert_eq!(
+            extract_placeholder_title("Build a todo app. With tags and filters."),
+            "Build a todo app."
+        );
+    }
+
+    #[test]
+    fn extract_placeholder_title_truncates_long_text() {
+        let long = "a".repeat(80);
+        let result = extract_placeholder_title(&long);
+        assert_eq!(result.len(), 63); // 60 chars + "..."
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn extract_placeholder_title_short_text() {
+        assert_eq!(extract_placeholder_title("Todo app"), "Todo app");
+    }
+
+    #[test]
+    fn extract_placeholder_title_empty() {
+        assert_eq!(extract_placeholder_title(""), "Untitled Spec");
+        assert_eq!(extract_placeholder_title("   "), "Untitled Spec");
+    }
+
+    #[test]
+    fn extract_placeholder_title_question_mark() {
+        assert_eq!(
+            extract_placeholder_title("Can we build this? I think so."),
+            "Can we build this?"
+        );
+    }
+
+    #[test]
+    fn extract_placeholder_title_exclamation() {
+        assert_eq!(
+            extract_placeholder_title("Build this now! It's urgent."),
+            "Build this now!"
+        );
     }
 
     #[test]
@@ -2294,7 +2337,7 @@ mod tests {
             .oneshot(
                 Request::post("/web/specs")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("title=Test+Spec&one_liner=A+test&goal=Build+it"))
+                    .body(Body::from("description=Build+a+test+spec+for+testing"))
                     .unwrap(),
             )
             .await
@@ -2305,7 +2348,7 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("Test Spec"));
+        assert!(html.contains("Build a test spec for testing"));
     }
 
     #[test]
@@ -2431,7 +2474,7 @@ mod tests {
             .oneshot(
                 Request::post("/web/specs")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("title=Chat+Test&one_liner=Testing+chat&goal=Verify+chat"))
+                    .body(Body::from("description=Build+a+chat+testing+system"))
                     .unwrap(),
             )
             .await
@@ -2543,7 +2586,7 @@ mod tests {
             .oneshot(
                 Request::post("/web/specs")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("title=Agent+Test&one_liner=Testing+agents&goal=Verify+agents"))
+                    .body(Body::from("description=Build+an+agent+testing+system"))
                     .unwrap(),
             )
             .await
@@ -2584,7 +2627,7 @@ mod tests {
             .oneshot(
                 Request::post("/web/specs")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("title=Pause+Test&one_liner=Test&goal=Test"))
+                    .body(Body::from("description=Build+a+pause+testing+system"))
                     .unwrap(),
             )
             .await
@@ -2625,7 +2668,7 @@ mod tests {
             .oneshot(
                 Request::post("/web/specs")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("title=Resume+Test&one_liner=Test&goal=Test"))
+                    .body(Body::from("description=Build+a+resume+testing+system"))
                     .unwrap(),
             )
             .await
@@ -2751,7 +2794,7 @@ mod tests {
             .oneshot(
                 Request::post("/web/specs")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("title=No+Agent+Test&one_liner=No+agents&goal=Verify+no+agents"))
+                    .body(Body::from("description=Build+a+system+without+agents"))
                     .unwrap(),
             )
             .await
@@ -2885,7 +2928,7 @@ mod tests {
             .oneshot(
                 Request::post("/web/specs")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("title=Chat+Panel+Test&one_liner=Test&goal=Test"))
+                    .body(Body::from("description=Build+a+chat+panel+testing+system"))
                     .unwrap(),
             )
             .await
@@ -3017,7 +3060,7 @@ mod tests {
             .oneshot(
                 Request::post("/web/specs")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("title=Artifacts+Test&one_liner=Test&goal=Test"))
+                    .body(Body::from("description=Build+an+artifacts+testing+system"))
                     .unwrap(),
             )
             .await
@@ -3078,7 +3121,7 @@ mod tests {
             .oneshot(
                 Request::post("/web/specs")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("title=Diagram+Test&one_liner=Test&goal=Test"))
+                    .body(Body::from("description=Build+a+diagram+testing+system"))
                     .unwrap(),
             )
             .await
@@ -3159,7 +3202,7 @@ mod tests {
             .oneshot(
                 Request::post("/web/specs")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("title=Export+Test&one_liner=Test&goal=Test"))
+                    .body(Body::from("description=Build+an+export+testing+system"))
                     .unwrap(),
             )
             .await
@@ -3305,7 +3348,7 @@ mod tests {
             .oneshot(
                 Request::post("/web/specs")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("title=Container+Test&one_liner=Testing&goal=Verify"))
+                    .body(Body::from("description=Build+a+container+testing+system"))
                     .unwrap(),
             )
             .await
@@ -3349,7 +3392,7 @@ mod tests {
             .oneshot(
                 Request::post("/web/specs")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("title=Container+Test&one_liner=Testing&goal=Verify"))
+                    .body(Body::from("description=Build+a+container+testing+system"))
                     .unwrap(),
             )
             .await
@@ -3502,7 +3545,7 @@ mod tests {
             .oneshot(
                 Request::post("/web/specs")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("title=HX+Chat+Test&one_liner=Test&goal=Test"))
+                    .body(Body::from("description=Build+an+HX+chat+testing+system"))
                     .unwrap(),
             )
             .await
@@ -3554,7 +3597,7 @@ mod tests {
             .oneshot(
                 Request::post("/web/specs")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("title=Answer+Test&one_liner=Test&goal=Test"))
+                    .body(Body::from("description=Build+an+answer+testing+system"))
                     .unwrap(),
             )
             .await
