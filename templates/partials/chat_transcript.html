@@ -19,7 +19,7 @@
         <div class="chat-message {% if entry.is_continuation %}chat-continuation{% endif %}">
             {% if !entry.is_continuation %}
             <div class="chat-message-header">
-                <div class="chat-avatar avatar-{{ entry.role_class }}">{{ entry.sender_label|truncate(1) }}</div>
+                <div class="chat-avatar avatar-{{ entry.role_class }}">{{ entry.initial }}</div>
                 <span class="chat-sender">{{ entry.sender_label }}</span>
                 <span class="chat-time">{{ entry.timestamp }}</span>
             </div>
@@ -87,8 +87,6 @@
 <script>
     (function() {
         var feed = document.getElementById('{{ container_id }}-feed');
-        if (!feed) return;
-        var nearBottom = (feed.scrollHeight - feed.scrollTop - feed.clientHeight) < 80;
-        if (nearBottom) feed.scrollTop = feed.scrollHeight;
+        if (feed) feed.scrollTop = feed.scrollHeight;
     })();
 </script>

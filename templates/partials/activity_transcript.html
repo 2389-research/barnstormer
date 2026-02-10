@@ -98,8 +98,6 @@
 <script>
     (function() {
         var feed = document.getElementById('{{ container_id }}-feed');
-        if (!feed) return;
-        var nearBottom = (feed.scrollHeight - feed.scrollTop - feed.clientHeight) < 80;
-        if (nearBottom) feed.scrollTop = feed.scrollHeight;
+        if (feed) feed.scrollTop = feed.scrollHeight;
     })();
 </script>

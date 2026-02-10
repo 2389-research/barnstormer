@@ -787,6 +787,7 @@ pub async fn document(
 pub struct TranscriptEntry {
     pub sender: String,
     pub sender_label: String,
+    pub initial: String,
     pub is_human: bool,
     pub is_step: bool,
     pub is_continuation: bool,
@@ -798,9 +799,11 @@ pub struct TranscriptEntry {
 /// Convert a TranscriptMessage to a TranscriptEntry for template rendering.
 fn to_transcript_entry(m: &specd_core::TranscriptMessage) -> TranscriptEntry {
     let (sender_label, is_human, role_class) = sender_display(&m.sender);
+    let initial = sender_label.chars().next().unwrap_or('?').to_string();
     TranscriptEntry {
         sender: m.sender.clone(),
         sender_label,
+        initial,
         is_human,
         is_step: m.kind.is_step(),
         is_continuation: false,
@@ -1414,12 +1417,13 @@ pub async fn answer_question(
     let is_chat = container_id == "chat-transcript";
     let is_ticker = container_id == "mission-ticker";
 
-    let transcript: Vec<TranscriptEntry> = spec_state
+    let mut transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
         .filter(|m| !is_chat || is_chat_participant(&m.sender))
         .map(to_transcript_entry)
         .collect();
+    mark_continuations(&mut transcript);
 
     if is_ticker {
         // For mission ticker, show only last 10 entries
@@ -1567,12 +1571,13 @@ pub async fn chat(
     let is_chat = container_id == "chat-transcript";
     let is_ticker = container_id == "mission-ticker";
 
-    let transcript: Vec<TranscriptEntry> = spec_state
+    let mut transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
         .filter(|m| !is_chat || is_chat_participant(&m.sender))
         .map(to_transcript_entry)
         .collect();
+    mark_continuations(&mut transcript);
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
@@ -2375,6 +2380,7 @@ mod tests {
             transcript: vec![TranscriptEntry {
                 sender: "agent-1".to_string(),
                 sender_label: "Agent-1".to_string(),
+                initial: "A".to_string(),
                 is_human: false,
                 is_step: false,
                 is_continuation: false,
@@ -2530,6 +2536,7 @@ mod tests {
             transcript: vec![TranscriptEntry {
                 sender: "agent-1".to_string(),
                 sender_label: "Agent-1".to_string(),
+                initial: "A".to_string(),
                 is_human: false,
                 is_step: false,
                 is_continuation: false,
@@ -2553,6 +2560,7 @@ mod tests {
             transcript: vec![TranscriptEntry {
                 sender: "human".to_string(),
                 sender_label: "You".to_string(),
+                initial: "Y".to_string(),
                 is_human: true,
                 is_step: false,
                 is_continuation: false,
@@ -2653,6 +2661,7 @@ mod tests {
             ticker_entries: vec![TranscriptEntry {
                 sender: "manager-01JTEST".to_string(),
                 sender_label: "Manager".to_string(),
+                initial: "M".to_string(),
                 is_human: false,
                 is_step: false,
                 is_continuation: false,
@@ -3108,6 +3117,7 @@ mod tests {
                 TranscriptEntry {
                     sender: "human".to_string(),
                     sender_label: "You".to_string(),
+                    initial: "Y".to_string(),
                     is_human: true,
                     is_step: false,
                     is_continuation: false,
@@ -3118,6 +3128,7 @@ mod tests {
                 TranscriptEntry {
                     sender: "manager-01HAGENT".to_string(),
                     sender_label: "Manager".to_string(),
+                    initial: "M".to_string(),
                     is_human: false,
                     is_step: false,
                     is_continuation: false,
