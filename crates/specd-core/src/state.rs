@@ -322,6 +322,7 @@ impl SpecState {
 mod tests {
     use super::*;
     use crate::card::Card;
+    use chrono::Utc;
 
     fn make_spec_id() -> Ulid {
         Ulid::new()
