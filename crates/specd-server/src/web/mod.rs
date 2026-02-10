@@ -938,7 +938,7 @@ pub struct ActivityTemplate {
 /// Activity transcript partial template (transcript entries + question widget only).
 /// Used by the SSE refresh target so that chat input is not wiped on updates.
 /// The `container_id` field controls the DOM IDs so the same template can serve
-/// both the right-rail activity panel and the full-width chat tab.
+/// both the mission ticker and the full-width chat tab.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/activity_transcript.html")]
 pub struct ActivityTranscriptTemplate {
@@ -2578,7 +2578,7 @@ mod tests {
     }
 
     #[test]
-    fn spec_view_template_contains_all_five_tabs() {
+    fn spec_view_template_contains_mission_control_layout() {
         let tmpl = SpecViewTemplate {
             spec_id: "01HTEST".to_string(),
             title: "Test Spec".to_string(),
@@ -2587,22 +2587,120 @@ mod tests {
             lanes: vec![],
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("Board"), "should contain Board tab");
-        assert!(rendered.contains("Document"), "should contain Document tab");
-        assert!(rendered.contains("Chat"), "should contain Chat tab");
-        assert!(rendered.contains("Diagram"), "should contain Diagram tab");
-        assert!(rendered.contains("Artifacts"), "should contain Artifacts tab");
-        assert!(rendered.contains("data-tab=\"chat\""), "Chat tab should have data-tab attribute");
-        assert!(rendered.contains("data-tab=\"board\""), "Board tab should have data-tab attribute");
-        assert!(rendered.contains("data-tab=\"document\""), "Document tab should have data-tab attribute");
-        assert!(rendered.contains("data-tab=\"diagram\""), "Diagram tab should have data-tab attribute");
-        assert!(rendered.contains("data-tab=\"artifacts\""), "Artifacts tab should have data-tab attribute");
-        // Chat should be the first/active tab
-        let chat_pos = rendered.find("data-tab=\"chat\"").unwrap();
-        let board_pos = rendered.find("data-tab=\"board\"").unwrap();
-        assert!(chat_pos < board_pos, "Chat tab should appear before Board tab");
-        // No "+ Card" button
-        assert!(!rendered.contains("+ Card"), "should not contain + Card button");
+        // Command bar with title
+        assert!(rendered.contains("command-bar"), "should contain command-bar");
+        assert!(rendered.contains("Test Spec"), "should contain spec title");
+        assert!(rendered.contains("A test spec"), "should contain one-liner");
+        // View toggles for document, board, diagram
+        assert!(rendered.contains("data-view=\"document\""), "should contain document toggle");
+        assert!(rendered.contains("data-view=\"board\""), "should contain board toggle");
+        assert!(rendered.contains("data-view=\"diagram\""), "should contain diagram toggle");
+        // Document toggle should be active by default
+        assert!(rendered.contains("view-toggle active"), "document toggle should be active");
+        // Canvas area
+        assert!(rendered.contains("id=\"canvas\""), "should contain canvas element");
+        // Mission strip
+        assert!(rendered.contains("mission-strip"), "should contain mission-strip");
+        assert!(rendered.contains("mission-ticker"), "should contain mission-ticker");
+        // Agent LEDs and controls in command bar
+        assert!(rendered.contains("agent-leds"), "should contain agent-leds");
+        assert!(rendered.contains("agent-controls"), "should contain agent-controls");
+        // Chat input in mission strip
+        assert!(rendered.contains("Direct the agents"), "should contain input placeholder");
+        // Old layout elements should NOT be present
+        assert!(!rendered.contains("tab-bar"), "should not contain old tab-bar");
+        assert!(!rendered.contains("data-tab="), "should not contain old data-tab attributes");
+        assert!(!rendered.contains("right-rail"), "should not contain right-rail references");
+        assert!(!rendered.contains("spec-content"), "should not contain old spec-content");
+    }
+
+    #[test]
+    fn mission_ticker_template_renders_empty() {
+        let tmpl = MissionTickerTemplate {
+            spec_id: "01HTEST".to_string(),
+            ticker_entries: vec![],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Awaiting activity"), "should show empty state");
+        assert!(rendered.contains("mission-ticker-feed"), "should contain ticker feed id");
+    }
+
+    #[test]
+    fn mission_ticker_template_renders_with_entries() {
+        let tmpl = MissionTickerTemplate {
+            spec_id: "01HTEST".to_string(),
+            ticker_entries: vec![TranscriptEntry {
+                sender: "manager-01JTEST".to_string(),
+                sender_label: "Manager".to_string(),
+                is_human: false,
+                is_step: false,
+                role_class: "manager".to_string(),
+                content: "Analyzing requirements".to_string(),
+                timestamp: "12:34:56".to_string(),
+            }],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Manager"), "should contain sender label");
+        assert!(rendered.contains("Analyzing requirements"), "should contain message content");
+        assert!(rendered.contains("ticker-entry"), "should contain ticker entry class");
+    }
+
+    #[test]
+    fn mission_ticker_template_renders_with_question() {
+        let tmpl = MissionTickerTemplate {
+            spec_id: "01HTEST".to_string(),
+            ticker_entries: vec![],
+            pending_question: Some(QuestionData::Boolean {
+                question_id: "01HQID".to_string(),
+                question: "Should we proceed?".to_string(),
+                default: None,
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Should we proceed?"), "should contain question text");
+        assert!(rendered.contains("Yes"), "should contain Yes button");
+        assert!(rendered.contains("No"), "should contain No button");
+    }
+
+    #[test]
+    fn agent_leds_template_renders_running() {
+        let tmpl = AgentLedsTemplate {
+            spec_id: "01HTEST".to_string(),
+            running: true,
+            started: true,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("led-active"), "should contain active LED class");
+        assert!(rendered.contains("led-manager"), "should contain manager LED");
+        assert!(rendered.contains("led-brainstormer"), "should contain brainstormer LED");
+        assert!(rendered.contains("led-planner"), "should contain planner LED");
+    }
+
+    #[test]
+    fn agent_leds_template_renders_paused() {
+        let tmpl = AgentLedsTemplate {
+            spec_id: "01HTEST".to_string(),
+            running: false,
+            started: true,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("led-paused"), "should contain paused LED class");
+        assert!(!rendered.contains("led-active"), "should not contain active LED class");
+    }
+
+    #[test]
+    fn agent_leds_template_renders_stopped() {
+        let tmpl = AgentLedsTemplate {
+            spec_id: "01HTEST".to_string(),
+            running: false,
+            started: false,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("led-off"), "should contain off LED class");
+        assert!(!rendered.contains("led-active"), "should not contain active LED class");
+        assert!(!rendered.contains("led-paused"), "should not contain paused LED class");
     }
 
     #[tokio::test]
