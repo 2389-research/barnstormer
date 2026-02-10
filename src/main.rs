@@ -66,7 +66,11 @@ async fn main() {
                 }
             }
 
-            let app = create_router(state);
+            let auth_token = std::env::var("SPECD_AUTH_TOKEN")
+                .ok()
+                .filter(|t| !t.is_empty());
+
+            let app = create_router(state, auth_token);
 
             let bind_addr: SocketAddr = std::env::var("SPECD_BIND")
                 .unwrap_or_else(|_| "127.0.0.1:7331".to_string())

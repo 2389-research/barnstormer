@@ -166,7 +166,7 @@ mod tests {
     #[tokio::test]
     async fn create_spec_returns_201() {
         let state = test_state();
-        let app = create_router(state);
+        let app = create_router(state, None);
 
         let body = serde_json::json!({
             "title": "Test Spec",
@@ -202,7 +202,7 @@ mod tests {
 
         // Create a spec first
         {
-            let app = create_router(Arc::clone(&state));
+            let app = create_router(Arc::clone(&state), None);
             let body = serde_json::json!({
                 "title": "Listed Spec",
                 "one_liner": "Should appear in list",
@@ -222,7 +222,7 @@ mod tests {
         }
 
         // Now list specs
-        let app = create_router(Arc::clone(&state));
+        let app = create_router(Arc::clone(&state), None);
         let resp = app
             .oneshot(Request::get("/api/specs").body(Body::empty()).unwrap())
             .await
@@ -246,7 +246,7 @@ mod tests {
         // Create a spec
         let spec_id: String;
         {
-            let app = create_router(Arc::clone(&state));
+            let app = create_router(Arc::clone(&state), None);
             let body = serde_json::json!({
                 "title": "State Spec",
                 "one_liner": "Check state",
@@ -272,7 +272,7 @@ mod tests {
         }
 
         // Get state
-        let app = create_router(Arc::clone(&state));
+        let app = create_router(Arc::clone(&state), None);
         let resp = app
             .oneshot(
                 Request::get(&format!("/api/specs/{}/state", spec_id))

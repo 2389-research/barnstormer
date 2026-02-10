@@ -35,7 +35,7 @@ async fn smoke_test_full_lifecycle() {
     // 3. Create router (don't bind to port -- use oneshot)
 
     // 4. POST /api/specs -> create spec
-    let app = create_router(Arc::clone(&state));
+    let app = create_router(Arc::clone(&state), None);
     let create_body = serde_json::json!({
         "title": "Smoke Test Spec",
         "one_liner": "Full lifecycle test",
@@ -58,7 +58,7 @@ async fn smoke_test_full_lifecycle() {
     assert!(!spec_id.is_empty(), "spec_id should be present");
 
     // 5. POST /api/specs/{id}/commands -> CreateCard
-    let app = create_router(Arc::clone(&state));
+    let app = create_router(Arc::clone(&state), None);
     let card_cmd = serde_json::json!({
         "type": "CreateCard",
         "card_type": "idea",
@@ -84,7 +84,7 @@ async fn smoke_test_full_lifecycle() {
     assert_eq!(events.len(), 1, "should produce one event");
 
     // 6. GET /api/specs/{id}/state -> verify card exists
-    let app = create_router(Arc::clone(&state));
+    let app = create_router(Arc::clone(&state), None);
     let resp = app
         .oneshot(
             Request::get(format!("/api/specs/{}/state", spec_id))
@@ -103,7 +103,7 @@ async fn smoke_test_full_lifecycle() {
     assert_eq!(card["created_by"], "smoke-test");
 
     // 7. POST /api/specs/{id}/undo -> undo card
-    let app = create_router(Arc::clone(&state));
+    let app = create_router(Arc::clone(&state), None);
     let resp = app
         .oneshot(
             Request::post(format!("/api/specs/{}/undo", spec_id))
@@ -116,7 +116,7 @@ async fn smoke_test_full_lifecycle() {
     assert_eq!(resp.status(), 200, "undo should return 200");
 
     // 8. GET /api/specs/{id}/state -> verify card gone
-    let app = create_router(Arc::clone(&state));
+    let app = create_router(Arc::clone(&state), None);
     let resp = app
         .oneshot(
             Request::get(format!("/api/specs/{}/state", spec_id))
@@ -164,7 +164,7 @@ async fn smoke_test_full_lifecycle() {
     );
 
     // 10. GET / -> verify HTML renders
-    let app = create_router(Arc::clone(&state));
+    let app = create_router(Arc::clone(&state), None);
     let resp = app
         .oneshot(Request::get("/").body(Body::empty()).unwrap())
         .await

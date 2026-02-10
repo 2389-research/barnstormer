@@ -252,6 +252,7 @@ impl SpecState {
                     };
                     self.apply_without_undo(&synthetic_event);
                 }
+                self.undo_stack.pop();
             }
 
             EventPayload::SnapshotWritten { .. } => {
@@ -594,6 +595,35 @@ mod tests {
             EventPayload::CardDeleted { card_id },
         ));
         assert_eq!(state.undo_stack.len(), 4);
+    }
+
+    #[test]
+    fn undo_applied_pops_undo_stack() {
+        let mut state = SpecState::new();
+        let spec_id = make_spec_id();
+
+        // Create a card (pushes 1 undo entry)
+        let card = Card::new("idea".to_string(), "Undo Test".to_string(), "human".to_string());
+        let card_id = card.card_id;
+        state.apply(&make_event(1, spec_id, EventPayload::CardCreated { card }));
+        assert_eq!(state.undo_stack.len(), 1, "undo_stack should have 1 entry after card creation");
+
+        // Apply UndoApplied (should apply inverse and pop the entry)
+        state.apply(&make_event(
+            2,
+            spec_id,
+            EventPayload::UndoApplied {
+                target_event_id: 1,
+                inverse_events: vec![EventPayload::CardDeleted { card_id }],
+            },
+        ));
+
+        assert_eq!(state.cards.len(), 0, "card should be removed after undo");
+        assert_eq!(
+            state.undo_stack.len(),
+            0,
+            "undo_stack should be empty after UndoApplied"
+        );
     }
 
     #[test]

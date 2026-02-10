@@ -1167,7 +1167,7 @@ mod tests {
     #[tokio::test]
     async fn get_index_returns_html() {
         let state = test_state();
-        let app = create_router(state);
+        let app = create_router(state, None);
 
         let resp = app
             .oneshot(Request::get("/").body(Body::empty()).unwrap())
@@ -1186,7 +1186,7 @@ mod tests {
     #[tokio::test]
     async fn get_web_specs_returns_html() {
         let state = test_state();
-        let app = create_router(state);
+        let app = create_router(state, None);
 
         let resp = app
             .oneshot(Request::get("/web/specs").body(Body::empty()).unwrap())
@@ -1204,7 +1204,7 @@ mod tests {
     #[tokio::test]
     async fn post_web_specs_creates_and_returns_list() {
         let state = test_state();
-        let app = create_router(Arc::clone(&state));
+        let app = create_router(Arc::clone(&state), None);
 
         let resp = app
             .oneshot(

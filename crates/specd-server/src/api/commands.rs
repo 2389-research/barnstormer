@@ -149,7 +149,7 @@ mod tests {
 
     /// Helper: create a spec and return (state, spec_id).
     async fn create_test_spec(state: &SharedState) -> String {
-        let app = create_router(Arc::clone(state));
+        let app = create_router(Arc::clone(state), None);
         let body = serde_json::json!({
             "title": "Command Spec",
             "one_liner": "For commands",
@@ -179,7 +179,7 @@ mod tests {
         let spec_id = create_test_spec(&state).await;
 
         // Submit a CreateCard command
-        let app = create_router(Arc::clone(&state));
+        let app = create_router(Arc::clone(&state), None);
         let cmd = serde_json::json!({
             "type": "CreateCard",
             "card_type": "idea",
@@ -209,7 +209,7 @@ mod tests {
         assert_eq!(json["events"].as_array().unwrap().len(), 1);
 
         // Verify card appears in state
-        let app = create_router(Arc::clone(&state));
+        let app = create_router(Arc::clone(&state), None);
         let resp = app
             .oneshot(
                 Request::get(&format!("/api/specs/{}/state", spec_id))
@@ -238,7 +238,7 @@ mod tests {
 
         // Create a card
         {
-            let app = create_router(Arc::clone(&state));
+            let app = create_router(Arc::clone(&state), None);
             let cmd = serde_json::json!({
                 "type": "CreateCard",
                 "card_type": "idea",
@@ -262,7 +262,7 @@ mod tests {
 
         // Verify card exists
         {
-            let app = create_router(Arc::clone(&state));
+            let app = create_router(Arc::clone(&state), None);
             let resp = app
                 .oneshot(
                     Request::get(&format!("/api/specs/{}/state", spec_id))
@@ -282,7 +282,7 @@ mod tests {
 
         // Undo
         {
-            let app = create_router(Arc::clone(&state));
+            let app = create_router(Arc::clone(&state), None);
             let resp = app
                 .oneshot(
                     Request::post(&format!("/api/specs/{}/undo", spec_id))
@@ -296,7 +296,7 @@ mod tests {
 
         // Verify card is gone
         {
-            let app = create_router(Arc::clone(&state));
+            let app = create_router(Arc::clone(&state), None);
             let resp = app
                 .oneshot(
                     Request::get(&format!("/api/specs/{}/state", spec_id))

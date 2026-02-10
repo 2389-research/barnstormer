@@ -80,6 +80,7 @@ impl SpecActorHandle {
 pub fn spawn(spec_id: Ulid, initial_state: SpecState) -> SpecActorHandle {
     let (cmd_tx, cmd_rx) = mpsc::channel::<CommandMessage>(64);
     let (event_tx, _) = broadcast::channel::<Event>(256);
+    let last_event_id = initial_state.last_event_id;
     let state = Arc::new(RwLock::new(initial_state));
 
     let handle = SpecActorHandle {
@@ -93,7 +94,7 @@ pub fn spawn(spec_id: Ulid, initial_state: SpecState) -> SpecActorHandle {
         state,
         cmd_rx,
         event_tx,
-        next_event_id: 1,
+        next_event_id: last_event_id + 1,
         spec_id,
     };
 
@@ -546,6 +547,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn actor_event_id_continues_from_recovered_state() {
+        let spec_id = Ulid::new();
+
+        // Simulate recovered state with last_event_id = 50
+        let mut recovered_state = SpecState::new();
+        recovered_state.last_event_id = 50;
+
+        let handle = spawn(spec_id, recovered_state);
+
+        let events = handle
+            .send_command(Command::CreateSpec {
+                title: "Recovered Spec".to_string(),
+                one_liner: "After crash".to_string(),
+                goal: "Verify event IDs continue".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].event_id, 51,
+            "event_id should continue from last_event_id (50) + 1"
+        );
+    }
+
+    #[tokio::test]
     async fn actor_undo_reverses_card_creation() {
         let spec_id = Ulid::new();
         let handle = spawn(spec_id, SpecState::new());
@@ -583,5 +610,46 @@ mod tests {
 
         let state = handle.read_state().await;
         assert_eq!(state.cards.len(), 0, "card should be removed after undo");
+    }
+
+    #[tokio::test]
+    async fn actor_double_undo_returns_nothing_to_undo() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+
+        // Create spec first
+        handle
+            .send_command(Command::CreateSpec {
+                title: "Spec".to_string(),
+                one_liner: "One".to_string(),
+                goal: "Goal".to_string(),
+            })
+            .await
+            .unwrap();
+
+        // Create a card (single undoable operation)
+        handle
+            .send_command(Command::CreateCard {
+                card_type: "idea".to_string(),
+                title: "Single Card".to_string(),
+                body: None,
+                lane: None,
+                created_by: "human".to_string(),
+            })
+            .await
+            .unwrap();
+
+        // First undo should succeed
+        handle.send_command(Command::Undo).await.unwrap();
+
+        // Second undo should fail with NothingToUndo
+        let result = handle.send_command(Command::Undo).await;
+        assert!(result.is_err(), "second undo should fail");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, ActorError::NothingToUndo),
+            "expected NothingToUndo, got: {}",
+            err
+        );
     }
 }
