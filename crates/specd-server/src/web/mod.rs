@@ -2444,6 +2444,81 @@ mod tests {
         assert!(rendered.contains("chat-panel"), "should contain chat-panel div");
     }
 
+    #[test]
+    fn chat_panel_renders_with_transcript_entries() {
+        let tmpl = ChatPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            transcript: vec![
+                TranscriptEntry {
+                    sender: "human".to_string(),
+                    sender_label: "You".to_string(),
+                    is_human: true,
+                    role_class: "human".to_string(),
+                    content: "Hello from human".to_string(),
+                    timestamp: "12:34:56".to_string(),
+                },
+                TranscriptEntry {
+                    sender: "manager-01HAGENT".to_string(),
+                    sender_label: "Manager".to_string(),
+                    is_human: false,
+                    role_class: "manager".to_string(),
+                    content: "Agent response here".to_string(),
+                    timestamp: "12:35:00".to_string(),
+                },
+            ],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Hello from human"), "should contain human message content");
+        assert!(rendered.contains("Agent response here"), "should contain agent message content");
+        assert!(rendered.contains("message-human"), "should have human message class");
+        assert!(rendered.contains("message-agent"), "should have agent message class");
+        assert!(rendered.contains("Manager"), "should show agent sender label");
+        assert!(!rendered.contains("No messages yet"), "should not show empty state when entries exist");
+    }
+
+    #[test]
+    fn chat_panel_renders_empty_transcript() {
+        let tmpl = ChatPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            transcript: vec![],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("No messages yet"), "should show empty state message");
+        assert!(rendered.contains("empty-chat"), "should have empty-chat class");
+        assert!(rendered.contains("Start a conversation with the agents below"), "should show hint text");
+    }
+
+    #[test]
+    fn chat_panel_contains_chat_input_form() {
+        let tmpl = ChatPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            transcript: vec![],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("chat-input-area"), "should contain chat-input-area div");
+        assert!(rendered.contains("chat-input-row"), "should contain chat-input-row div");
+        assert!(rendered.contains(r#"hx-post="/web/specs/01HTEST/chat""#), "should post to chat endpoint");
+        assert!(rendered.contains(r#"hx-target="#chat-transcript""#), "chat form should target chat-transcript");
+        assert!(rendered.contains("Send a message..."), "should have placeholder text");
+    }
+
+    #[test]
+    fn chat_panel_contains_sse_connection() {
+        let tmpl = ChatPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            transcript: vec![],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("sse-connect"), "should contain sse-connect attribute");
+        assert!(rendered.contains(r#"sse-connect="/api/specs/01HTEST/events/stream""#), "should connect to correct SSE endpoint");
+        assert!(rendered.contains(r#"hx-ext="sse""#), "should have hx-ext sse");
+        assert!(rendered.contains("sse:transcript_appended"), "should listen for transcript_appended event");
+    }
+
     #[tokio::test]
     async fn chat_panel_handler_returns_200() {
         let state = test_state();
@@ -2571,8 +2646,8 @@ mod tests {
         };
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("btn-copy"), "should contain copy buttons with btn-copy class");
-        // There should be 3 copy buttons (one per format)
-        let copy_count = rendered.matches("btn-copy").count();
+        // Count actual copy button elements (class attribute on button tags, not JS selectors)
+        let copy_count = rendered.matches("class=\"btn btn-sm btn-copy\"").count();
         assert_eq!(copy_count, 3, "should have exactly 3 copy buttons, found {}", copy_count);
     }
 
