@@ -1,18 +1,16 @@
+{# ABOUTME: Form for creating a new spec from a free-text description. #}
+{# ABOUTME: The manager agent will parse the description into structured fields. #}
+
 <div class="create-spec-form" style="padding: var(--spacing-lg); max-width: 500px; margin: 0 auto;">
-    <h2>Create a New Spec</h2>
-    <form hx-post="/web/specs" hx-target="#spec-list" hx-swap="innerHTML">
+    <h2>What do you want to build?</h2>
+    <p style="color: var(--text-secondary); margin-bottom: var(--spacing-md); font-size: 0.85rem;">
+        Describe your idea in your own words. Our agents will break it down into a structured spec.
+    </p>
+    <form hx-post="/web/specs" hx-target="#main-content" hx-swap="innerHTML" hx-push-url="true">
         <div class="form-group">
-            <label for="title">Title</label>
-            <input type="text" id="title" name="title" required placeholder="e.g. User Authentication System">
+            <textarea id="description" name="description" required rows="6"
+                placeholder="e.g. I want to build a mobile app that helps dog owners find nearby pet-friendly restaurants. It should have user reviews, real-time availability, and a map view..."></textarea>
         </div>
-        <div class="form-group">
-            <label for="one_liner">One-Liner</label>
-            <input type="text" id="one_liner" name="one_liner" required placeholder="A short summary of the spec">
-        </div>
-        <div class="form-group">
-            <label for="goal">Goal</label>
-            <textarea id="goal" name="goal" required placeholder="What should this spec achieve?"></textarea>
-        </div>
-        <button type="submit" class="btn btn-primary">Create Spec</button>
+        <button type="submit" class="btn btn-primary">Start Building</button>
     </form>
 </div>
