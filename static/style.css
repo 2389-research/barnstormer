@@ -584,6 +584,24 @@ html, body {
     border-top: 1px solid var(--border);
     display: flex;
     gap: var(--spacing-sm);
+    align-items: center;
+}
+
+/* --- Agent status --- */
+.agent-status {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.agent-status-active,
+.agent-status-paused,
+.agent-status-stopped {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
 }
 
 /* --- Welcome / empty state --- */

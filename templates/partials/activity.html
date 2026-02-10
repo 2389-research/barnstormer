@@ -80,6 +80,11 @@
 </div>
 
 <div class="agent-controls">
+    <div id="agent-status"
+         hx-get="/web/specs/{{ spec_id }}/agents/status"
+         hx-trigger="load"
+         hx-swap="outerHTML">
+    </div>
     <button class="btn btn-sm"
             hx-post="/web/specs/{{ spec_id }}/undo"
             hx-target="#spec-content"
