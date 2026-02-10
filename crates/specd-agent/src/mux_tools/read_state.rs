@@ -8,6 +8,7 @@ use mux::tool::{Tool, ToolResult};
 use serde_json::json;
 
 use specd_core::actor::SpecActorHandle;
+use specd_core::transcript::MessageKind;
 
 /// Truncate a string to at most `max_chars` characters, appending "..." if truncated.
 /// Safe for multibyte UTF-8 (never slices mid-character).
@@ -129,9 +130,14 @@ impl Tool for ReadStateTool {
         lines.push(String::new());
         lines.push(format!("## Transcript ({} messages)", transcript_len));
         for msg in &recent_transcript {
+            let prefix = match msg.kind {
+                MessageKind::StepStarted => "[step started] ",
+                MessageKind::StepFinished => "[step finished] ",
+                MessageKind::Chat => "",
+            };
             lines.push(format!(
-                "  [{}] {}: {}",
-                msg.timestamp, msg.sender, msg.content
+                "  [{}] {}: {}{}",
+                msg.timestamp, msg.sender, prefix, msg.content
             ));
         }
 

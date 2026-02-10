@@ -64,6 +64,7 @@ mod tests {
     use super::*;
     use specd_core::actor;
     use specd_core::state::SpecState;
+    use specd_core::transcript::MessageKind;
     use ulid::Ulid;
 
     fn make_test_actor() -> (Ulid, SpecActorHandle) {
@@ -120,7 +121,7 @@ mod tests {
         // Verify it shows up in transcript as a step-finished message
         let state = handle.read_state().await;
         assert_eq!(state.transcript.len(), 1);
-        assert!(state.transcript[0].content.contains("step finished"));
+        assert_eq!(state.transcript[0].kind, MessageKind::StepFinished);
         assert!(state.transcript[0]
             .content
             .contains("Added 3 cards and updated the goal."));

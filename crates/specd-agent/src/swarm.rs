@@ -19,6 +19,7 @@ use crate::mux_tools;
 use specd_core::actor::SpecActorHandle;
 use specd_core::command::Command;
 use specd_core::event::Event;
+use specd_core::transcript::MessageKind;
 
 /// System prompt for the Manager agent role.
 const MANAGER_SYSTEM_PROMPT: &str = "You are the manager agent for a product specification. \
@@ -604,7 +605,14 @@ fn build_task_prompt(ctx: &AgentContext) -> String {
         let transcript_lines: Vec<String> = ctx
             .recent_transcript
             .iter()
-            .map(|msg| format!("  [{}]: {}", msg.sender, msg.content))
+            .map(|msg| {
+                let prefix = match msg.kind {
+                    MessageKind::StepStarted => "[step started] ",
+                    MessageKind::StepFinished => "[step finished] ",
+                    MessageKind::Chat => "",
+                };
+                format!("  [{}]: {}{}", msg.sender, prefix, msg.content)
+            })
             .collect();
         parts.push(format!(
             "Recent transcript:\n{}",
