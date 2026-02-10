@@ -739,6 +739,16 @@ pub struct ActivityTemplate {
     pub pending_question: Option<QuestionData>,
 }
 
+/// Activity transcript partial template (transcript entries + question widget only).
+/// Used by the SSE refresh target so that chat input is not wiped on updates.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/activity_transcript.html")]
+pub struct ActivityTranscriptTemplate {
+    pub spec_id: String,
+    pub transcript: Vec<TranscriptEntry>,
+    pub pending_question: Option<QuestionData>,
+}
+
 /// GET /web/specs/{id}/activity - Render the activity panel.
 pub async fn activity(
     State(state): State<SharedState>,
@@ -807,6 +817,82 @@ pub async fn activity(
     });
 
     ActivityTemplate {
+        spec_id: id,
+        transcript,
+        pending_question,
+    }
+    .into_response()
+}
+
+/// GET /web/specs/{id}/activity/transcript - Render only the transcript + question widget.
+/// Used as the SSE refresh target so chat input is preserved during live updates.
+pub async fn activity_transcript(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    let spec_state = handle.read_state().await;
+
+    let transcript: Vec<TranscriptEntry> = spec_state
+        .transcript
+        .iter()
+        .map(|m| TranscriptEntry {
+            sender: m.sender.clone(),
+            content: m.content.clone(),
+            timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+        })
+        .collect();
+
+    let pending_question = spec_state.pending_question.as_ref().map(|q| match q {
+        specd_core::UserQuestion::Boolean {
+            question_id,
+            question,
+            default,
+        } => QuestionData::Boolean {
+            question_id: question_id.to_string(),
+            question: question.clone(),
+            default: *default,
+        },
+        specd_core::UserQuestion::MultipleChoice {
+            question_id,
+            question,
+            choices,
+            allow_multi,
+        } => QuestionData::MultipleChoice {
+            question_id: question_id.to_string(),
+            question: question.clone(),
+            choices: choices.clone(),
+            allow_multi: *allow_multi,
+        },
+        specd_core::UserQuestion::Freeform {
+            question_id,
+            question,
+            placeholder,
+            ..
+        } => QuestionData::Freeform {
+            question_id: question_id.to_string(),
+            question: question.clone(),
+            placeholder: placeholder.clone().unwrap_or_default(),
+        },
+    });
+
+    ActivityTranscriptTemplate {
         spec_id: id,
         transcript,
         pending_question,
@@ -1116,22 +1202,7 @@ pub async fn start_agents(
         Err(resp) => return *resp,
     };
 
-    // Check if swarm already exists
-    {
-        let swarms = state.swarms.read().await;
-        if let Some(swarm_handle) = swarms.get(&spec_id) {
-            let swarm = swarm_handle.swarm.lock().await;
-            return AgentStatusTemplate {
-                spec_id: id,
-                running: !swarm.is_paused(),
-                started: true,
-                agent_count: swarm.agents.len(),
-            }
-            .into_response();
-        }
-    }
-
-    // Get actor handle -- we need to subscribe before creating the swarm
+    // Get actor handle first (read lock), then drop before acquiring swarms write lock
     let actors = state.actors.read().await;
     let actor_handle = match actors.get(&spec_id) {
         Some(h) => h,
@@ -1150,7 +1221,22 @@ pub async fn start_agents(
     let swarm_actor_handle = actor_handle.clone();
     drop(actors);
 
-    // Create swarm
+    // Atomic check-and-insert: hold write lock to prevent TOCTOU race
+    // where two concurrent requests both pass the existence check and
+    // create duplicate swarms.
+    let mut swarms = state.swarms.write().await;
+    if let Some(swarm_handle) = swarms.get(&spec_id) {
+        let swarm = swarm_handle.swarm.lock().await;
+        return AgentStatusTemplate {
+            spec_id: id,
+            running: !swarm.is_paused(),
+            started: true,
+            agent_count: swarm.agents.len(),
+        }
+        .into_response();
+    }
+
+    // Create swarm (sync operation, safe to hold write lock)
     let swarm = match SwarmOrchestrator::with_defaults(spec_id, swarm_actor_handle) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {
@@ -1166,6 +1252,7 @@ pub async fn start_agents(
     };
 
     let agent_count = {
+        // This lock is uncontested since the swarm was just created
         let s = swarm.lock().await;
         s.agents.len()
     };
@@ -1173,11 +1260,12 @@ pub async fn start_agents(
     // Spawn agent loop task and store the handle for cancellation
     let task = spawn_agent_loop(Arc::clone(&swarm), event_rx);
 
-    // Store swarm with its task handle
-    state.swarms.write().await.insert(
+    // Insert into swarms map while still holding write lock
+    swarms.insert(
         spec_id,
         crate::app_state::SwarmHandle { swarm, task },
     );
+    drop(swarms);
 
     AgentStatusTemplate {
         spec_id: id,
@@ -1380,20 +1468,20 @@ pub(crate) async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_h
         return;
     }
 
-    // Check if swarm already exists
-    {
-        let swarms = state.swarms.read().await;
-        if swarms.contains_key(&spec_id) {
-            return;
-        }
-    }
-
     // Clone the existing actor handle so the swarm uses the same actor,
     // ensuring events flow through the server's main event bus.
     let event_rx = actor_handle.subscribe();
     let swarm_actor_handle = actor_handle.clone();
 
-    // Create swarm
+    // Atomic check-and-insert: hold write lock to prevent TOCTOU race
+    // where two concurrent requests both pass the existence check and
+    // create duplicate swarms.
+    let mut swarms = state.swarms.write().await;
+    if swarms.contains_key(&spec_id) {
+        return;
+    }
+
+    // Create swarm (sync operation, safe to hold write lock)
     let swarm = match SwarmOrchestrator::with_defaults(spec_id, swarm_actor_handle) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {
@@ -1403,6 +1491,7 @@ pub(crate) async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_h
     };
 
     let agent_count = {
+        // This lock is uncontested since the swarm was just created
         let s = swarm.lock().await;
         s.agents.len()
     };
@@ -1410,10 +1499,12 @@ pub(crate) async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_h
     // Spawn background agent loop and store the handle for cancellation
     let task = spawn_agent_loop(Arc::clone(&swarm), event_rx);
 
-    state.swarms.write().await.insert(
+    // Insert into swarms map while still holding write lock
+    swarms.insert(
         spec_id,
         crate::app_state::SwarmHandle { swarm, task },
     );
+    drop(swarms);
     tracing::info!("auto-started {} agents for spec {}", agent_count, spec_id);
 }
 
@@ -1735,6 +1826,35 @@ mod tests {
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("Test Spec"));
+    }
+
+    #[test]
+    fn activity_transcript_template_renders_empty() {
+        let tmpl = ActivityTranscriptTemplate {
+            spec_id: "01HTEST".to_string(),
+            transcript: vec![],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("activity-transcript"), "should contain activity-transcript id");
+        assert!(rendered.contains("activity-feed"), "should contain activity-feed div");
+    }
+
+    #[test]
+    fn activity_transcript_template_renders_with_entries() {
+        let tmpl = ActivityTranscriptTemplate {
+            spec_id: "01HTEST".to_string(),
+            transcript: vec![TranscriptEntry {
+                sender: "agent-1".to_string(),
+                content: "Started analysis".to_string(),
+                timestamp: "12:34:56".to_string(),
+            }],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("agent-1"));
+        assert!(rendered.contains("Started analysis"));
+        assert!(!rendered.contains("chat-input"), "transcript template should not contain chat input");
     }
 
     #[test]

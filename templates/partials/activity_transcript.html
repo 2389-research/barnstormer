@@ -1,0 +1,74 @@
+{# ABOUTME: Partial template for the activity transcript and pending question widget. #}
+{# ABOUTME: Rendered inside the SSE refresh target to avoid wiping chat input on updates. #}
+
+<div id="activity-transcript"
+     hx-trigger="sse:transcript_appended, sse:question_asked, sse:question_answered"
+     hx-get="/web/specs/{{ spec_id }}/activity/transcript"
+     hx-target="#activity-transcript"
+     hx-swap="outerHTML">
+    <div class="activity-feed" id="activity-feed">
+        {% for entry in transcript %}
+        <div class="activity-entry">
+            <span class="sender">{{ entry.sender }}</span>
+            <span class="timestamp">{{ entry.timestamp }}</span>
+            <div class="content">{{ entry.content }}</div>
+        </div>
+        {% endfor %}
+        {% if transcript.is_empty() %}
+        <p class="empty-state">No activity yet.</p>
+        {% endif %}
+    </div>
+
+    {% match pending_question %}
+    {% when Some with (q) %}
+    <div class="question-widget" id="question-widget">
+        {% match q %}
+        {% when QuestionData::Boolean { question_id, question, default } %}
+        <p class="question-text">{{ question }}</p>
+        <form hx-post="/web/specs/{{ spec_id }}/answer"
+              hx-target="#activity-container"
+              hx-swap="innerHTML">
+            <input type="hidden" name="question_id" value="{{ question_id }}">
+            <div class="bool-buttons">
+                <button type="submit" name="answer" value="Yes" class="btn btn-success btn-sm">Yes</button>
+                <button type="submit" name="answer" value="No" class="btn btn-danger btn-sm">No</button>
+            </div>
+        </form>
+
+        {% when QuestionData::MultipleChoice { question_id, question, choices, allow_multi } %}
+        <p class="question-text">{{ question }}</p>
+        <form hx-post="/web/specs/{{ spec_id }}/answer"
+              hx-target="#activity-container"
+              hx-swap="innerHTML">
+            <input type="hidden" name="question_id" value="{{ question_id }}">
+            <div class="question-choices">
+                {% for choice in choices %}
+                <label>
+                    {% if allow_multi %}
+                    <input type="checkbox" name="answer" value="{{ choice }}">
+                    {% else %}
+                    <input type="radio" name="answer" value="{{ choice }}">
+                    {% endif %}
+                    {{ choice }}
+                </label>
+                {% endfor %}
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm" style="margin-top: var(--spacing-sm);">Submit</button>
+        </form>
+
+        {% when QuestionData::Freeform { question_id, question, placeholder } %}
+        <p class="question-text">{{ question }}</p>
+        <form hx-post="/web/specs/{{ spec_id }}/answer"
+              hx-target="#activity-container"
+              hx-swap="innerHTML">
+            <input type="hidden" name="question_id" value="{{ question_id }}">
+            <div class="form-group">
+                <textarea name="answer" placeholder="{{ placeholder }}" rows="3"></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm">Submit</button>
+        </form>
+        {% endmatch %}
+    </div>
+    {% when None %}
+    {% endmatch %}
+</div>

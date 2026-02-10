@@ -33,7 +33,9 @@ impl ProviderStatus {
     /// Never exposes actual API key values.
     pub fn detect() -> Self {
         let default_provider = std::env::var("SPECD_DEFAULT_PROVIDER")
-            .unwrap_or_else(|_| "anthropic".to_string());
+            .ok()
+            .filter(|p| !p.is_empty())
+            .unwrap_or_else(|| "anthropic".to_string());
         let default_model = std::env::var("SPECD_DEFAULT_MODEL")
             .ok()
             .filter(|m| !m.is_empty());
@@ -269,6 +271,29 @@ mod tests {
         // SAFETY: holding ENV_MUTEX, no concurrent env var access
         unsafe {
             std::env::remove_var("SPECD_DEFAULT_MODEL");
+        }
+    }
+
+    #[test]
+    fn detect_ignores_empty_default_provider() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+
+        // SAFETY: holding ENV_MUTEX, no concurrent env var access
+        unsafe {
+            clear_provider_env();
+            std::env::set_var("SPECD_DEFAULT_PROVIDER", "");
+        }
+
+        let status = ProviderStatus::detect();
+        assert_eq!(
+            status.default_provider, "anthropic",
+            "empty SPECD_DEFAULT_PROVIDER should fall back to anthropic"
+        );
+
+        // Clean up
+        // SAFETY: holding ENV_MUTEX, no concurrent env var access
+        unsafe {
+            std::env::remove_var("SPECD_DEFAULT_PROVIDER");
         }
     }
 }

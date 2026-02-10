@@ -31,6 +31,13 @@ function initBoard() {
     }
 
     document.querySelectorAll('.lane-cards').forEach(function (lane) {
+        // Destroy any existing Sortable instance to prevent duplicates
+        // after HTMX swaps where old instances may linger on elements.
+        var existing = Sortable.get(lane);
+        if (existing) {
+            existing.destroy();
+        }
+
         new Sortable(lane, {
             group: 'cards',
             animation: 150,

@@ -108,6 +108,16 @@ impl JsonlLog {
         // Atomic rename over the original
         fs::rename(&tmp_path, path)?;
 
+        // Fsync the parent directory to ensure the rename metadata is durable.
+        // Without this, a crash after rename could leave the directory entry
+        // pointing at the old file. Best-effort: if the fsync fails, the
+        // rename already succeeded and the data is consistent.
+        if let Some(parent) = path.parent()
+            && let Ok(dir) = File::open(parent)
+        {
+            let _ = dir.sync_all();
+        }
+
         Ok(count)
     }
 }
