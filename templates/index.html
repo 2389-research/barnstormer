@@ -9,6 +9,8 @@
 <div id="spec-list" hx-get="/web/specs" hx-trigger="load" hx-swap="innerHTML">
     <p class="loading">Loading specs...</p>
 </div>
+<div id="provider-status" hx-get="/web/provider-status" hx-trigger="load" hx-swap="innerHTML">
+</div>
 <div class="rail-footer">
     <button class="btn btn-primary" hx-get="/web/specs/new" hx-target="#main-content" hx-swap="innerHTML">
         + New Spec
