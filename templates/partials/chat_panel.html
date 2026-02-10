@@ -1,12 +1,12 @@
 {# ABOUTME: Full-width chat panel rendered as a main content tab. #}
-{# ABOUTME: Contains transcript with SSE updates, chat input, and question widget. #}
+{# ABOUTME: Distinct layout from the right-rail activity feed — larger bubbles, centered, chat-app feel. #}
 
 <div class="chat-panel" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
-    {% include "partials/activity_transcript.html" %}
+    {% include "partials/chat_transcript.html" %}
 
     <div class="chat-input-area">
         <form hx-post="/web/specs/{{ spec_id }}/chat"
-              hx-target="#chat-transcript"
+              hx-target="#{{ container_id }}"
               hx-swap="outerHTML">
             <div class="chat-input-row">
                 <input type="text" name="message" placeholder="Send a message..." autocomplete="off" required>

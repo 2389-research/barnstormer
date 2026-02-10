@@ -953,13 +953,34 @@ pub async fn activity_transcript(
         query.container_id.as_deref().unwrap_or("activity-transcript"),
     );
 
-    ActivityTranscriptTemplate {
-        spec_id: id,
-        container_id,
-        transcript,
-        pending_question,
+    if container_id == "chat-transcript" {
+        ChatTranscriptTemplate {
+            spec_id: id,
+            container_id,
+            transcript,
+            pending_question,
+        }
+        .into_response()
+    } else {
+        ActivityTranscriptTemplate {
+            spec_id: id,
+            container_id,
+            transcript,
+            pending_question,
+        }
+        .into_response()
     }
-    .into_response()
+}
+
+/// Chat-style transcript for SSE refresh in the Chat tab.
+/// Uses distinct markup from ActivityTranscriptTemplate — avatars, larger bubbles.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/chat_transcript.html")]
+pub struct ChatTranscriptTemplate {
+    pub spec_id: String,
+    pub container_id: String,
+    pub transcript: Vec<TranscriptEntry>,
+    pub pending_question: Option<QuestionData>,
 }
 
 /// Chat panel template for the full-width Chat tab.
@@ -1279,13 +1300,23 @@ pub async fn answer_question(
         })
         .collect();
 
-    ActivityTranscriptTemplate {
-        spec_id: id,
-        container_id,
-        transcript,
-        pending_question: None,
+    if container_id == "chat-transcript" {
+        ChatTranscriptTemplate {
+            spec_id: id,
+            container_id,
+            transcript,
+            pending_question: None,
+        }
+        .into_response()
+    } else {
+        ActivityTranscriptTemplate {
+            spec_id: id,
+            container_id,
+            transcript,
+            pending_question: None,
+        }
+        .into_response()
     }
-    .into_response()
 }
 
 /// Maximum allowed length for a chat message (in characters).
@@ -1386,13 +1417,23 @@ pub async fn chat(
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
-    ActivityTranscriptTemplate {
-        spec_id: id,
-        container_id,
-        transcript,
-        pending_question,
+    if container_id == "chat-transcript" {
+        ChatTranscriptTemplate {
+            spec_id: id,
+            container_id,
+            transcript,
+            pending_question,
+        }
+        .into_response()
+    } else {
+        ActivityTranscriptTemplate {
+            spec_id: id,
+            container_id,
+            transcript,
+            pending_question,
+        }
+        .into_response()
     }
-    .into_response()
 }
 
 /// POST /web/specs/{id}/undo - Undo last operation, return refreshed board.
@@ -2634,10 +2675,10 @@ mod tests {
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("Hello from human"), "should contain human message content");
         assert!(rendered.contains("Agent response here"), "should contain agent message content");
-        assert!(rendered.contains("message-human"), "should have human message class");
-        assert!(rendered.contains("message-agent"), "should have agent message class");
+        assert!(rendered.contains("chat-row-human"), "should have human chat row class");
+        assert!(rendered.contains("chat-row-agent"), "should have agent chat row class");
         assert!(rendered.contains("Manager"), "should show agent sender label");
-        assert!(!rendered.contains("No activity yet"), "should not show empty state when entries exist");
+        assert!(!rendered.contains("No messages yet"), "should not show empty state when entries exist");
     }
 
     #[test]
@@ -2649,9 +2690,9 @@ mod tests {
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("No activity yet"), "should show empty state message");
-        assert!(rendered.contains("empty-chat"), "should have empty-chat class");
-        assert!(rendered.contains("Start a conversation or launch agents to begin"), "should show hint text");
+        assert!(rendered.contains("No messages yet"), "should show empty state message");
+        assert!(rendered.contains("chat-empty"), "should have chat-empty class");
+        assert!(rendered.contains("Type below to start a conversation"), "should show hint text");
     }
 
     #[test]
