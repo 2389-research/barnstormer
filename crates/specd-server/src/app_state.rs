@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use specd_agent::SwarmOrchestrator;
 use specd_core::SpecActorHandle;
 use tokio::sync::RwLock;
 use ulid::Ulid;
@@ -13,6 +14,7 @@ use ulid::Ulid;
 /// Stores a map of spec actors keyed by their ULID and the SPECD_HOME directory.
 pub struct AppState {
     pub actors: Arc<RwLock<HashMap<Ulid, SpecActorHandle>>>,
+    pub swarms: Arc<RwLock<HashMap<Ulid, Arc<SwarmOrchestrator>>>>,
     pub specd_home: PathBuf,
 }
 
@@ -24,6 +26,7 @@ impl AppState {
     pub fn new(specd_home: PathBuf) -> Self {
         Self {
             actors: Arc::new(RwLock::new(HashMap::new())),
+            swarms: Arc::new(RwLock::new(HashMap::new())),
             specd_home,
         }
     }
