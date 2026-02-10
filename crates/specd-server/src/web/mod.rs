@@ -1170,6 +1170,7 @@ pub struct AnswerForm {
 pub async fn answer_question(
     State(state): State<SharedState>,
     Path(id): Path<String>,
+    headers: axum::http::HeaderMap,
     Form(form): Form<AnswerForm>,
 ) -> impl IntoResponse {
     let spec_id = match parse_spec_id(&id) {
@@ -1221,7 +1222,15 @@ pub async fn answer_question(
 
     // Events are persisted by the background broadcast subscriber.
 
-    // Return refreshed activity panel
+    // Determine container_id from HX-Target header so the response replaces
+    // the correct transcript container (activity panel vs chat tab).
+    let container_id = headers
+        .get("HX-Target")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim_start_matches('#').to_string())
+        .unwrap_or_else(|| "activity-transcript".to_string());
+
+    // Return refreshed transcript partial
     let spec_state = handle.read_state().await;
     let transcript: Vec<TranscriptEntry> = spec_state
         .transcript
@@ -1239,9 +1248,9 @@ pub async fn answer_question(
         })
         .collect();
 
-    ActivityTemplate {
+    ActivityTranscriptTemplate {
         spec_id: id,
-        container_id: "activity-transcript".to_string(),
+        container_id,
         transcript,
         pending_question: None,
     }

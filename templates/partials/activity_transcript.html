@@ -37,8 +37,8 @@
         <div class="question-header">Agent is asking:</div>
         <p class="question-text">{{ question }}</p>
         <form hx-post="/web/specs/{{ spec_id }}/answer"
-              hx-target="#activity-container"
-              hx-swap="innerHTML">
+              hx-target="#{{ container_id }}"
+              hx-swap="outerHTML">
             <input type="hidden" name="question_id" value="{{ question_id }}">
             <div class="bool-buttons">
                 <button type="submit" name="answer" value="Yes" class="btn btn-answer btn-yes">Yes</button>
@@ -50,8 +50,8 @@
         <div class="question-header">Agent is asking:</div>
         <p class="question-text">{{ question }}</p>
         <form hx-post="/web/specs/{{ spec_id }}/answer"
-              hx-target="#activity-container"
-              hx-swap="innerHTML">
+              hx-target="#{{ container_id }}"
+              hx-swap="outerHTML">
             <input type="hidden" name="question_id" value="{{ question_id }}">
             <div class="question-choices">
                 {% for choice in choices %}
@@ -72,8 +72,8 @@
         <div class="question-header">Agent is asking:</div>
         <p class="question-text">{{ question }}</p>
         <form hx-post="/web/specs/{{ spec_id }}/answer"
-              hx-target="#activity-container"
-              hx-swap="innerHTML">
+              hx-target="#{{ container_id }}"
+              hx-swap="outerHTML">
             <input type="hidden" name="question_id" value="{{ question_id }}">
             <div class="form-group">
                 <textarea name="answer" placeholder="{{ placeholder }}" rows="3"></textarea>
