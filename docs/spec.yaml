@@ -1,0 +1,99 @@
+name: specd
+version: 0.1
+date: 2026-02-10
+status: draft
+
+one_liner: >
+  Local-first agentic spec workstation (web UI) that builds living specs as cards + doc view
+  and continuously emits Markdown/YAML/DOT artifacts.
+
+goals:
+  - agent_led_spec_creation
+  - living_specs_event_sourced
+  - realtime_visual_board_and_doc
+  - multiple_isolated_specs_threads
+  - portable_exports_markdown_yaml_dot
+  - pluggable_llm_providers_openai_anthropic_gemini
+  - crash_safe_recovery_jsonl_plus_sqlite_cache
+non_goals:
+  - multi_user_realtime_collaboration
+  - accounts_or_login_or_hosted_saas
+  - advanced_agile_metadata_tags_filters
+  - git_style_branching_history
+  - deterministic_agent_replay_harness
+
+ui:
+  client: web_only
+  primary_view: board_cards
+  secondary_view: document
+  panels:
+    - spec_switcher
+    - agent_activity
+    - pending_question
+  default_lanes: ["Ideas", "Plan", "Done"]
+
+interaction_contract:
+  user_question_tools:
+    - ask_user_boolean
+    - ask_user_multiple_choice
+    - ask_user_freeform
+  narration_visible: true
+  one_pending_question_per_spec: true
+
+persistence:
+  source_of_truth: jsonl_event_log
+  derived_cache: sqlite
+  exports:
+    - markdown
+    - yaml
+    - dot_primary
+  undo: linear
+  snapshots:
+    include:
+      - materialized_state
+      - undo_stack
+      - agent_context
+
+architecture:
+  language: rust
+  process_model: single_local_daemon
+  concurrency_model: per_spec_actor_queue
+  streaming: sse_or_websocket
+
+agents:
+  per_spec_isolation: true
+  parallel: true
+  manager_can_override: true
+  background_operation: true
+  default_swarm:
+    - manager
+    - brainstormer
+    - planner
+    - dot_generator
+    - critic_optional
+
+cli:
+  commands:
+    - specd start
+    - specd status
+    - specd export_optional
+
+config:
+  file: .env
+  providers:
+    - openai
+    - anthropic
+    - gemini
+  base_url_override: true
+  remote_bind_requires_auth_token: true
+
+api:
+  endpoints:
+    - GET /api/specs
+    - POST /api/specs
+    - GET /api/specs/{id}/state
+    - POST /api/specs/{id}/commands
+    - GET /api/specs/{id}/events/stream
+    - POST /api/specs/{id}/agents/pause
+    - POST /api/specs/{id}/agents/resume
+    - POST /api/specs/{id}/undo

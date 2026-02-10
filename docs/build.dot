@@ -1,0 +1,62 @@
+digraph specd_build {
+    graph [
+        goal="Build specd: local-first agentic spec builder (web-only)",
+        retry_target="implement",
+        default_max_retry=2,
+        rankdir=LR
+    ]
+
+    start [shape=Mdiamond, label="Start"]
+    done  [shape=Msquare, label="Done"]
+
+    plan [
+        shape=box,
+        prompt="Write/validate the design spec for specd. Produce SPEC.md and confirm core requirements. Run commands in the run working directory from context key run.working_dir."
+    ]
+
+    setup [
+        shape=box,
+        prompt="Scaffold Rust workspace (crates, deps) and minimal web UI skeleton. Run commands in the run working directory from context key run.working_dir."
+    ]
+
+    implement [
+        shape=box,
+        goal_gate=true,
+        max_retries=3,
+        prompt="Implement specd per SPEC.md: event store JSONL+snapshots, spec actor, HTTP API + streaming, web UI board/doc/activity, exporters (md/yaml/dot), agent adapters (OpenAI/Anthropic/Gemini). Run commands in the run working directory from context key run.working_dir."
+    ]
+
+    verify [
+        shape=box,
+        prompt="Run verification: cargo fmt/check, cargo clippy, cargo test, and a minimal end-to-end smoke test (start daemon, create spec, receive SSE, exports generated). Run commands in the run working directory from context key run.working_dir."
+    ]
+
+    verify_ok [shape=diamond, label="Verification passed?"]
+
+    review_gate [
+        shape=hexagon,
+        type="wait.human",
+        prompt="Human review: approve release? (check UI basics, exporters, crash recovery, provider config)"
+    ]
+
+    polish [
+        shape=box,
+        prompt="Apply fixes from review. Run commands in the run working directory from context key run.working_dir."
+    ]
+
+    release [
+        shape=box,
+        prompt="Prepare final artifacts: binaries, example config, sample spec, and docs. Run commands in the run working directory from context key run.working_dir."
+    ]
+
+    start -> plan -> setup -> implement -> verify -> verify_ok
+
+    verify_ok -> review_gate [label="Pass", condition="outcome=SUCCESS"]
+    verify_ok -> implement   [label="Fail", condition="outcome=FAIL"]
+
+    review_gate -> release [label="[A] Approve", weight=2]
+    review_gate -> polish  [label="[F] Fix"]
+
+    polish -> implement
+    release -> done
+}

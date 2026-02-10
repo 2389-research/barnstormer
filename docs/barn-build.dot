@@ -1,0 +1,41 @@
+digraph specd_agentic_spec_builder {
+graph [
+goal="Build a local-first Rust daemon + realtime web UI for agentic innovation QA that produces living specs and incremental DOT artifacts",
+retry_target="implement",
+default_max_retry=2,
+rankdir=LR
+]
+
+
+start [shape=Mdiamond, label="Start"]
+done  [shape=Msquare, label="Done"]
+
+plan [shape=box, prompt="Plan the architecture for: $goal. Define: event-sourced spec model (JSONL), derived SQLite index/cache, command API for all mutations, streaming updates (WebSocket/SSE), multi-spec isolation, question-queue rules, agent swarm orchestration (parallel sub-agents + manager override with rationale), adapters (OpenAI/Anthropic/Gemini via .env + base_url overrides), incremental DOT artifact generation per event, crash recovery + agent context snapshots with size caps, and the web UI views (cards board + doc view + agent activity panel + pause/resume). Produce a concrete implementation plan + verification checklist. Run commands in the run working directory from context key run.working_dir."]
+
+setup [shape=box, prompt="Set up the Rust project in run.working_dir. Create a workspace with a daemon crate (specd) and shared types crate (specd_core or specd_api). Add dependencies for HTTP server + WebSocket/SSE, JSONL IO, SQLite, and dotenv config. Scaffold the web UI build/serve approach (embedded assets or separate frontend) and ensure the daemon can serve the web client. Run commands in the run working directory from context key run.working_dir."]
+
+implement [shape=box, prompt="Implement the product in run.working_dir. Requirements: (1) Single local daemon process that can host multiple isolated specs concurrently. (2) Append-only JSONL event log as source of truth + SQLite derived index/cache; deterministic state replay; undo via linear stack. (3) Streaming realtime updates to web clients; clients are thin (backend is the only authority for mutations). (4) Agent interaction contract enforced: ask_user_boolean / ask_user_multiple_choice / ask_user_freeform plus visible narration channel and per-step diff summaries. (5) Agent swarm: parallel sub-agents + manager reconciliation; manager can override conflicts with rationale; agents can query other agents; agents can read changelog/events to react/fix. (6) One pending user question per spec; background agent work allowed but question queue enforced. (7) Primary artifact: incremental DOT export regenerated on each event; plus deterministic Markdown and YAML exports. (8) Pause/resume agents per spec. (9) Crash-safe recovery: replay JSONL into state, verify/rebuild SQLite index, persist periodic agent context snapshots with capped size for fast resume. Run commands in the run working directory from context key run.working_dir.", goal_gate=true, max_retries=4, allow_partial=true]
+
+verify [shape=box, prompt="Verify the build in run.working_dir and report pass/fail. Run commands in the run working directory from context key run.working_dir. Checklist: cargo fmt --check; cargo clippy with warnings denied; cargo test; daemon boots; web UI loads and streams live updates; creating/editing a spec emits JSONL events and updates UI in realtime; state replay reproduces spec; SQLite index can be rebuilt from JSONL; DOT artifact updates incrementally on each event; Markdown/YAML exports render deterministically; adapters load config from .env and support base_url overrides; pause/resume agents works; question queue enforces one pending prompt per spec."]
+
+verify_ok [shape=diamond, label="Verification passed?"]
+
+review [shape=box, prompt="Prepare a review bundle: summarize behavior, key commands, default project layout, and demonstrate a sample spec flow (question tools + narration + diff summaries) ending in a stable DOT artifact. Run commands in the run working directory from context key run.working_dir."]
+
+review_gate [shape=hexagon, type="wait.human", prompt="Human review: Approve release? If rejecting, provide specific fix notes and acceptance expectations."]
+
+polish [shape=box, prompt="Apply fixes from verification/review in run.working_dir. Ensure exports are deterministic and the DOT artifact remains incremental and parser-safe. Run commands in the run working directory from context key run.working_dir."]
+
+release [shape=box, prompt="Prepare final artifacts from run.working_dir: runnable daemon, served web client, sample specs/events, deterministic Markdown/YAML exporters, continuously updated DOT artifact, and concise README for local and headless (Docker-ready) operation. Run commands in the run working directory from context key run.working_dir."]
+
+start -> plan -> setup -> implement -> verify -> verify_ok
+verify_ok -> implement [label="Fail", condition="outcome=FAIL"]
+verify_ok -> review [label="Pass", condition="outcome=SUCCESS"]
+review -> review_gate
+review_gate -> release [label="[A] Approve", weight=3]
+review_gate -> polish  [label="[F] Fix", weight=1]
+polish -> implement
+release -> done
+
+
+}
