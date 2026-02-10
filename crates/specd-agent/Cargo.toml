@@ -3,6 +3,9 @@ name = "specd-agent"
 edition.workspace = true
 version.workspace = true
 
+[features]
+live-test = []
+
 [dependencies]
 specd-core.workspace = true
 serde.workspace = true
@@ -13,3 +16,4 @@ tracing.workspace = true
 thiserror.workspace = true
 ulid.workspace = true
 chrono.workspace = true
+reqwest.workspace = true

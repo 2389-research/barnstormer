@@ -2,6 +2,7 @@
 // ABOUTME: Defines agent traits and step execution for spec exploration workflows.
 
 pub mod context;
+pub mod providers;
 pub mod runtime;
 pub mod tools;
 
