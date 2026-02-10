@@ -98,11 +98,7 @@ impl StorageManager {
         for (spec_id, spec_dir) in &spec_dirs {
             match recover_spec(spec_dir) {
                 Ok((state, last_event_id)) => {
-                    tracing::info!(
-                        "recovered spec {} at event {}",
-                        spec_id,
-                        last_event_id
-                    );
+                    tracing::info!("recovered spec {} at event {}", spec_id, last_event_id);
                     recovered.push((*spec_id, state));
                 }
                 Err(e) => {
@@ -167,11 +163,7 @@ mod tests {
             pending_question: None,
             undo_stack: Vec::new(),
             last_event_id: 0,
-            lanes: vec![
-                "Ideas".to_string(),
-                "Plan".to_string(),
-                "Done".to_string(),
-            ],
+            lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Done".to_string()],
         }
     }
 
@@ -210,7 +202,11 @@ mod tests {
         fs::create_dir_all(&spec_dir).unwrap();
 
         let mut state = make_state_with_core();
-        let card = Card::new("idea".to_string(), "Export Card".to_string(), "human".to_string());
+        let card = Card::new(
+            "idea".to_string(),
+            "Export Card".to_string(),
+            "human".to_string(),
+        );
         state.cards.insert(card.card_id, card);
 
         StorageManager::write_exports(&spec_dir, &state).unwrap();

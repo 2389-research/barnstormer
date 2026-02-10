@@ -1,7 +1,7 @@
 // ABOUTME: Tool definitions for LLM function calling, expressed as serde_json::Value structs.
 // ABOUTME: Each tool maps to an AgentAction and can be sent to any LLM API that supports tools.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Return the complete set of tool definitions that agents can use.
 /// These are provider-agnostic JSON schemas; each provider adapter
@@ -196,9 +196,7 @@ mod tests {
 
             // Each tool must have a description
             assert!(
-                tool.get("description")
-                    .and_then(|v| v.as_str())
-                    .is_some(),
+                tool.get("description").and_then(|v| v.as_str()).is_some(),
                 "tool {} missing description",
                 i
             );
@@ -232,8 +230,7 @@ mod tests {
         assert!(!json_str.is_empty());
 
         // Verify it can be parsed back
-        let parsed: Vec<Value> =
-            serde_json::from_str(&json_str).expect("should parse back");
+        let parsed: Vec<Value> = serde_json::from_str(&json_str).expect("should parse back");
         assert_eq!(parsed.len(), tools.len());
     }
 }

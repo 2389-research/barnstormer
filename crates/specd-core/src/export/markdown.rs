@@ -183,22 +183,12 @@ mod tests {
             pending_question: None,
             undo_stack: Vec::new(),
             last_event_id: 0,
-            lanes: vec![
-                "Ideas".to_string(),
-                "Plan".to_string(),
-                "Done".to_string(),
-            ],
+            lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Done".to_string()],
         }
     }
 
     /// Create a Card with specific fields for testing.
-    fn make_card(
-        card_type: &str,
-        title: &str,
-        lane: &str,
-        order: f64,
-        created_by: &str,
-    ) -> Card {
+    fn make_card(card_type: &str, title: &str, lane: &str, order: f64, created_by: &str) -> Card {
         let now = Utc::now();
         Card {
             card_id: Ulid::new(),

@@ -15,10 +15,19 @@ pub fn create_router(state: SharedState) -> Router {
         // Health check
         .route("/health", get(health))
         // API routes (JSON)
-        .route("/api/specs", get(api::specs::list_specs).post(api::specs::create_spec))
+        .route(
+            "/api/specs",
+            get(api::specs::list_specs).post(api::specs::create_spec),
+        )
         .route("/api/specs/{id}/state", get(api::specs::get_spec_state))
-        .route("/api/specs/{id}/commands", post(api::commands::submit_command))
-        .route("/api/specs/{id}/events/stream", get(api::stream::event_stream))
+        .route(
+            "/api/specs/{id}/commands",
+            post(api::commands::submit_command),
+        )
+        .route(
+            "/api/specs/{id}/events/stream",
+            get(api::stream::event_stream),
+        )
         .route("/api/specs/{id}/undo", post(api::commands::undo))
         // Web UI routes (HTML)
         .route("/", get(web::index))

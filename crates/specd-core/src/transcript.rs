@@ -64,7 +64,9 @@ mod tests {
         let json = serde_json::to_string(&bool_q).expect("serialize boolean");
         let deser: UserQuestion = serde_json::from_str(&json).expect("deserialize boolean");
         match deser {
-            UserQuestion::Boolean { question, default, .. } => {
+            UserQuestion::Boolean {
+                question, default, ..
+            } => {
                 assert_eq!(question, "Ready to proceed?");
                 assert_eq!(default, Some(true));
             }
@@ -80,7 +82,11 @@ mod tests {
         let json = serde_json::to_string(&mc_q).expect("serialize mc");
         let deser: UserQuestion = serde_json::from_str(&json).expect("deserialize mc");
         match deser {
-            UserQuestion::MultipleChoice { choices, allow_multi, .. } => {
+            UserQuestion::MultipleChoice {
+                choices,
+                allow_multi,
+                ..
+            } => {
                 assert_eq!(choices.len(), 3);
                 assert!(allow_multi);
             }
@@ -96,7 +102,12 @@ mod tests {
         let json = serde_json::to_string(&free_q).expect("serialize freeform");
         let deser: UserQuestion = serde_json::from_str(&json).expect("deserialize freeform");
         match deser {
-            UserQuestion::Freeform { question, placeholder, validation_hint, .. } => {
+            UserQuestion::Freeform {
+                question,
+                placeholder,
+                validation_hint,
+                ..
+            } => {
                 assert_eq!(question, "Describe the feature");
                 assert_eq!(placeholder, Some("Type here...".to_string()));
                 assert!(validation_hint.is_none());

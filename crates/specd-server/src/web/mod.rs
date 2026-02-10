@@ -308,10 +308,7 @@ pub struct BoardTemplate {
 }
 
 /// GET /web/specs/{id}/board - Render the board partial.
-pub async fn board(
-    State(state): State<SharedState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+pub async fn board(State(state): State<SharedState>, Path(id): Path<String>) -> impl IntoResponse {
     let spec_id = match parse_spec_id(&id) {
         Ok(id) => id,
         Err(resp) => return *resp,
@@ -332,11 +329,7 @@ pub async fn board(
     let spec_state = handle.read_state().await;
     let lanes = cards_by_lane(&spec_state);
 
-    BoardTemplate {
-        spec_id: id,
-        lanes,
-    }
-    .into_response()
+    BoardTemplate { spec_id: id, lanes }.into_response()
 }
 
 /// Card edit form template.
@@ -478,11 +471,7 @@ pub async fn create_card(
     // Return refreshed board
     let spec_state = handle.read_state().await;
     let lanes = cards_by_lane(&spec_state);
-    BoardTemplate {
-        spec_id: id,
-        lanes,
-    }
-    .into_response()
+    BoardTemplate { spec_id: id, lanes }.into_response()
 }
 
 /// PUT /web/specs/{id}/cards/{card_id} - Update a card, return the updated card HTML.
@@ -890,10 +879,7 @@ pub async fn answer_question(
 }
 
 /// POST /web/specs/{id}/undo - Undo last operation, return refreshed board.
-pub async fn undo(
-    State(state): State<SharedState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+pub async fn undo(State(state): State<SharedState>, Path(id): Path<String>) -> impl IntoResponse {
     let spec_id = match parse_spec_id(&id) {
         Ok(id) => id,
         Err(resp) => return *resp,
@@ -916,10 +902,7 @@ pub async fn undo(
         Err(e) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Html(format!(
-                    "<p class=\"error-msg\">Undo failed: {}</p>",
-                    e
-                )),
+                Html(format!("<p class=\"error-msg\">Undo failed: {}</p>", e)),
             )
                 .into_response();
         }
@@ -930,11 +913,7 @@ pub async fn undo(
     // Return refreshed board
     let spec_state = handle.read_state().await;
     let lanes = cards_by_lane(&spec_state);
-    BoardTemplate {
-        spec_id: id,
-        lanes,
-    }
-    .into_response()
+    BoardTemplate { spec_id: id, lanes }.into_response()
 }
 
 /// Helper to persist events to the JSONL log.
@@ -1231,9 +1210,7 @@ mod tests {
             .oneshot(
                 Request::post("/web/specs")
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from(
-                        "title=Test+Spec&one_liner=A+test&goal=Build+it",
-                    ))
+                    .body(Body::from("title=Test+Spec&one_liner=A+test&goal=Build+it"))
                     .unwrap(),
             )
             .await

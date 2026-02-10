@@ -2,7 +2,7 @@
 // ABOUTME: Translates AgentContext into Gemini generateContent API calls with function declarations.
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use ulid::Ulid;
 
 use specd_core::command::Command;
@@ -38,8 +38,7 @@ impl GeminiRuntime {
         let base_url =
             std::env::var("GEMINI_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
 
-        let model =
-            std::env::var("GEMINI_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+        let model = std::env::var("GEMINI_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
         Ok(Self::new(api_key, base_url, model))
     }
@@ -194,14 +193,9 @@ fn parse_gemini_function_call(function_call: &Value) -> Result<AgentAction, Agen
     let tool_name = function_call
         .get("name")
         .and_then(|n| n.as_str())
-        .ok_or_else(|| {
-            AgentError::InvalidResponse("functionCall missing name".to_string())
-        })?;
+        .ok_or_else(|| AgentError::InvalidResponse("functionCall missing name".to_string()))?;
 
-    let args = function_call
-        .get("args")
-        .cloned()
-        .unwrap_or(json!({}));
+    let args = function_call.get("args").cloned().unwrap_or(json!({}));
 
     match tool_name {
         "ask_user_boolean" => {
@@ -331,10 +325,7 @@ fn coalesce_gemini_contents(contents: Vec<Value>) -> Vec<Value> {
             .to_string();
 
         if let Some(last) = result.last_mut() {
-            let last_role = last
-                .get("role")
-                .and_then(|r| r.as_str())
-                .unwrap_or("");
+            let last_role = last.get("role").and_then(|r| r.as_str()).unwrap_or("");
 
             if last_role == role {
                 let prev_text = last
@@ -386,9 +377,7 @@ impl AgentRuntime for GeminiRuntime {
             return Err(AgentError::RateLimited);
         }
 
-        if status == reqwest::StatusCode::UNAUTHORIZED
-            || status == reqwest::StatusCode::FORBIDDEN
-        {
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             return Err(AgentError::ProviderError(
                 "Unauthorized: check GEMINI_API_KEY".to_string(),
             ));
@@ -457,8 +446,7 @@ mod tests {
         );
 
         let spec_id = Ulid::new();
-        let mut ctx =
-            AgentContext::new(spec_id, "critic-1".to_string(), AgentRole::Critic);
+        let mut ctx = AgentContext::new(spec_id, "critic-1".to_string(), AgentRole::Critic);
         ctx.state_summary = "A spec about building a monitoring dashboard".to_string();
 
         let body = runtime.build_request_body(&ctx);
@@ -490,9 +478,7 @@ mod tests {
         // Verify generation_config
         let gen_config = body.get("generation_config").unwrap();
         assert_eq!(
-            gen_config
-                .get("max_output_tokens")
-                .and_then(|m| m.as_u64()),
+            gen_config.get("max_output_tokens").and_then(|m| m.as_u64()),
             Some(4096)
         );
     }
@@ -706,8 +692,11 @@ mod tests {
         let runtime = GeminiRuntime::from_env().expect("GEMINI_API_KEY must be set");
 
         let spec_id = Ulid::new();
-        let mut ctx =
-            AgentContext::new(spec_id, "brainstormer-1".to_string(), AgentRole::Brainstormer);
+        let mut ctx = AgentContext::new(
+            spec_id,
+            "brainstormer-1".to_string(),
+            AgentRole::Brainstormer,
+        );
         ctx.state_summary = "A spec about building a web scraper".to_string();
 
         let result = runtime.run_step(&ctx).await;

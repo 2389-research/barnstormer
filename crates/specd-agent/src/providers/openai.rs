@@ -2,7 +2,7 @@
 // ABOUTME: Translates AgentContext into OpenAI Chat Completions API calls with function calling.
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use ulid::Ulid;
 
 use specd_core::command::Command;
@@ -128,9 +128,9 @@ impl OpenAIRuntime {
             .first()
             .ok_or_else(|| AgentError::InvalidResponse("empty choices array".to_string()))?;
 
-        let message = choice.get("message").ok_or_else(|| {
-            AgentError::InvalidResponse("missing message in choice".to_string())
-        })?;
+        let message = choice
+            .get("message")
+            .ok_or_else(|| AgentError::InvalidResponse("missing message in choice".to_string()))?;
 
         // Check for tool_calls first
         if let Some(tool_calls) = message.get("tool_calls").and_then(|t| t.as_array())
@@ -181,16 +181,14 @@ fn build_openai_tools() -> Vec<Value> {
 
 /// Parse a single tool_call from the OpenAI response into an AgentAction.
 fn parse_openai_tool_call(tool_call: &Value) -> Result<AgentAction, AgentError> {
-    let function = tool_call.get("function").ok_or_else(|| {
-        AgentError::InvalidResponse("tool_call missing function".to_string())
-    })?;
+    let function = tool_call
+        .get("function")
+        .ok_or_else(|| AgentError::InvalidResponse("tool_call missing function".to_string()))?;
 
     let tool_name = function
         .get("name")
         .and_then(|n| n.as_str())
-        .ok_or_else(|| {
-            AgentError::InvalidResponse("function missing name".to_string())
-        })?;
+        .ok_or_else(|| AgentError::InvalidResponse("function missing name".to_string()))?;
 
     let arguments_str = function
         .get("arguments")
@@ -394,17 +392,13 @@ mod tests {
         );
 
         let spec_id = Ulid::new();
-        let mut ctx =
-            AgentContext::new(spec_id, "planner-1".to_string(), AgentRole::Planner);
+        let mut ctx = AgentContext::new(spec_id, "planner-1".to_string(), AgentRole::Planner);
         ctx.state_summary = "A spec about building a REST API".to_string();
 
         let body = runtime.build_request_body(&ctx);
 
         // Verify model
-        assert_eq!(
-            body.get("model").and_then(|m| m.as_str()),
-            Some("gpt-4o")
-        );
+        assert_eq!(body.get("model").and_then(|m| m.as_str()), Some("gpt-4o"));
 
         // Verify messages array includes system message
         let messages = body.get("messages").and_then(|m| m.as_array()).unwrap();
@@ -418,10 +412,7 @@ mod tests {
         let tools = body.get("tools").and_then(|t| t.as_array()).unwrap();
         assert_eq!(tools.len(), 7);
         for tool in tools {
-            assert_eq!(
-                tool.get("type").and_then(|t| t.as_str()),
-                Some("function")
-            );
+            assert_eq!(tool.get("type").and_then(|t| t.as_str()), Some("function"));
             assert!(tool.get("function").is_some());
         }
 
@@ -592,8 +583,11 @@ mod tests {
         let runtime = OpenAIRuntime::from_env().expect("OPENAI_API_KEY must be set");
 
         let spec_id = Ulid::new();
-        let mut ctx =
-            AgentContext::new(spec_id, "brainstormer-1".to_string(), AgentRole::Brainstormer);
+        let mut ctx = AgentContext::new(
+            spec_id,
+            "brainstormer-1".to_string(),
+            AgentRole::Brainstormer,
+        );
         ctx.state_summary = "A spec about building a task management CLI".to_string();
 
         let result = runtime.run_step(&ctx).await;

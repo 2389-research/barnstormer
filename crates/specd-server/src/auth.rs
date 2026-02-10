@@ -113,11 +113,7 @@ mod tests {
         let app = test_router();
 
         let resp = app
-            .oneshot(
-                Request::get("/api/specs")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::get("/api/specs").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -163,11 +159,7 @@ mod tests {
         let app = test_router();
 
         let resp = app
-            .oneshot(
-                Request::get("/web/specs")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::get("/web/specs").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -179,11 +171,7 @@ mod tests {
         let app = test_router();
 
         let resp = app
-            .oneshot(
-                Request::get("/")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::get("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -195,11 +183,7 @@ mod tests {
         let app = test_router();
 
         let resp = app
-            .oneshot(
-                Request::get("/health")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::get("/health").body(Body::empty()).unwrap())
             .await
             .unwrap();
 

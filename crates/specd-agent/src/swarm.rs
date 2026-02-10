@@ -1,21 +1,21 @@
 // ABOUTME: SwarmOrchestrator manages multiple agents per spec, routing actions and enforcing question queue.
 // ABOUTME: Each agent runs in its own tokio task, coordinated by pause/resume flags and event subscriptions.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::broadcast;
 use tracing;
 use ulid::Ulid;
 
-use specd_core::actor::SpecActorHandle;
-use specd_core::command::Command;
-use specd_core::event::Event;
 use crate::context::{AgentContext, AgentRole};
 use crate::providers::anthropic::AnthropicRuntime;
 use crate::providers::gemini::GeminiRuntime;
 use crate::providers::openai::OpenAIRuntime;
 use crate::runtime::{AgentAction, AgentError, AgentRuntime};
+use specd_core::actor::SpecActorHandle;
+use specd_core::command::Command;
+use specd_core::event::Event;
 
 /// Wraps a single agent's runtime, role, and mutable context.
 pub struct AgentRunner {
@@ -26,11 +26,7 @@ pub struct AgentRunner {
 
 impl AgentRunner {
     /// Create a new runner for the given role and runtime.
-    pub fn new(
-        spec_id: Ulid,
-        role: AgentRole,
-        runtime: Box<dyn AgentRuntime>,
-    ) -> Self {
+    pub fn new(spec_id: Ulid, role: AgentRole, runtime: Box<dyn AgentRuntime>) -> Self {
         let agent_id = format!("{}-{}", role.label(), Ulid::new());
         let context = AgentContext::new(spec_id, agent_id, role);
         Self {
@@ -54,12 +50,9 @@ pub struct SwarmOrchestrator {
 impl SwarmOrchestrator {
     /// Create a new orchestrator with default agents for the given spec.
     /// Uses the default provider (from env or "anthropic") and model.
-    pub fn with_defaults(
-        spec_id: Ulid,
-        actor: SpecActorHandle,
-    ) -> Result<Self, AgentError> {
-        let provider = std::env::var("SPECD_DEFAULT_PROVIDER")
-            .unwrap_or_else(|_| "anthropic".to_string());
+    pub fn with_defaults(spec_id: Ulid, actor: SpecActorHandle) -> Result<Self, AgentError> {
+        let provider =
+            std::env::var("SPECD_DEFAULT_PROVIDER").unwrap_or_else(|_| "anthropic".to_string());
         let model = std::env::var("SPECD_DEFAULT_MODEL").ok();
 
         let actor = Arc::new(actor);
@@ -87,11 +80,7 @@ impl SwarmOrchestrator {
     }
 
     /// Create an orchestrator with a specific set of agent runners.
-    pub fn with_agents(
-        spec_id: Ulid,
-        actor: SpecActorHandle,
-        agents: Vec<AgentRunner>,
-    ) -> Self {
+    pub fn with_agents(spec_id: Ulid, actor: SpecActorHandle, agents: Vec<AgentRunner>) -> Self {
         Self {
             spec_id,
             actor: Arc::new(actor),
@@ -157,10 +146,7 @@ impl SwarmOrchestrator {
             AgentAction::AskUser(question) => {
                 // Only one pending question at a time
                 if question_pending.load(Ordering::SeqCst) {
-                    tracing::debug!(
-                        agent = agent_id,
-                        "question already pending, skipping ask"
-                    );
+                    tracing::debug!(agent = agent_id, "question already pending, skipping ask");
                     // Create an assumption card instead
                     let assumption_cmd = Command::CreateCard {
                         card_type: "assumption".to_string(),
@@ -243,13 +229,8 @@ impl SwarmOrchestrator {
 
         match runner.runtime.run_step(&runner.context).await {
             Ok(action) => {
-                Self::process_action(
-                    actor,
-                    action,
-                    &runner.context.agent_id,
-                    question_pending,
-                )
-                .await
+                Self::process_action(actor, action, &runner.context.agent_id, question_pending)
+                    .await
             }
             Err(AgentError::RateLimited) => {
                 tracing::warn!(
@@ -318,7 +299,9 @@ pub fn create_runtime(
                 .map(String::from)
                 .or_else(|| std::env::var("ANTHROPIC_MODEL").ok())
                 .unwrap_or_else(|| "claude-sonnet-4-5-20250929".to_string());
-            Ok(Box::new(AnthropicRuntime::new(api_key, base_url, model_str)))
+            Ok(Box::new(AnthropicRuntime::new(
+                api_key, base_url, model_str,
+            )))
         }
 
         "openai" => {
@@ -337,9 +320,7 @@ pub fn create_runtime(
             let api_key = std::env::var("GEMINI_API_KEY")
                 .map_err(|_| AgentError::ProviderError("GEMINI_API_KEY not set".to_string()))?;
             let base_url = std::env::var("GEMINI_BASE_URL")
-                .unwrap_or_else(|_| {
-                    "https://generativelanguage.googleapis.com".to_string()
-                });
+                .unwrap_or_else(|_| "https://generativelanguage.googleapis.com".to_string());
             let model_str = model
                 .map(String::from)
                 .or_else(|| std::env::var("GEMINI_MODEL").ok())
@@ -606,18 +587,9 @@ mod tests {
         let (spec_id, actor) = make_test_actor();
         let question_pending = AtomicBool::new(false);
 
-        let mut runner = AgentRunner::new(
-            spec_id,
-            AgentRole::Brainstormer,
-            Box::new(StubRuntime),
-        );
+        let mut runner = AgentRunner::new(spec_id, AgentRole::Brainstormer, Box::new(StubRuntime));
 
-        let cont = SwarmOrchestrator::run_single_step(
-            &mut runner,
-            &actor,
-            &question_pending,
-        )
-        .await;
+        let cont = SwarmOrchestrator::run_single_step(&mut runner, &actor, &question_pending).await;
 
         // StubRuntime returns Done, so agent should idle
         assert!(!cont);
@@ -628,11 +600,7 @@ mod tests {
         let (spec_id, actor) = make_test_actor();
         let mut event_rx = actor.subscribe();
 
-        let mut runner = AgentRunner::new(
-            spec_id,
-            AgentRole::Manager,
-            Box::new(StubRuntime),
-        );
+        let mut runner = AgentRunner::new(spec_id, AgentRole::Manager, Box::new(StubRuntime));
 
         // Create a spec so there's state to read
         actor

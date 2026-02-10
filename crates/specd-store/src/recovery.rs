@@ -47,10 +47,7 @@ pub fn recover_spec(spec_dir: &Path) -> Result<(SpecState, u64), RecoveryError> 
 
     let (mut state, snapshot_event_id) = match &snapshot {
         Some(snap) => {
-            tracing::info!(
-                "loaded snapshot at event {}",
-                snap.last_event_id
-            );
+            tracing::info!("loaded snapshot at event {}", snap.last_event_id);
             (snap.state.clone(), snap.last_event_id)
         }
         None => {
@@ -301,7 +298,11 @@ mod tests {
         let spec_dir = make_spec_dir(&dir);
         let spec_id = Ulid::new();
 
-        let card = Card::new("idea".to_string(), "Stale Card".to_string(), "human".to_string());
+        let card = Card::new(
+            "idea".to_string(),
+            "Stale Card".to_string(),
+            "human".to_string(),
+        );
 
         let events = vec![
             make_event(

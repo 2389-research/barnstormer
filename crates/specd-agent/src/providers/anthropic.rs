@@ -2,7 +2,7 @@
 // ABOUTME: Translates AgentContext into Anthropic Messages API calls and parses tool_use responses.
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use ulid::Ulid;
 
 use specd_core::command::Command;
@@ -36,11 +36,10 @@ impl AnthropicRuntime {
         let api_key = std::env::var("ANTHROPIC_API_KEY")
             .map_err(|_| AgentError::ProviderError("ANTHROPIC_API_KEY not set".to_string()))?;
 
-        let base_url = std::env::var("ANTHROPIC_BASE_URL")
-            .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
+        let base_url =
+            std::env::var("ANTHROPIC_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
 
-        let model =
-            std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+        let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
         Ok(Self::new(api_key, base_url, model))
     }
@@ -57,10 +56,7 @@ impl AnthropicRuntime {
 
     /// Build the JSON request body for the Anthropic Messages API.
     pub fn build_request_body(&self, context: &AgentContext) -> Value {
-        let system_prompt = role_prompt(
-            &context.agent_role,
-            &context.state_summary,
-        );
+        let system_prompt = role_prompt(&context.agent_role, &context.state_summary);
 
         let tools = build_anthropic_tools();
 
@@ -183,10 +179,7 @@ fn parse_tool_use(block: &Value) -> Result<AgentAction, AgentError> {
         .and_then(|n| n.as_str())
         .ok_or_else(|| AgentError::InvalidResponse("tool_use block missing name".to_string()))?;
 
-    let input = block
-        .get("input")
-        .cloned()
-        .unwrap_or(json!({}));
+    let input = block.get("input").cloned().unwrap_or(json!({}));
 
     match tool_name {
         "ask_user_boolean" => {
@@ -315,17 +308,11 @@ fn coalesce_messages(messages: Vec<Value>) -> Vec<Value> {
             .to_string();
 
         if let Some(last) = result.last_mut() {
-            let last_role = last
-                .get("role")
-                .and_then(|r| r.as_str())
-                .unwrap_or("");
+            let last_role = last.get("role").and_then(|r| r.as_str()).unwrap_or("");
 
             if last_role == role {
                 // Merge into previous message
-                let prev_content = last
-                    .get("content")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("");
+                let prev_content = last.get("content").and_then(|c| c.as_str()).unwrap_or("");
                 let merged = format!("{}\n\n{}", prev_content, content);
                 *last = json!({
                     "role": role,
@@ -433,7 +420,11 @@ mod tests {
         );
 
         let spec_id = Ulid::new();
-        let mut ctx = AgentContext::new(spec_id, "brainstormer-1".to_string(), AgentRole::Brainstormer);
+        let mut ctx = AgentContext::new(
+            spec_id,
+            "brainstormer-1".to_string(),
+            AgentRole::Brainstormer,
+        );
         ctx.state_summary = "A spec about building a widget".to_string();
         ctx.rolling_summary = "Previously discussed widget design".to_string();
 
@@ -446,10 +437,7 @@ mod tests {
         );
 
         // Verify max_tokens
-        assert_eq!(
-            body.get("max_tokens").and_then(|m| m.as_u64()),
-            Some(4096)
-        );
+        assert_eq!(body.get("max_tokens").and_then(|m| m.as_u64()), Some(4096));
 
         // Verify system prompt is present and contains the role
         let system = body.get("system").and_then(|s| s.as_str()).unwrap();
@@ -660,7 +648,10 @@ mod tests {
                 ..
             }) => {
                 assert_eq!(question, "Describe the authentication requirements");
-                assert_eq!(placeholder, Some("e.g. OAuth2, API keys, JWT...".to_string()));
+                assert_eq!(
+                    placeholder,
+                    Some("e.g. OAuth2, API keys, JWT...".to_string())
+                );
                 assert!(validation_hint.is_some());
             }
             other => panic!("expected AskUser(Freeform), got {:?}", other),
@@ -767,8 +758,11 @@ mod tests {
         let runtime = AnthropicRuntime::from_env().expect("ANTHROPIC_API_KEY must be set");
 
         let spec_id = Ulid::new();
-        let mut ctx =
-            AgentContext::new(spec_id, "brainstormer-1".to_string(), AgentRole::Brainstormer);
+        let mut ctx = AgentContext::new(
+            spec_id,
+            "brainstormer-1".to_string(),
+            AgentRole::Brainstormer,
+        );
         ctx.state_summary = "A spec about building a CLI tool for managing notes".to_string();
 
         let result = runtime.run_step(&ctx).await;

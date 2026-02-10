@@ -39,11 +39,7 @@ impl Default for SpecState {
             pending_question: None,
             undo_stack: Vec::new(),
             last_event_id: 0,
-            lanes: vec![
-                "Ideas".to_string(),
-                "Plan".to_string(),
-                "Done".to_string(),
-            ],
+            lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Done".to_string()],
         }
     }
 }
@@ -245,9 +241,7 @@ impl SpecState {
                 });
             }
 
-            EventPayload::UndoApplied {
-                inverse_events, ..
-            } => {
+            EventPayload::UndoApplied { inverse_events, .. } => {
                 // Apply inverse events without pushing further undo entries
                 for inverse_payload in inverse_events {
                     let synthetic_event = Event {
@@ -412,11 +406,7 @@ mod tests {
         );
         let card_id = card.card_id;
 
-        state.apply(&make_event(
-            1,
-            spec_id,
-            EventPayload::CardCreated { card },
-        ));
+        state.apply(&make_event(1, spec_id, EventPayload::CardCreated { card }));
 
         assert_eq!(state.cards.len(), 1);
         assert!(state.cards.contains_key(&card_id));
@@ -434,11 +424,7 @@ mod tests {
         );
         let card_id = card.card_id;
 
-        state.apply(&make_event(
-            1,
-            spec_id,
-            EventPayload::CardCreated { card },
-        ));
+        state.apply(&make_event(1, spec_id, EventPayload::CardCreated { card }));
 
         state.apply(&make_event(
             2,
@@ -469,11 +455,7 @@ mod tests {
         );
         let card_id = card.card_id;
 
-        state.apply(&make_event(
-            1,
-            spec_id,
-            EventPayload::CardCreated { card },
-        ));
+        state.apply(&make_event(1, spec_id, EventPayload::CardCreated { card }));
 
         state.apply(&make_event(
             2,
@@ -501,11 +483,7 @@ mod tests {
         );
         let card_id = card.card_id;
 
-        state.apply(&make_event(
-            1,
-            spec_id,
-            EventPayload::CardCreated { card },
-        ));
+        state.apply(&make_event(1, spec_id, EventPayload::CardCreated { card }));
         assert_eq!(state.cards.len(), 1);
 
         state.apply(&make_event(
@@ -574,19 +552,11 @@ mod tests {
     fn undo_entry_created_on_card_mutation() {
         let mut state = SpecState::new();
         let spec_id = make_spec_id();
-        let card = Card::new(
-            "idea".to_string(),
-            "Test".to_string(),
-            "human".to_string(),
-        );
+        let card = Card::new("idea".to_string(), "Test".to_string(), "human".to_string());
         let card_id = card.card_id;
 
         // CardCreated should push an undo entry
-        state.apply(&make_event(
-            1,
-            spec_id,
-            EventPayload::CardCreated { card },
-        ));
+        state.apply(&make_event(1, spec_id, EventPayload::CardCreated { card }));
         assert_eq!(state.undo_stack.len(), 1);
         assert_eq!(state.undo_stack[0].event_id, 1);
 

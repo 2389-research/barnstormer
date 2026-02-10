@@ -302,7 +302,11 @@ impl SqliteIndex {
                 if let Some(b) = body {
                     self.conn.execute(
                         "UPDATE cards SET body = ?1, updated_at = ?2 WHERE card_id = ?3",
-                        params![b.as_deref(), event.timestamp.to_rfc3339(), card_id.to_string()],
+                        params![
+                            b.as_deref(),
+                            event.timestamp.to_rfc3339(),
+                            card_id.to_string()
+                        ],
                     )?;
                 }
                 if let Some(ct) = card_type {
@@ -332,9 +336,7 @@ impl SqliteIndex {
                 self.delete_card(card_id)?;
             }
 
-            EventPayload::UndoApplied {
-                inverse_events, ..
-            } => {
+            EventPayload::UndoApplied { inverse_events, .. } => {
                 // Apply inverse events to the index
                 for inverse_payload in inverse_events {
                     let synthetic = Event {
@@ -388,7 +390,11 @@ mod tests {
     }
 
     fn make_card(created_by: &str) -> Card {
-        Card::new("idea".to_string(), "Test Card".to_string(), created_by.to_string())
+        Card::new(
+            "idea".to_string(),
+            "Test Card".to_string(),
+            created_by.to_string(),
+        )
     }
 
     fn make_event(event_id: u64, spec_id: Ulid, payload: EventPayload) -> Event {
@@ -470,7 +476,11 @@ mod tests {
         let idx = SqliteIndex::open(&db_path).unwrap();
 
         let spec_id = Ulid::new();
-        let card = Card::new("idea".to_string(), "Event Card".to_string(), "agent".to_string());
+        let card = Card::new(
+            "idea".to_string(),
+            "Event Card".to_string(),
+            "agent".to_string(),
+        );
         let card_id = card.card_id;
 
         let events = vec![
@@ -536,7 +546,11 @@ mod tests {
         assert_eq!(specs[0].title, "Incremental");
 
         // Apply CardCreated
-        let card = Card::new("task".to_string(), "Do Thing".to_string(), "human".to_string());
+        let card = Card::new(
+            "task".to_string(),
+            "Do Thing".to_string(),
+            "human".to_string(),
+        );
         let card_id = card.card_id;
         idx.apply_event(&make_event(2, spec_id, EventPayload::CardCreated { card }))
             .unwrap();

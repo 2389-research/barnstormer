@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use thiserror::Error;
-use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
+use tokio::sync::{RwLock, broadcast, mpsc, oneshot};
 use ulid::Ulid;
 
 use crate::card::Card;

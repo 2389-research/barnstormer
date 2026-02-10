@@ -164,9 +164,7 @@ fn describe_event_payload(payload: &EventPayload) -> String {
                 format!("card {} updated", card_id)
             }
         }
-        EventPayload::CardMoved {
-            card_id, lane, ..
-        } => {
+        EventPayload::CardMoved { card_id, lane, .. } => {
             format!("card {} moved to '{}'", card_id, lane)
         }
         EventPayload::CardDeleted { card_id } => {
@@ -214,9 +212,7 @@ fn describe_event_payload(payload: &EventPayload) -> String {
 
 /// Serialize a collection of agent contexts into a HashMap suitable for
 /// inclusion in SnapshotData.agent_contexts.
-pub fn contexts_to_snapshot_map(
-    contexts: &[AgentContext],
-) -> HashMap<String, serde_json::Value> {
+pub fn contexts_to_snapshot_map(contexts: &[AgentContext]) -> HashMap<String, serde_json::Value> {
     contexts
         .iter()
         .map(|ctx| (ctx.agent_id.clone(), ctx.to_snapshot_value()))
@@ -225,17 +221,13 @@ pub fn contexts_to_snapshot_map(
 
 /// Restore agent contexts from a SnapshotData.agent_contexts map.
 /// Contexts that fail to deserialize are skipped with a warning.
-pub fn contexts_from_snapshot_map(
-    map: &HashMap<String, serde_json::Value>,
-) -> Vec<AgentContext> {
+pub fn contexts_from_snapshot_map(map: &HashMap<String, serde_json::Value>) -> Vec<AgentContext> {
     map.values()
-        .filter_map(|value| {
-            match AgentContext::from_snapshot_value(value) {
-                Ok(ctx) => Some(ctx),
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to restore agent context from snapshot");
-                    None
-                }
+        .filter_map(|value| match AgentContext::from_snapshot_value(value) {
+            Ok(ctx) => Some(ctx),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to restore agent context from snapshot");
+                None
             }
         })
         .collect()
@@ -311,7 +303,10 @@ mod tests {
         ctx.compact_summary();
 
         assert!(ctx.rolling_summary.len() <= ROLLING_SUMMARY_CAP);
-        assert!(ctx.rolling_summary.starts_with("[earlier context compacted]"));
+        assert!(
+            ctx.rolling_summary
+                .starts_with("[earlier context compacted]")
+        );
     }
 
     #[test]
@@ -524,10 +519,7 @@ mod tests {
                 },
                 "moved to 'Done'",
             ),
-            (
-                EventPayload::CardDeleted { card_id },
-                "deleted",
-            ),
+            (EventPayload::CardDeleted { card_id }, "deleted"),
             (
                 EventPayload::QuestionAsked {
                     question: specd_core::transcript::UserQuestion::Boolean {

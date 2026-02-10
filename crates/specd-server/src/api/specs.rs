@@ -36,9 +36,7 @@ pub struct CreateSpecResponse {
 }
 
 /// GET /api/specs - List all specs with summary info.
-pub async fn list_specs(
-    State(state): State<SharedState>,
-) -> Json<Vec<SpecSummary>> {
+pub async fn list_specs(State(state): State<SharedState>) -> Json<Vec<SpecSummary>> {
     let actors = state.actors.read().await;
     let mut summaries = Vec::new();
 

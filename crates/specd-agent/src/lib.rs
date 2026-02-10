@@ -7,9 +7,7 @@ pub mod runtime;
 pub mod swarm;
 pub mod tools;
 
-pub use context::{
-    AgentContext, AgentRole, contexts_from_snapshot_map, contexts_to_snapshot_map,
-};
+pub use context::{AgentContext, AgentRole, contexts_from_snapshot_map, contexts_to_snapshot_map};
 pub use runtime::{AgentAction, AgentError, AgentRuntime};
 pub use swarm::{AgentRunner, SwarmOrchestrator, create_runtime};
 pub use tools::all_tool_definitions;

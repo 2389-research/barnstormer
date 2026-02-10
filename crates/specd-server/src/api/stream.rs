@@ -55,11 +55,7 @@ pub async fn event_stream(
     let spec_id = match id.parse::<Ulid>() {
         Ok(id) => id,
         Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                "invalid spec id",
-            )
-                .into_response();
+            return (StatusCode::BAD_REQUEST, "invalid spec id").into_response();
         }
     };
 
@@ -67,18 +63,16 @@ pub async fn event_stream(
     let handle = match actors.get(&spec_id) {
         Some(h) => h,
         None => {
-            return (
-                StatusCode::NOT_FOUND,
-                "spec not found",
-            )
-                .into_response();
+            return (StatusCode::NOT_FOUND, "spec not found").into_response();
         }
     };
 
     let rx = handle.subscribe();
     let stream = event_stream_from_receiver(rx);
 
-    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 #[cfg(test)]
@@ -106,14 +100,11 @@ mod tests {
             .unwrap();
 
         // Read the event from the stream
-        let sse_event = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            stream.next(),
-        )
-        .await
-        .expect("should receive event within timeout")
-        .expect("stream should have an item")
-        .expect("item should be Ok");
+        let sse_event = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .expect("should receive event within timeout")
+            .expect("stream should have an item")
+            .expect("item should be Ok");
 
         // Verify we got a valid SSE event (we can't easily inspect the
         // event type from the SseEvent struct, but we can verify it succeeded)
@@ -154,22 +145,19 @@ mod tests {
             .unwrap();
 
         // Read the event from the stream
-        let sse_event = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            stream.next(),
-        )
-        .await
-        .expect("should receive event within timeout")
-        .expect("stream should have an item")
-        .expect("item should be Ok");
+        let sse_event = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .expect("should receive event within timeout")
+            .expect("stream should have an item")
+            .expect("item should be Ok");
 
         let _ = sse_event;
     }
 
     #[test]
     fn event_type_names_are_correct() {
-        use specd_core::EventPayload;
         use specd_core::Card;
+        use specd_core::EventPayload;
 
         assert_eq!(
             event_type_name(&EventPayload::SpecCreated {

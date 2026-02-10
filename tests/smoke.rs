@@ -70,7 +70,7 @@ async fn smoke_test_full_lifecycle() {
 
     let resp = app
         .oneshot(
-            Request::post(&format!("/api/specs/{}/commands", spec_id))
+            Request::post(format!("/api/specs/{}/commands", spec_id))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&card_cmd).unwrap()))
                 .unwrap(),
@@ -87,7 +87,7 @@ async fn smoke_test_full_lifecycle() {
     let app = create_router(Arc::clone(&state));
     let resp = app
         .oneshot(
-            Request::get(&format!("/api/specs/{}/state", spec_id))
+            Request::get(format!("/api/specs/{}/state", spec_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -106,7 +106,7 @@ async fn smoke_test_full_lifecycle() {
     let app = create_router(Arc::clone(&state));
     let resp = app
         .oneshot(
-            Request::post(&format!("/api/specs/{}/undo", spec_id))
+            Request::post(format!("/api/specs/{}/undo", spec_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -119,7 +119,7 @@ async fn smoke_test_full_lifecycle() {
     let app = create_router(Arc::clone(&state));
     let resp = app
         .oneshot(
-            Request::get(&format!("/api/specs/{}/state", spec_id))
+            Request::get(format!("/api/specs/{}/state", spec_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -158,16 +158,15 @@ async fn smoke_test_full_lifecycle() {
 
     // Verify spec.md content
     let md = std::fs::read_to_string(spec_dir.join("exports").join("spec.md")).unwrap();
-    assert!(md.contains("Smoke Test Spec"), "spec.md should contain spec title");
+    assert!(
+        md.contains("Smoke Test Spec"),
+        "spec.md should contain spec title"
+    );
 
     // 10. GET / -> verify HTML renders
     let app = create_router(Arc::clone(&state));
     let resp = app
-        .oneshot(
-            Request::get("/")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::get("/").body(Body::empty()).unwrap())
         .await
         .unwrap();
 

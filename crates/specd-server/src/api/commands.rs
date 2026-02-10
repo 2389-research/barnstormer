@@ -66,14 +66,15 @@ pub async fn submit_command(
         }
     }
 
-    (StatusCode::OK, Json(serde_json::json!({ "events": events }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "events": events })),
+    )
+        .into_response()
 }
 
 /// POST /api/specs/{id}/undo - Undo the last undoable operation on a spec.
-pub async fn undo(
-    State(state): State<SharedState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+pub async fn undo(State(state): State<SharedState>, Path(id): Path<String>) -> impl IntoResponse {
     let spec_id = match id.parse::<Ulid>() {
         Ok(id) => id,
         Err(_) => {
@@ -123,14 +124,18 @@ pub async fn undo(
         }
     }
 
-    (StatusCode::OK, Json(serde_json::json!({ "events": events }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "events": events })),
+    )
+        .into_response()
 }
 
 #[cfg(test)]
 mod tests {
     use crate::app_state::AppState;
-    use crate::routes::create_router;
     use crate::app_state::SharedState;
+    use crate::routes::create_router;
     use axum::body::Body;
     use axum::http::StatusCode;
     use http::Request;

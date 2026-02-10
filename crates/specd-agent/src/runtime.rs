@@ -23,10 +23,7 @@ pub enum AgentAction {
     AskUser(UserQuestion),
 
     /// Route a question to another agent in the swarm.
-    AskAgent {
-        agent_id: String,
-        question: String,
-    },
+    AskAgent { agent_id: String, question: String },
 
     /// Emit a diff summary describing what changed in this step.
     EmitDiffSummary(String),
@@ -108,8 +105,7 @@ mod tests {
         // Verify serde round-trip for each action.
         for action in &actions {
             let json = serde_json::to_string(action).expect("serialize action");
-            let deser: AgentAction =
-                serde_json::from_str(&json).expect("deserialize action");
+            let deser: AgentAction = serde_json::from_str(&json).expect("deserialize action");
             let json2 = serde_json::to_string(&deser).expect("re-serialize action");
             assert_eq!(json, json2, "round-trip mismatch for action");
         }

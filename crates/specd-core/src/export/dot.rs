@@ -61,10 +61,7 @@ pub fn export_dot(state: &SpecState) -> String {
                     escape_dot_string(&card.title)
                 );
                 // Add type attribute for wait.human types
-                if matches!(
-                    card.card_type.as_str(),
-                    "assumption" | "open_question"
-                ) {
+                if matches!(card.card_type.as_str(), "assumption" | "open_question") {
                     attrs.push_str(" type=\"wait.human\"");
                 }
                 writeln!(out, "    {} [{}]", node_id, attrs).unwrap();
@@ -134,7 +131,12 @@ pub fn export_dot(state: &SpecState) -> String {
         .flat_map(|l| {
             cards_by_lane
                 .get(l.as_str())
-                .map(|cards| cards.iter().map(|c| to_snake_case(&c.title)).collect::<Vec<_>>())
+                .map(|cards| {
+                    cards
+                        .iter()
+                        .map(|c| to_snake_case(&c.title))
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default()
         })
         .collect();
@@ -198,9 +200,7 @@ fn to_snake_case(s: &str) -> String {
                 result.push(ch);
             }
             prev_was_separator = false;
-        } else if (ch == ' ' || ch == '-' || ch == '_')
-            && !result.is_empty()
-            && !prev_was_separator
+        } else if (ch == ' ' || ch == '-' || ch == '_') && !result.is_empty() && !prev_was_separator
         {
             result.push('_');
             prev_was_separator = true;
@@ -300,21 +300,11 @@ mod tests {
             pending_question: None,
             undo_stack: Vec::new(),
             last_event_id: 0,
-            lanes: vec![
-                "Ideas".to_string(),
-                "Plan".to_string(),
-                "Done".to_string(),
-            ],
+            lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Done".to_string()],
         }
     }
 
-    fn make_card(
-        card_type: &str,
-        title: &str,
-        lane: &str,
-        order: f64,
-        created_by: &str,
-    ) -> Card {
+    fn make_card(card_type: &str, title: &str, lane: &str, order: f64, created_by: &str) -> Card {
         let now = Utc::now();
         Card {
             card_id: Ulid::new(),
@@ -468,9 +458,7 @@ mod tests {
 
         // Verify shapes: open_question -> hexagon with wait.human
         assert!(
-            dot.contains(
-                "what_stack [shape=hexagon label=\"What Stack\" type=\"wait.human\"]"
-            ),
+            dot.contains("what_stack [shape=hexagon label=\"What Stack\" type=\"wait.human\"]"),
             "Expected hexagon shape with wait.human for open_question in:\n{}",
             dot
         );
@@ -496,7 +484,9 @@ mod tests {
             if let Some(node_id) = trimmed.split_whitespace().next() {
                 // Node IDs should be lowercase with underscores only
                 assert!(
-                    node_id.chars().all(|c| c.is_lowercase() || c == '_' || c.is_ascii_digit()),
+                    node_id
+                        .chars()
+                        .all(|c| c.is_lowercase() || c == '_' || c.is_ascii_digit()),
                     "Node ID '{}' should be snake_case, found in line: {}",
                     node_id,
                     trimmed

@@ -80,15 +80,11 @@ async fn main() {
             if !no_open {
                 #[cfg(target_os = "macos")]
                 {
-                    let _ = std::process::Command::new("open")
-                        .arg(&url)
-                        .spawn();
+                    let _ = std::process::Command::new("open").arg(&url).spawn();
                 }
                 #[cfg(target_os = "linux")]
                 {
-                    let _ = std::process::Command::new("xdg-open")
-                        .arg(&url)
-                        .spawn();
+                    let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
                 }
             }
 
@@ -96,13 +92,11 @@ async fn main() {
                 .await
                 .expect("failed to bind");
 
-            axum::serve(listener, app)
-                .await
-                .expect("server error");
+            axum::serve(listener, app).await.expect("server error");
         }
         Cli::Status => {
-            let bind_addr = std::env::var("SPECD_BIND")
-                .unwrap_or_else(|_| "127.0.0.1:7331".to_string());
+            let bind_addr =
+                std::env::var("SPECD_BIND").unwrap_or_else(|_| "127.0.0.1:7331".to_string());
 
             println!("specd status: checking {}...", bind_addr);
 

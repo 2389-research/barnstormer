@@ -12,7 +12,9 @@ pub enum ConfigError {
     #[error("SPECD_BIND is not a valid socket address: {0}")]
     InvalidBind(String),
 
-    #[error("SPECD_ALLOW_REMOTE is true but SPECD_AUTH_TOKEN is not set; refusing to start without authentication")]
+    #[error(
+        "SPECD_ALLOW_REMOTE is true but SPECD_AUTH_TOKEN is not set; refusing to start without authentication"
+    )]
     RemoteWithoutToken,
 }
 
@@ -49,8 +51,7 @@ impl SpecdConfig {
                     .join(".specd")
             });
 
-        let bind_str = std::env::var("SPECD_BIND")
-            .unwrap_or_else(|_| "127.0.0.1:7331".to_string());
+        let bind_str = std::env::var("SPECD_BIND").unwrap_or_else(|_| "127.0.0.1:7331".to_string());
         let bind: SocketAddr = bind_str
             .parse()
             .map_err(|_| ConfigError::InvalidBind(bind_str))?;
@@ -59,15 +60,19 @@ impl SpecdConfig {
             .map(|v| v == "true" || v == "1" || v == "yes")
             .unwrap_or(false);
 
-        let auth_token = std::env::var("SPECD_AUTH_TOKEN").ok().filter(|t| !t.is_empty());
+        let auth_token = std::env::var("SPECD_AUTH_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty());
 
-        let default_provider = std::env::var("SPECD_DEFAULT_PROVIDER")
-            .unwrap_or_else(|_| "anthropic".to_string());
+        let default_provider =
+            std::env::var("SPECD_DEFAULT_PROVIDER").unwrap_or_else(|_| "anthropic".to_string());
 
-        let default_model = std::env::var("SPECD_DEFAULT_MODEL").ok().filter(|m| !m.is_empty());
+        let default_model = std::env::var("SPECD_DEFAULT_MODEL")
+            .ok()
+            .filter(|m| !m.is_empty());
 
-        let public_base_url = std::env::var("SPECD_PUBLIC_BASE_URL")
-            .unwrap_or_else(|_| format!("http://{}", bind));
+        let public_base_url =
+            std::env::var("SPECD_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{}", bind));
 
         // Security validation: if allowing remote access, require auth token
         if allow_remote && auth_token.is_none() {
@@ -89,11 +94,16 @@ impl SpecdConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
-    #[test]
-    fn config_loads_defaults() {
-        // Clear any env vars that might interfere
-        // SAFETY: test-only code, single-threaded test execution
+    /// Mutex to serialize config tests that manipulate process-wide env vars.
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    /// Clear all SPECD_* env vars so tests start from a clean slate.
+    ///
+    /// SAFETY: Only call while holding ENV_MUTEX to prevent concurrent env var access.
+    unsafe fn clear_specd_env() {
+        // SAFETY: caller holds ENV_MUTEX, ensuring no concurrent env var access
         unsafe {
             std::env::remove_var("SPECD_HOME");
             std::env::remove_var("SPECD_BIND");
@@ -102,6 +112,16 @@ mod tests {
             std::env::remove_var("SPECD_DEFAULT_PROVIDER");
             std::env::remove_var("SPECD_DEFAULT_MODEL");
             std::env::remove_var("SPECD_PUBLIC_BASE_URL");
+        }
+    }
+
+    #[test]
+    fn config_loads_defaults() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+
+        // SAFETY: holding ENV_MUTEX, no concurrent env var access
+        unsafe {
+            clear_specd_env();
         }
 
         let config = SpecdConfig::from_env().unwrap();
@@ -116,21 +136,18 @@ mod tests {
 
     #[test]
     fn config_rejects_remote_without_token() {
-        // SAFETY: test-only code, single-threaded test execution
+        let _lock = ENV_MUTEX.lock().unwrap();
+
+        // SAFETY: holding ENV_MUTEX, no concurrent env var access
         unsafe {
-            std::env::remove_var("SPECD_AUTH_TOKEN");
-            std::env::remove_var("SPECD_HOME");
-            std::env::remove_var("SPECD_BIND");
-            std::env::remove_var("SPECD_DEFAULT_PROVIDER");
-            std::env::remove_var("SPECD_DEFAULT_MODEL");
-            std::env::remove_var("SPECD_PUBLIC_BASE_URL");
+            clear_specd_env();
             std::env::set_var("SPECD_ALLOW_REMOTE", "true");
         }
 
         let result = SpecdConfig::from_env();
 
         // Clean up before asserting
-        // SAFETY: test-only code, single-threaded test execution
+        // SAFETY: holding ENV_MUTEX, no concurrent env var access
         unsafe {
             std::env::remove_var("SPECD_ALLOW_REMOTE");
         }
