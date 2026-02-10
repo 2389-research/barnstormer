@@ -241,7 +241,7 @@ fn parse_spec_id(id: &str) -> Result<Ulid, Box<Response>> {
 
 /// Helper to collect cards sorted by lane and order for template rendering.
 fn cards_by_lane(spec_state: &SpecState) -> Vec<LaneData> {
-    let default_lanes = ["Ideas", "Plan", "Done"];
+    let default_lanes = ["Ideas", "Plan", "Spec"];
     let mut lanes: Vec<LaneData> = Vec::new();
 
     // Default lanes first
@@ -2135,7 +2135,7 @@ mod tests {
                     cards: vec![],
                 },
                 LaneData {
-                    name: "Done".to_string(),
+                    name: "Spec".to_string(),
                     cards: vec![],
                 },
             ],
@@ -2143,7 +2143,7 @@ mod tests {
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("Ideas"));
         assert!(rendered.contains("Plan"));
-        assert!(rendered.contains("Done"));
+        assert!(rendered.contains("Spec"));
     }
 
     #[test]

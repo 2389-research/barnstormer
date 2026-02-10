@@ -163,7 +163,7 @@ mod tests {
             pending_question: None,
             undo_stack: Vec::new(),
             last_event_id: 0,
-            lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Done".to_string()],
+            lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
         }
     }
 
