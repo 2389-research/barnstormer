@@ -602,6 +602,23 @@ html, body {
     opacity: 0.7;
 }
 
+/* --- Activity status lines (compact step indicators) --- */
+.activity-status-line {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    padding: 4px 8px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+.activity-status-text {
+    font-style: italic;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* --- Empty state --- */
 .empty-chat {
     display: flex;
@@ -1100,6 +1117,19 @@ html, body {
     margin-top: 4px;
     text-align: right;
 }
+
+/* Chat status lines (compact step indicators) */
+.chat-status-line {
+    align-self: center;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    padding: 4px 12px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+.chat-status-text { font-style: italic; }
+.chat-status-time { font-size: 0.6rem; opacity: 0.7; }
 
 /* Empty state */
 .chat-empty {

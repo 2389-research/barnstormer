@@ -8,6 +8,12 @@
      hx-swap="outerHTML">
     <div class="activity-feed" id="{{ container_id }}-feed">
         {% for entry in transcript %}
+        {% if entry.is_step %}
+        <div class="activity-status-line">
+            <span class="status-badge badge-{{ entry.role_class }}">{{ entry.sender_label }}</span>
+            <span class="activity-status-text">{{ entry.content }}</span>
+        </div>
+        {% else %}
         <div class="message {% if entry.is_human %}message-human{% else %}message-agent{% endif %}">
             <div class="message-bubble {% if entry.is_human %}bubble-human{% else %}bubble-agent{% endif %}">
                 {% if !entry.is_human %}
@@ -19,6 +25,7 @@
                 <div class="message-time">{{ entry.timestamp }}</div>
             </div>
         </div>
+        {% endif %}
         {% endfor %}
         {% if transcript.is_empty() %}
         <div class="empty-chat">

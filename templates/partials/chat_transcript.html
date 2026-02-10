@@ -9,6 +9,12 @@
      hx-swap="outerHTML">
     <div class="chat-messages" id="{{ container_id }}-feed">
         {% for entry in transcript %}
+        {% if entry.is_step %}
+        <div class="chat-status-line">
+            <span class="chat-status-text">{{ entry.sender_label }}: {{ entry.content }}</span>
+            <span class="chat-status-time">{{ entry.timestamp }}</span>
+        </div>
+        {% else %}
         <div class="chat-row {% if entry.is_human %}chat-row-human{% else %}chat-row-agent{% endif %}">
             {% if !entry.is_human %}
             <div class="chat-avatar">
@@ -23,6 +29,7 @@
                 <div class="chat-msg-time">{{ entry.timestamp }}</div>
             </div>
         </div>
+        {% endif %}
         {% endfor %}
         {% if transcript.is_empty() %}
         <div class="chat-empty">
