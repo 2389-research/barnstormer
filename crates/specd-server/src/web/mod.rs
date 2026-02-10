@@ -1877,6 +1877,10 @@ mod tests {
         assert!(rendered.contains("A test document"));
         assert!(rendered.contains("Verify rendering"));
         assert!(rendered.contains("A detailed description"));
+        assert!(
+            rendered.contains("Auto-generated from spec data"),
+            "document should contain auto-generated notice"
+        );
     }
 
     #[test]
@@ -2512,6 +2516,64 @@ mod tests {
         };
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("artifacts-panel"), "should contain artifacts-panel div");
+    }
+
+    #[test]
+    fn artifacts_template_contains_all_content_sections() {
+        let tmpl = ArtifactsTemplate {
+            spec_id: "01HTEST".to_string(),
+            markdown_content: "# My Spec".to_string(),
+            yaml_content: "title: My Spec".to_string(),
+            dot_content: "digraph {}".to_string(),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("id=\"markdown-source\""), "should contain markdown-source section");
+        assert!(rendered.contains("id=\"yaml-source\""), "should contain yaml-source section");
+        assert!(rendered.contains("id=\"dot-source\""), "should contain dot-source section");
+        assert!(rendered.contains("# My Spec"), "should render markdown content");
+        assert!(rendered.contains("title: My Spec"), "should render yaml content");
+        assert!(rendered.contains("digraph {}"), "should render dot content");
+    }
+
+    #[test]
+    fn artifacts_template_contains_download_links() {
+        let tmpl = ArtifactsTemplate {
+            spec_id: "01HTEST".to_string(),
+            markdown_content: "# Test".to_string(),
+            yaml_content: "title: Test".to_string(),
+            dot_content: "digraph {}".to_string(),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("/web/specs/01HTEST/export/markdown"),
+            "should contain markdown download link"
+        );
+        assert!(
+            rendered.contains("/web/specs/01HTEST/export/yaml"),
+            "should contain yaml download link"
+        );
+        assert!(
+            rendered.contains("/web/specs/01HTEST/export/dot"),
+            "should contain dot download link"
+        );
+        assert!(rendered.contains("download=\"spec.md\""), "should have spec.md download attribute");
+        assert!(rendered.contains("download=\"spec.yaml\""), "should have spec.yaml download attribute");
+        assert!(rendered.contains("download=\"spec.dot\""), "should have spec.dot download attribute");
+    }
+
+    #[test]
+    fn artifacts_template_contains_copy_buttons() {
+        let tmpl = ArtifactsTemplate {
+            spec_id: "01HTEST".to_string(),
+            markdown_content: "# Test".to_string(),
+            yaml_content: "title: Test".to_string(),
+            dot_content: "digraph {}".to_string(),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("btn-copy"), "should contain copy buttons with btn-copy class");
+        // There should be 3 copy buttons (one per format)
+        let copy_count = rendered.matches("btn-copy").count();
+        assert_eq!(copy_count, 3, "should have exactly 3 copy buttons, found {}", copy_count);
     }
 
     #[tokio::test]
