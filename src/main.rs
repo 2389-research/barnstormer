@@ -1,5 +1,5 @@
 // ABOUTME: Entry point for the specd binary.
-// ABOUTME: Parses CLI arguments with clap, initializes tracing, and starts the Axum HTTP server.
+// ABOUTME: Parses CLI arguments with clap, recovers specs, spawns actors, and starts the Axum HTTP server.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use specd_server::{AppState, create_router};
+use specd_store::StorageManager;
 
 #[derive(Parser)]
 #[command(name = "specd", about = "Agentic spec builder")]
@@ -36,16 +37,35 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli {
-        Cli::Start { no_open: _ } => {
+        Cli::Start { no_open } => {
             let specd_home = std::env::var("SPECD_HOME")
                 .map(PathBuf::from)
-                .unwrap_or_else(|_| {
-                    dirs_or_default().join(".specd")
-                });
+                .unwrap_or_else(|_| dirs_or_default().join(".specd"));
 
             tracing::info!("SPECD_HOME: {}", specd_home.display());
 
+            // Initialize StorageManager
+            let storage = StorageManager::new(specd_home.clone())
+                .expect("failed to initialize storage manager");
+
+            // Recover all existing specs
+            let recovered_specs = storage
+                .recover_all_specs()
+                .expect("failed to recover specs");
+
+            tracing::info!("recovered {} specs", recovered_specs.len());
+
+            // Create AppState and spawn actors for recovered specs
             let state = Arc::new(AppState::new(specd_home));
+            {
+                let mut actors = state.actors.write().await;
+                for (spec_id, spec_state) in recovered_specs {
+                    let handle = specd_core::spawn(spec_id, spec_state);
+                    actors.insert(spec_id, handle);
+                    tracing::info!("spawned actor for spec {}", spec_id);
+                }
+            }
+
             let app = create_router(state);
 
             let bind_addr: SocketAddr = std::env::var("SPECD_BIND")
@@ -53,7 +73,24 @@ async fn main() {
                 .parse()
                 .expect("SPECD_BIND must be a valid socket address");
 
-            tracing::info!("specd listening on {}", bind_addr);
+            let url = format!("http://{}", bind_addr);
+            tracing::info!("specd listening on {}", url);
+
+            // Open browser unless --no-open was specified
+            if !no_open {
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = std::process::Command::new("open")
+                        .arg(&url)
+                        .spawn();
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    let _ = std::process::Command::new("xdg-open")
+                        .arg(&url)
+                        .spawn();
+                }
+            }
 
             let listener = tokio::net::TcpListener::bind(bind_addr)
                 .await
@@ -64,9 +101,15 @@ async fn main() {
                 .expect("server error");
         }
         Cli::Status => {
-            println!("specd status: checking...");
-            // For v1, just try to hit the health endpoint
-            println!("(status check not yet implemented)");
+            let bind_addr = std::env::var("SPECD_BIND")
+                .unwrap_or_else(|_| "127.0.0.1:7331".to_string());
+
+            println!("specd status: checking {}...", bind_addr);
+
+            match std::net::TcpStream::connect(&bind_addr) {
+                Ok(_) => println!("specd is running on {}", bind_addr),
+                Err(_) => println!("specd is not running on {}", bind_addr),
+            }
         }
     }
 }
