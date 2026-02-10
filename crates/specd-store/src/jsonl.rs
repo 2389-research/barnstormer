@@ -77,6 +77,7 @@ impl JsonlLog {
 
     /// Repair a potentially corrupted JSONL file by keeping only complete,
     /// parseable lines and truncating any partial trailing data.
+    /// Uses atomic temp-file + fsync + rename to prevent data loss on crash.
     /// Returns the count of valid events retained.
     pub fn repair(path: &Path) -> Result<usize, JsonlError> {
         let file = File::open(path)?;
@@ -96,12 +97,16 @@ impl JsonlLog {
 
         let count = valid_lines.len();
 
-        // Rewrite the file with only valid lines
-        let mut file = File::create(path)?;
+        // Write valid lines to a temp file, fsync, then atomically rename
+        let tmp_path = path.with_extension("jsonl.tmp");
+        let mut tmp_file = File::create(&tmp_path)?;
         for line in &valid_lines {
-            writeln!(file, "{}", line)?;
+            writeln!(tmp_file, "{}", line)?;
         }
-        file.sync_all()?;
+        tmp_file.sync_all()?;
+
+        // Atomic rename over the original
+        fs::rename(&tmp_path, path)?;
 
         Ok(count)
     }

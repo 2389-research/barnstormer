@@ -58,11 +58,26 @@ pub async fn submit_command(
         .join(spec_id.to_string())
         .join("events.jsonl");
 
-    if let Ok(mut log) = JsonlLog::open(&log_path) {
-        for event in &events {
-            if let Err(e) = log.append(event) {
-                tracing::error!("failed to persist event: {}", e);
-            }
+    let mut log = match JsonlLog::open(&log_path) {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!("failed to open JSONL log for persistence: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to persist events" })),
+            )
+                .into_response();
+        }
+    };
+
+    for event in &events {
+        if let Err(e) = log.append(event) {
+            tracing::error!("failed to persist event: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to persist events" })),
+            )
+                .into_response();
         }
     }
 
@@ -116,11 +131,26 @@ pub async fn undo(State(state): State<SharedState>, Path(id): Path<String>) -> i
         .join(spec_id.to_string())
         .join("events.jsonl");
 
-    if let Ok(mut log) = JsonlLog::open(&log_path) {
-        for event in &events {
-            if let Err(e) = log.append(event) {
-                tracing::error!("failed to persist undo event: {}", e);
-            }
+    let mut log = match JsonlLog::open(&log_path) {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!("failed to open JSONL log for undo persistence: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to persist undo events" })),
+            )
+                .into_response();
+        }
+    };
+
+    for event in &events {
+        if let Err(e) = log.append(event) {
+            tracing::error!("failed to persist undo event: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "failed to persist undo events" })),
+            )
+                .into_response();
         }
     }
 

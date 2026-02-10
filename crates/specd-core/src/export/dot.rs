@@ -53,7 +53,7 @@ pub fn export_dot(state: &SpecState) -> String {
     for lane in &ordered_lanes {
         if let Some(cards) = cards_by_lane.get(lane.as_str()) {
             for card in cards {
-                let node_id = to_snake_case(&card.title);
+                let node_id = card_node_id(card);
                 let shape = shape_for_card_type(&card.card_type);
                 let mut attrs = format!(
                     "shape={} label=\"{}\"",
@@ -74,17 +74,17 @@ pub fn export_dot(state: &SpecState) -> String {
 
     let ideas_cards: Vec<String> = cards_by_lane
         .get("Ideas")
-        .map(|cards| cards.iter().map(|c| to_snake_case(&c.title)).collect())
+        .map(|cards| cards.iter().map(|c| card_node_id(c)).collect())
         .unwrap_or_default();
 
     let plan_cards: Vec<String> = cards_by_lane
         .get("Plan")
-        .map(|cards| cards.iter().map(|c| to_snake_case(&c.title)).collect())
+        .map(|cards| cards.iter().map(|c| card_node_id(c)).collect())
         .unwrap_or_default();
 
     let done_cards: Vec<String> = cards_by_lane
         .get("Done")
-        .map(|cards| cards.iter().map(|c| to_snake_case(&c.title)).collect())
+        .map(|cards| cards.iter().map(|c| card_node_id(c)).collect())
         .unwrap_or_default();
 
     // start -> Ideas cards
@@ -134,7 +134,7 @@ pub fn export_dot(state: &SpecState) -> String {
                 .map(|cards| {
                     cards
                         .iter()
-                        .map(|c| to_snake_case(&c.title))
+                        .map(|c| card_node_id(c))
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default()
@@ -162,6 +162,16 @@ pub fn export_dot(state: &SpecState) -> String {
 
     writeln!(out, "}}").unwrap();
     out
+}
+
+/// Generate a unique DOT node ID for a card by combining the snake_case title
+/// with the card's ULID. This prevents collisions when multiple cards share a title.
+fn card_node_id(card: &Card) -> String {
+    format!(
+        "{}_{}",
+        to_snake_case(&card.title),
+        card.card_id.to_string().to_lowercase()
+    )
 }
 
 /// Map card type to DOT node shape per spec Section 9.3.
@@ -338,26 +348,36 @@ mod tests {
         let card_b = make_card("task", "Build Feature", "Plan", 1.0, "human");
         let card_c = make_card("decision", "Choose Stack", "Ideas", 2.0, "human");
 
+        let node_a = card_node_id(&card_a);
+        let node_b = card_node_id(&card_b);
+        let node_c = card_node_id(&card_c);
+
         state.cards.insert(card_a.card_id, card_a);
         state.cards.insert(card_b.card_id, card_b);
         state.cards.insert(card_c.card_id, card_c);
 
         let dot = export_dot(&state);
 
-        // Each card should become a node with the correct shape
+        // Each card should become a node with the correct shape and unique ID
+        let expected_a = format!("{} [shape=box label=\"My Idea\"]", node_a);
+        let expected_b = format!("{} [shape=box label=\"Build Feature\"]", node_b);
+        let expected_c = format!("{} [shape=diamond label=\"Choose Stack\"]", node_c);
         assert!(
-            dot.contains("my_idea [shape=box label=\"My Idea\"]"),
-            "Expected my_idea node in:\n{}",
+            dot.contains(&expected_a),
+            "Expected '{}' in:\n{}",
+            expected_a,
             dot
         );
         assert!(
-            dot.contains("build_feature [shape=box label=\"Build Feature\"]"),
-            "Expected build_feature node in:\n{}",
+            dot.contains(&expected_b),
+            "Expected '{}' in:\n{}",
+            expected_b,
             dot
         );
         assert!(
-            dot.contains("choose_stack [shape=diamond label=\"Choose Stack\"]"),
-            "Expected choose_stack node in:\n{}",
+            dot.contains(&expected_c),
+            "Expected '{}' in:\n{}",
+            expected_c,
             dot
         );
     }
@@ -370,6 +390,10 @@ mod tests {
         let card_plan = make_card("plan", "Roadmap", "Plan", 1.0, "human");
         let card_done = make_card("task", "Shipped", "Done", 1.0, "human");
 
+        let idea_id = card_node_id(&card_idea);
+        let plan_id = card_node_id(&card_plan);
+        let done_id = card_node_id(&card_done);
+
         state.cards.insert(card_idea.card_id, card_idea);
         state.cards.insert(card_plan.card_id, card_plan);
         state.cards.insert(card_done.card_id, card_done);
@@ -377,30 +401,38 @@ mod tests {
         let dot = export_dot(&state);
 
         // start -> Ideas cards
+        let start_edge = format!("start -> {}", idea_id);
         assert!(
-            dot.contains("start -> brainstorm"),
-            "Expected start -> brainstorm in:\n{}",
+            dot.contains(&start_edge),
+            "Expected '{}' in:\n{}",
+            start_edge,
             dot
         );
 
         // Ideas -> Plan
+        let idea_plan_edge = format!("{} -> {}", idea_id, plan_id);
         assert!(
-            dot.contains("brainstorm -> roadmap"),
-            "Expected brainstorm -> roadmap in:\n{}",
+            dot.contains(&idea_plan_edge),
+            "Expected '{}' in:\n{}",
+            idea_plan_edge,
             dot
         );
 
         // Plan -> Done
+        let plan_done_edge = format!("{} -> {}", plan_id, done_id);
         assert!(
-            dot.contains("roadmap -> shipped"),
-            "Expected roadmap -> shipped in:\n{}",
+            dot.contains(&plan_done_edge),
+            "Expected '{}' in:\n{}",
+            plan_done_edge,
             dot
         );
 
         // Done -> done sentinel
+        let done_sentinel = format!("{} -> done", done_id);
         assert!(
-            dot.contains("shipped -> done"),
-            "Expected shipped -> done in:\n{}",
+            dot.contains(&done_sentinel),
+            "Expected '{}' in:\n{}",
+            done_sentinel,
             dot
         );
     }
@@ -412,6 +444,10 @@ mod tests {
         let card_assumption = make_card("assumption", "Users Want Speed", "Ideas", 1.0, "human");
         let card_vibes = make_card("vibes", "Good Energy", "Ideas", 2.0, "human");
         let card_open_q = make_card("open_question", "What Stack", "Plan", 1.0, "human");
+
+        let assumption_id = card_node_id(&card_assumption);
+        let vibes_id = card_node_id(&card_vibes);
+        let open_q_id = card_node_id(&card_open_q);
 
         state.cards.insert(card_assumption.card_id, card_assumption);
         state.cards.insert(card_vibes.card_id, card_vibes);
@@ -441,24 +477,34 @@ mod tests {
         );
 
         // Verify shapes: assumption -> hexagon with wait.human
+        let expected_assumption = format!(
+            "{} [shape=hexagon label=\"Users Want Speed\" type=\"wait.human\"]",
+            assumption_id
+        );
         assert!(
-            dot.contains(
-                "users_want_speed [shape=hexagon label=\"Users Want Speed\" type=\"wait.human\"]"
-            ),
+            dot.contains(&expected_assumption),
             "Expected hexagon shape with wait.human for assumption in:\n{}",
             dot
         );
 
         // Verify shapes: vibes -> parallelogram
+        let expected_vibes = format!(
+            "{} [shape=parallelogram label=\"Good Energy\"]",
+            vibes_id
+        );
         assert!(
-            dot.contains("good_energy [shape=parallelogram label=\"Good Energy\"]"),
+            dot.contains(&expected_vibes),
             "Expected parallelogram shape for vibes in:\n{}",
             dot
         );
 
         // Verify shapes: open_question -> hexagon with wait.human
+        let expected_open_q = format!(
+            "{} [shape=hexagon label=\"What Stack\" type=\"wait.human\"]",
+            open_q_id
+        );
         assert!(
-            dot.contains("what_stack [shape=hexagon label=\"What Stack\" type=\"wait.human\"]"),
+            dot.contains(&expected_open_q),
             "Expected hexagon shape with wait.human for open_question in:\n{}",
             dot
         );
@@ -482,7 +528,7 @@ mod tests {
             }
             // For node definition lines, extract the node ID (first word)
             if let Some(node_id) = trimmed.split_whitespace().next() {
-                // Node IDs should be lowercase with underscores only
+                // Node IDs should be lowercase with underscores and digits only
                 assert!(
                     node_id
                         .chars()
@@ -502,25 +548,34 @@ mod tests {
         let card_idea = make_card("idea", "Spark", "Ideas", 1.0, "human");
         let card_done = make_card("task", "Complete", "Done", 1.0, "human");
 
+        let spark_id = card_node_id(&card_idea);
+        let complete_id = card_node_id(&card_done);
+
         state.cards.insert(card_idea.card_id, card_idea);
         state.cards.insert(card_done.card_id, card_done);
 
         let dot = export_dot(&state);
 
         // With no Plan cards, Ideas should connect directly to Done
+        let idea_done_edge = format!("{} -> {}", spark_id, complete_id);
         assert!(
-            dot.contains("spark -> complete"),
-            "Expected spark -> complete in:\n{}",
+            dot.contains(&idea_done_edge),
+            "Expected '{}' in:\n{}",
+            idea_done_edge,
             dot
         );
+        let start_edge = format!("start -> {}", spark_id);
         assert!(
-            dot.contains("start -> spark"),
-            "Expected start -> spark in:\n{}",
+            dot.contains(&start_edge),
+            "Expected '{}' in:\n{}",
+            start_edge,
             dot
         );
+        let done_sentinel = format!("{} -> done", complete_id);
         assert!(
-            dot.contains("complete -> done"),
-            "Expected complete -> done in:\n{}",
+            dot.contains(&done_sentinel),
+            "Expected '{}' in:\n{}",
+            done_sentinel,
             dot
         );
     }
@@ -534,6 +589,46 @@ mod tests {
         assert_eq!(to_snake_case("with-dashes"), "with_dashes");
         assert_eq!(to_snake_case("  spaces  "), "spaces");
         assert_eq!(to_snake_case("Special!@#Chars"), "special_chars");
+    }
+
+    #[test]
+    fn duplicate_titles_produce_distinct_nodes() {
+        let mut state = make_state_with_core();
+
+        let card_a = make_card("idea", "Cache Layer", "Ideas", 1.0, "human");
+        let card_b = make_card("idea", "Cache Layer", "Ideas", 2.0, "human");
+        // Ensure distinct card_ids
+        assert_ne!(card_a.card_id, card_b.card_id);
+
+        let id_a = card_a.card_id;
+        let id_b = card_b.card_id;
+        state.cards.insert(id_a, card_a);
+        state.cards.insert(id_b, card_b);
+
+        let dot = export_dot(&state);
+
+        // Both cards should have label "Cache Layer" but different node IDs
+        let node_lines: Vec<&str> = dot
+            .lines()
+            .filter(|l| l.contains("label=\"Cache Layer\""))
+            .collect();
+        assert_eq!(
+            node_lines.len(),
+            2,
+            "Expected 2 nodes with label 'Cache Layer', found {} in:\n{}",
+            node_lines.len(),
+            dot
+        );
+
+        // Extract the node IDs and verify they are distinct
+        let node_ids: Vec<&str> = node_lines
+            .iter()
+            .map(|line| line.trim().split_whitespace().next().unwrap())
+            .collect();
+        assert_ne!(
+            node_ids[0], node_ids[1],
+            "Node IDs should be distinct for cards with same title"
+        );
     }
 
     #[test]

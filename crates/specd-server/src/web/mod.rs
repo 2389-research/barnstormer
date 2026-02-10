@@ -77,6 +77,14 @@ pub async fn create_spec(
 ) -> impl IntoResponse {
     let spec_id = Ulid::new();
     let spec_dir = state.specd_home.join("specs").join(spec_id.to_string());
+    if let Err(e) = std::fs::create_dir_all(&spec_dir) {
+        tracing::error!("failed to create spec directory: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html("<p class=\"error-msg\">Failed to create spec directory.</p>".to_string()),
+        )
+            .into_response();
+    }
     let log_path = spec_dir.join("events.jsonl");
 
     let mut log = match JsonlLog::open(&log_path) {

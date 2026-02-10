@@ -64,6 +64,14 @@ pub async fn create_spec(
 
     // Create directory structure for this spec
     let spec_dir = state.specd_home.join("specs").join(spec_id.to_string());
+    if let Err(e) = std::fs::create_dir_all(&spec_dir) {
+        tracing::error!("failed to create spec directory: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "failed to create spec directory" })),
+        )
+            .into_response();
+    }
     let log_path = spec_dir.join("events.jsonl");
 
     // Initialize JSONL log

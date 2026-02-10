@@ -252,10 +252,21 @@ impl SwarmOrchestrator {
     }
 
     /// Update an agent's context from the current actor state.
+    /// If `question_pending` is provided, syncs the atomic flag from actor state.
     pub async fn refresh_context(
         runner: &mut AgentRunner,
         actor: &SpecActorHandle,
         event_rx: &mut broadcast::Receiver<Event>,
+    ) {
+        Self::refresh_context_with_flag(runner, actor, event_rx, None).await;
+    }
+
+    /// Update an agent's context and optionally sync the question_pending flag.
+    pub async fn refresh_context_with_flag(
+        runner: &mut AgentRunner,
+        actor: &SpecActorHandle,
+        event_rx: &mut broadcast::Receiver<Event>,
+        question_pending: Option<&AtomicBool>,
     ) {
         // Drain any buffered events
         let mut events = Vec::new();
@@ -275,6 +286,11 @@ impl SwarmOrchestrator {
                 state.cards.len(),
                 state.pending_question.is_some()
             );
+        }
+
+        // Sync question_pending flag from actor state
+        if let Some(flag) = question_pending {
+            flag.store(state.pending_question.is_some(), Ordering::Relaxed);
         }
 
         // Copy recent transcript
@@ -593,6 +609,61 @@ mod tests {
 
         // StubRuntime returns Done, so agent should idle
         assert!(!cont);
+    }
+
+    #[tokio::test]
+    async fn question_pending_cleared_after_answer() {
+        let (spec_id, actor) = make_test_actor();
+        let question_pending = AtomicBool::new(false);
+
+        // Ask a question
+        let question_id = Ulid::new();
+        let question = specd_core::transcript::UserQuestion::Freeform {
+            question_id,
+            question: "What color?".to_string(),
+            placeholder: None,
+            validation_hint: None,
+        };
+
+        SwarmOrchestrator::process_action(
+            &actor,
+            AgentAction::AskUser(question),
+            "test-agent",
+            &question_pending,
+        )
+        .await;
+
+        assert!(
+            question_pending.load(Ordering::SeqCst),
+            "question_pending should be true after AskUser"
+        );
+
+        // Answer the question
+        actor
+            .send_command(Command::AnswerQuestion {
+                question_id,
+                answer: "Blue".to_string(),
+            })
+            .await
+            .unwrap();
+
+        // refresh_context_with_flag should sync the flag from actor state
+        let mut event_rx = actor.subscribe();
+        let mut runner = AgentRunner::new(spec_id, AgentRole::Manager, Box::new(StubRuntime));
+
+        SwarmOrchestrator::refresh_context_with_flag(
+            &mut runner,
+            &actor,
+            &mut event_rx,
+            Some(&question_pending),
+        )
+        .await;
+
+        // After the answer, the flag should be cleared
+        assert!(
+            !question_pending.load(Ordering::SeqCst),
+            "question_pending should be false after answer and refresh"
+        );
     }
 
     #[tokio::test]

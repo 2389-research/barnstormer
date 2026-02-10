@@ -124,20 +124,35 @@ impl AgentContext {
     /// If the rolling summary exceeds the character cap, truncate older content
     /// and prepend a marker indicating that earlier context was compacted.
     pub fn compact_summary(&mut self) {
-        if self.rolling_summary.len() <= ROLLING_SUMMARY_CAP {
+        let char_count = self.rolling_summary.chars().count();
+        if char_count <= ROLLING_SUMMARY_CAP {
             return;
         }
 
         // Keep the tail portion that fits within the cap, leaving room for the prefix.
         let prefix = "[earlier context compacted] ";
-        let budget = ROLLING_SUMMARY_CAP.saturating_sub(prefix.len());
+        let prefix_chars = prefix.chars().count();
+        let budget = ROLLING_SUMMARY_CAP.saturating_sub(prefix_chars);
+
+        // Take the last `budget` characters using char-safe indexing.
+        let skip = char_count.saturating_sub(budget);
+        let tail: String = self.rolling_summary.chars().skip(skip).collect();
 
         // Find a clean break point (semicolon boundary) within the tail.
-        let tail = &self.rolling_summary[self.rolling_summary.len().saturating_sub(budget)..];
         let clean_start = tail.find("; ").map(|i| i + 2).unwrap_or(0);
         let trimmed = &tail[clean_start..];
 
         self.rolling_summary = format!("{}{}", prefix, trimmed);
+    }
+}
+
+/// Truncate a string to at most `max_chars` characters, appending "..." if truncated.
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max_chars).collect();
+        format!("{}...", truncated)
     }
 }
 
@@ -171,20 +186,12 @@ fn describe_event_payload(payload: &EventPayload) -> String {
             format!("card {} deleted", card_id)
         }
         EventPayload::TranscriptAppended { message } => {
-            let preview = if message.content.len() > 50 {
-                format!("{}...", &message.content[..50])
-            } else {
-                message.content.clone()
-            };
+            let preview = truncate_chars(&message.content, 50);
             format!("{} said: {}", message.sender, preview)
         }
         EventPayload::QuestionAsked { .. } => "question asked to user".to_string(),
         EventPayload::QuestionAnswered { answer, .. } => {
-            let preview = if answer.len() > 50 {
-                format!("{}...", &answer[..50])
-            } else {
-                answer.clone()
-            };
+            let preview = truncate_chars(answer, 50);
             format!("user answered: {}", preview)
         }
         EventPayload::AgentStepStarted {
@@ -454,6 +461,68 @@ mod tests {
             restored_brainstormer.rolling_summary,
             "Brainstormer explored ideas"
         );
+    }
+
+    #[test]
+    fn compact_summary_handles_non_ascii() {
+        let spec_id = Ulid::new();
+        let mut ctx = AgentContext::new(spec_id, "manager-1".to_string(), AgentRole::Manager);
+
+        // Build a summary with multi-byte characters (emoji, CJK) that exceeds the cap.
+        // Each emoji is 4 bytes. Repeating enough to exceed ROLLING_SUMMARY_CAP.
+        let emoji_entry = "Event #1: \u{1F680}\u{1F525}\u{2728} launched \u{4e16}\u{754c}";
+        for _ in 0..200 {
+            if ctx.rolling_summary.is_empty() {
+                ctx.rolling_summary = emoji_entry.to_string();
+            } else {
+                ctx.rolling_summary.push_str("; ");
+                ctx.rolling_summary.push_str(emoji_entry);
+            }
+        }
+
+        assert!(ctx.rolling_summary.len() > ROLLING_SUMMARY_CAP);
+
+        // This must not panic on non-ASCII char boundaries
+        ctx.compact_summary();
+
+        assert!(ctx.rolling_summary.chars().count() <= ROLLING_SUMMARY_CAP);
+        assert!(
+            ctx.rolling_summary
+                .starts_with("[earlier context compacted]")
+        );
+    }
+
+    #[test]
+    fn describe_event_payload_non_ascii_content() {
+        // Verify describe_event_payload doesn't panic on multi-byte content.
+        // Build a message with 60 emoji characters to exceed the 50-char truncation limit.
+        let emoji_content: String = (0..60).map(|i| {
+            // Cycle through a few multi-byte emoji codepoints
+            let codepoints = ['\u{1F600}', '\u{1F525}', '\u{2728}', '\u{1F680}', '\u{1F4A5}'];
+            codepoints[i % codepoints.len()]
+        }).collect();
+        let message = specd_core::transcript::TranscriptMessage::new(
+            "agent-1".to_string(),
+            emoji_content,
+        );
+        let payload = EventPayload::TranscriptAppended { message };
+        // Must not panic
+        let desc = describe_event_payload(&payload);
+        assert!(desc.contains("agent-1 said:"));
+        // Truncated descriptions should end with "..."
+        assert!(desc.ends_with("..."));
+    }
+
+    #[test]
+    fn describe_event_payload_non_ascii_answer() {
+        let payload = EventPayload::QuestionAnswered {
+            question_id: Ulid::new(),
+            answer: "\u{4e16}\u{754c}\u{4f60}\u{597d}".repeat(20), // CJK characters, >50 chars
+        };
+        // Must not panic
+        let desc = describe_event_payload(&payload);
+        assert!(desc.contains("user answered:"));
+        assert!(desc.ends_with("..."));
     }
 
     #[test]

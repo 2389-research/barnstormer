@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use serde::Serialize;
+use serde::ser::Error as SerError;
 
 use crate::card::Card;
 use crate::state::SpecState;
@@ -59,7 +60,7 @@ pub fn export_yaml(state: &SpecState) -> Result<String, serde_yaml::Error> {
     let core = state
         .core
         .as_ref()
-        .expect("SpecState must have a core to export YAML");
+        .ok_or_else(|| serde_yaml::Error::custom("SpecState must have a core to export YAML"))?;
 
     let cards_by_lane = group_cards_by_lane(state);
     let ordered_lanes = ordered_lane_names(state, &cards_by_lane);
@@ -362,6 +363,14 @@ mod tests {
         assert!(!yaml_str.contains("success_criteria:"));
         assert!(!yaml_str.contains("risks:"));
         assert!(!yaml_str.contains("notes:"));
+    }
+
+    #[test]
+    fn export_yaml_returns_err_when_core_is_none() {
+        let state = SpecState::new();
+        assert!(state.core.is_none());
+        let result = export_yaml(&state);
+        assert!(result.is_err(), "export_yaml should return Err when core is None");
     }
 
     #[test]

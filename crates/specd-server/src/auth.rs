@@ -58,8 +58,8 @@ where
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let path = req.uri().path().to_string();
 
-        // Only authenticate /api/* routes
-        if !path.starts_with("/api/") {
+        // Only authenticate /api and /api/* routes
+        if !(path == "/api" || path.starts_with("/api/")) {
             let mut inner = self.inner.clone();
             return Box::pin(async move { inner.call(req).await });
         }
@@ -176,6 +176,25 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn auth_middleware_protects_api_without_trailing_slash() {
+        let app = Router::new()
+            .route("/api", get(|| async { "api root" }))
+            .route("/api/specs", get(|| async { "specs" }))
+            .layer(AuthLayer::new("test-token-123".to_string()));
+
+        let resp = app
+            .oneshot(Request::get("/api").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "/api should be protected by auth"
+        );
     }
 
     #[tokio::test]
