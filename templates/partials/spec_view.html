@@ -1,57 +1,62 @@
-<div class="spec-header">
-    <h1>{{ title }}</h1>
-    <p class="one-liner">{{ one_liner }}</p>
-</div>
+{# ABOUTME: Mission control compositor: command bar + canvas + mission strip. #}
+{# ABOUTME: Loaded into #workspace when a spec is selected; default view is the document canvas. #}
 
-<div class="tab-bar">
-    <button class="tab active" data-tab="chat"
-            hx-get="/web/specs/{{ spec_id }}/chat-panel"
-            hx-target="#spec-content"
-            hx-swap="innerHTML">
-        Chat
-    </button>
-    <button class="tab" data-tab="board"
-            hx-get="/web/specs/{{ spec_id }}/board"
-            hx-target="#spec-content"
-            hx-swap="innerHTML">
-        Board
-    </button>
-    <button class="tab" data-tab="document"
-            hx-get="/web/specs/{{ spec_id }}/document"
-            hx-target="#spec-content"
-            hx-swap="innerHTML">
-        Document
-    </button>
-    <button class="tab" data-tab="diagram"
-            hx-get="/web/specs/{{ spec_id }}/diagram"
-            hx-target="#spec-content"
-            hx-swap="innerHTML">
-        Diagram
-    </button>
-    <button class="tab" data-tab="artifacts"
-            hx-get="/web/specs/{{ spec_id }}/artifacts"
-            hx-target="#spec-content"
-            hx-swap="innerHTML">
-        Artifacts
-    </button>
-</div>
+<header class="command-bar">
+    <div class="command-bar-left">
+        <span class="command-bar-diamond">&#9670;</span>
+        <h1 class="command-bar-title">{{ title }}</h1>
+        <span class="command-bar-oneliner">{{ one_liner }}</span>
+    </div>
+    <div class="view-toggles">
+        <button class="view-toggle active" data-view="document"
+                hx-get="/web/specs/{{ spec_id }}/document"
+                hx-target="#canvas" hx-swap="innerHTML">&#128196;</button>
+        <button class="view-toggle" data-view="board"
+                hx-get="/web/specs/{{ spec_id }}/board"
+                hx-target="#canvas" hx-swap="innerHTML">&#128451;</button>
+        <button class="view-toggle" data-view="diagram"
+                hx-get="/web/specs/{{ spec_id }}/diagram"
+                hx-target="#canvas" hx-swap="innerHTML">&#9672;</button>
+    </div>
+    <div class="command-bar-right">
+        <div id="agent-leds" hx-get="/web/specs/{{ spec_id }}/agents/leds"
+             hx-trigger="load" hx-swap="innerHTML"></div>
+        <div id="agent-controls" hx-get="/web/specs/{{ spec_id }}/agents/status"
+             hx-trigger="load" hx-swap="innerHTML"></div>
+        <a href="/web/specs/{{ spec_id }}/artifacts" hx-get="/web/specs/{{ spec_id }}/artifacts"
+           hx-target="#canvas" hx-swap="innerHTML" class="btn btn-sm" title="Artifacts">&#8615;</a>
+    </div>
+</header>
 
-<div id="spec-content"
-     hx-get="/web/specs/{{ spec_id }}/chat-panel"
-     hx-trigger="load"
-     hx-swap="innerHTML">
-</div>
+<main class="canvas" id="canvas"
+      hx-get="/web/specs/{{ spec_id }}/document"
+      hx-trigger="load" hx-swap="innerHTML">
+</main>
+
+<footer class="mission-strip" id="mission-strip"
+        hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
+    <div id="mission-ticker"
+         hx-trigger="sse:transcript_appended, sse:question_asked, sse:question_answered, sse:agent_step_started, sse:agent_step_finished"
+         hx-get="/web/specs/{{ spec_id }}/ticker"
+         hx-target="#mission-ticker" hx-swap="innerHTML">
+    </div>
+    <form class="mission-input" hx-post="/web/specs/{{ spec_id }}/chat"
+          hx-target="#mission-ticker" hx-swap="innerHTML"
+          hx-on::after-request="this.reset()">
+        <span class="prompt-prefix">&gt;</span>
+        <input type="text" name="message" placeholder="Direct the agents..." autocomplete="off" required>
+        <button type="submit" class="btn btn-send">&#9166;</button>
+    </form>
+</footer>
 
 <script>
-    // Load the activity panel into the right rail when a spec is viewed
-    document.getElementById('right-rail').innerHTML = '<div class="rail-header"><h2>Activity</h2></div><div hx-get="/web/specs/{{ spec_id }}/activity" hx-trigger="load" hx-swap="innerHTML" id="activity-container"></div>';
-    htmx.process(document.getElementById('right-rail'));
-
-    // Track active tab highlighting
-    document.querySelectorAll('.tab-bar .tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-            document.querySelectorAll('.tab-bar .tab').forEach(t => t.classList.remove('active'));
-            tab.classList.add('active');
+    // View toggle active state management
+    document.querySelectorAll('.view-toggles .view-toggle').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('.view-toggles .view-toggle').forEach(function(b) {
+                b.classList.remove('active');
+            });
+            btn.classList.add('active');
         });
     });
 </script>
