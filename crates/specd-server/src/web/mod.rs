@@ -1394,6 +1394,7 @@ pub async fn answer_question(
     let spec_state = handle.read_state().await;
 
     let is_chat = container_id == "chat-transcript";
+    let is_ticker = container_id == "mission-ticker";
 
     let transcript: Vec<TranscriptEntry> = spec_state
         .transcript
@@ -1402,7 +1403,25 @@ pub async fn answer_question(
         .map(to_transcript_entry)
         .collect();
 
-    if is_chat {
+    if is_ticker {
+        // For mission ticker, show only last 10 entries
+        let ticker_entries: Vec<TranscriptEntry> = spec_state
+            .transcript
+            .iter()
+            .rev()
+            .take(10)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(to_transcript_entry)
+            .collect();
+        MissionTickerTemplate {
+            spec_id: id,
+            ticker_entries,
+            pending_question: None,
+        }
+        .into_response()
+    } else if is_chat {
         ChatTranscriptTemplate {
             spec_id: id,
             container_id,
@@ -1528,6 +1547,7 @@ pub async fn chat(
     let spec_state = handle.read_state().await;
 
     let is_chat = container_id == "chat-transcript";
+    let is_ticker = container_id == "mission-ticker";
 
     let transcript: Vec<TranscriptEntry> = spec_state
         .transcript
@@ -1538,7 +1558,25 @@ pub async fn chat(
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
-    if is_chat {
+    if is_ticker {
+        // For mission ticker, show only last 10 entries
+        let ticker_entries: Vec<TranscriptEntry> = spec_state
+            .transcript
+            .iter()
+            .rev()
+            .take(10)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(to_transcript_entry)
+            .collect();
+        MissionTickerTemplate {
+            spec_id: id,
+            ticker_entries,
+            pending_question,
+        }
+        .into_response()
+    } else if is_chat {
         ChatTranscriptTemplate {
             spec_id: id,
             container_id,
