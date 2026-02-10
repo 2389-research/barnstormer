@@ -1,5 +1,5 @@
-{# ABOUTME: Full-width chat panel rendered as a main content tab. #}
-{# ABOUTME: Distinct layout from the right-rail activity feed — larger bubbles, centered, chat-app feel. #}
+{# ABOUTME: Full-width chat panel available as a secondary canvas view. #}
+{# ABOUTME: Distinct layout from the mission ticker — larger bubbles, avatars, centered, chat-app feel. #}
 
 <div class="chat-panel" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
     {% include "partials/chat_transcript.html" %}
