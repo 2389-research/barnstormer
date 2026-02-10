@@ -737,6 +737,42 @@ pub enum QuestionData {
     },
 }
 
+/// Convert a core UserQuestion into the template-friendly QuestionData.
+fn question_to_view_data(q: &specd_core::UserQuestion) -> QuestionData {
+    match q {
+        specd_core::UserQuestion::Boolean {
+            question_id,
+            question,
+            default,
+        } => QuestionData::Boolean {
+            question_id: question_id.to_string(),
+            question: question.clone(),
+            default: *default,
+        },
+        specd_core::UserQuestion::MultipleChoice {
+            question_id,
+            question,
+            choices,
+            allow_multi,
+        } => QuestionData::MultipleChoice {
+            question_id: question_id.to_string(),
+            question: question.clone(),
+            choices: choices.clone(),
+            allow_multi: *allow_multi,
+        },
+        specd_core::UserQuestion::Freeform {
+            question_id,
+            question,
+            placeholder,
+            ..
+        } => QuestionData::Freeform {
+            question_id: question_id.to_string(),
+            question: question.clone(),
+            placeholder: placeholder.clone().unwrap_or_default(),
+        },
+    }
+}
+
 /// Activity panel template.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/activity.html")]
@@ -790,38 +826,7 @@ pub async fn activity(
         })
         .collect();
 
-    let pending_question = spec_state.pending_question.as_ref().map(|q| match q {
-        specd_core::UserQuestion::Boolean {
-            question_id,
-            question,
-            default,
-        } => QuestionData::Boolean {
-            question_id: question_id.to_string(),
-            question: question.clone(),
-            default: *default,
-        },
-        specd_core::UserQuestion::MultipleChoice {
-            question_id,
-            question,
-            choices,
-            allow_multi,
-        } => QuestionData::MultipleChoice {
-            question_id: question_id.to_string(),
-            question: question.clone(),
-            choices: choices.clone(),
-            allow_multi: *allow_multi,
-        },
-        specd_core::UserQuestion::Freeform {
-            question_id,
-            question,
-            placeholder,
-            ..
-        } => QuestionData::Freeform {
-            question_id: question_id.to_string(),
-            question: question.clone(),
-            placeholder: placeholder.clone().unwrap_or_default(),
-        },
-    });
+    let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
     ActivityTemplate {
         spec_id: id,
@@ -866,38 +871,7 @@ pub async fn activity_transcript(
         })
         .collect();
 
-    let pending_question = spec_state.pending_question.as_ref().map(|q| match q {
-        specd_core::UserQuestion::Boolean {
-            question_id,
-            question,
-            default,
-        } => QuestionData::Boolean {
-            question_id: question_id.to_string(),
-            question: question.clone(),
-            default: *default,
-        },
-        specd_core::UserQuestion::MultipleChoice {
-            question_id,
-            question,
-            choices,
-            allow_multi,
-        } => QuestionData::MultipleChoice {
-            question_id: question_id.to_string(),
-            question: question.clone(),
-            choices: choices.clone(),
-            allow_multi: *allow_multi,
-        },
-        specd_core::UserQuestion::Freeform {
-            question_id,
-            question,
-            placeholder,
-            ..
-        } => QuestionData::Freeform {
-            question_id: question_id.to_string(),
-            question: question.clone(),
-            placeholder: placeholder.clone().unwrap_or_default(),
-        },
-    });
+    let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
     ActivityTranscriptTemplate {
         spec_id: id,
@@ -1074,38 +1048,7 @@ pub async fn chat(
         })
         .collect();
 
-    let pending_question = spec_state.pending_question.as_ref().map(|q| match q {
-        specd_core::UserQuestion::Boolean {
-            question_id,
-            question,
-            default,
-        } => QuestionData::Boolean {
-            question_id: question_id.to_string(),
-            question: question.clone(),
-            default: *default,
-        },
-        specd_core::UserQuestion::MultipleChoice {
-            question_id,
-            question,
-            choices,
-            allow_multi,
-        } => QuestionData::MultipleChoice {
-            question_id: question_id.to_string(),
-            question: question.clone(),
-            choices: choices.clone(),
-            allow_multi: *allow_multi,
-        },
-        specd_core::UserQuestion::Freeform {
-            question_id,
-            question,
-            placeholder,
-            ..
-        } => QuestionData::Freeform {
-            question_id: question_id.to_string(),
-            question: question.clone(),
-            placeholder: placeholder.clone().unwrap_or_default(),
-        },
-    });
+    let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
     ActivityTemplate {
         spec_id: id,
@@ -1449,22 +1392,27 @@ pub fn spawn_event_persister(
         .join("events.jsonl");
 
     tokio::spawn(async move {
+        let mut log = match JsonlLog::open(&log_path) {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::error!(
+                    "event persister failed to open log for spec {} at {}: {}",
+                    spec_id,
+                    log_path.display(),
+                    e
+                );
+                return;
+            }
+        };
+
         loop {
             match rx.recv().await {
                 Ok(event) => {
-                    if let Ok(mut log) = JsonlLog::open(&log_path) {
-                        if let Err(e) = log.append(&event) {
-                            tracing::error!(
-                                "event persister failed to write event for spec {}: {}",
-                                spec_id,
-                                e
-                            );
-                        }
-                    } else {
+                    if let Err(e) = log.append(&event) {
                         tracing::error!(
-                            "event persister failed to open log for spec {} at {}",
+                            "event persister failed to write event for spec {}: {}",
                             spec_id,
-                            log_path.display()
+                            e
                         );
                     }
                 }
