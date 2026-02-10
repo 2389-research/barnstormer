@@ -69,16 +69,33 @@ pub async fn create_spec_form() -> CreateSpecFormTemplate {
 /// Form data for creating a new spec.
 #[derive(Deserialize)]
 pub struct CreateSpecForm {
-    pub title: String,
-    pub one_liner: String,
-    pub goal: String,
+    pub description: String,
 }
 
-/// POST /web/specs - Create a spec from form data, return updated spec list.
+/// Extract a placeholder title from free-text description.
+/// Takes the first sentence (ending in . ! ?) or first 60 chars, whichever is shorter.
+fn extract_placeholder_title(description: &str) -> String {
+    let trimmed = description.trim();
+    if trimmed.is_empty() {
+        return String::from("Untitled Spec");
+    }
+    let end = trimmed
+        .find(['.', '!', '?'])
+        .map(|i| i + 1)
+        .unwrap_or(trimmed.len())
+        .min(60);
+    let mut title = trimmed[..end].to_string();
+    if title.len() < trimmed.len() && !title.ends_with(['.', '!', '?']) {
+        title.push_str("...");
+    }
+    title
+}
+
+/// POST /web/specs - Create a spec from free-text description, return spec view.
 pub async fn create_spec(
     State(state): State<SharedState>,
     Form(form): Form<CreateSpecForm>,
-) -> impl IntoResponse {
+) -> Response {
     let spec_id = Ulid::new();
     let spec_dir = state.specd_home.join("specs").join(spec_id.to_string());
     if let Err(e) = std::fs::create_dir_all(&spec_dir) {
@@ -106,9 +123,9 @@ pub async fn create_spec(
     let handle = spawn(spec_id, SpecState::new());
     let events = match handle
         .send_command(Command::CreateSpec {
-            title: form.title,
-            one_liner: form.one_liner,
-            goal: form.goal,
+            title: extract_placeholder_title(&form.description),
+            one_liner: String::new(),
+            goal: String::new(),
         })
         .await
     {
@@ -132,6 +149,27 @@ pub async fn create_spec(
         }
     }
 
+    // Append the user's free-text description to the transcript so the
+    // manager agent can read it and parse it into structured fields.
+    let transcript_events = match handle
+        .send_command(Command::AppendTranscript {
+            sender: "human".to_string(),
+            content: form.description,
+        })
+        .await
+    {
+        Ok(events) => events,
+        Err(e) => {
+            tracing::error!("failed to append transcript: {}", e);
+            vec![]
+        }
+    };
+    for event in &transcript_events {
+        if let Err(e) = log.append(event) {
+            tracing::error!("failed to persist transcript event: {}", e);
+        }
+    }
+
     // Subscribe the event persister BEFORE inserting the actor and starting
     // agents so it catches all subsequent events (agent-produced, etc.).
     // The CreateSpec events above were already persisted inline.
@@ -148,22 +186,41 @@ pub async fn create_spec(
         }
     }
 
-    // Return the updated spec list
-    let actors = state.actors.read().await;
-    let mut specs = Vec::new();
-    for (sid, h) in actors.iter() {
-        let ss = h.read_state().await;
-        if let Some(ref core) = ss.core {
-            specs.push(SpecSummary {
-                spec_id: sid.to_string(),
-                title: core.title.clone(),
-                one_liner: core.one_liner.clone(),
-                updated_at: core.updated_at.to_rfc3339(),
-            });
+    // Return the spec view so HTMX navigates directly into the new spec
+    let spec_state = {
+        let actors = state.actors.read().await;
+        match actors.get(&spec_id) {
+            Some(h) => h.read_state().await.clone(),
+            None => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Html("<p class=\"error-msg\">Spec created but not found.</p>".to_string()),
+                )
+                    .into_response();
+            }
         }
-    }
+    };
 
-    SpecListTemplate { specs }.into_response()
+    let lanes = cards_by_lane(&spec_state);
+    let core = spec_state.core.as_ref().unwrap();
+    let spec_id_str = spec_id.to_string();
+
+    let mut response = SpecViewTemplate {
+        spec_id: spec_id_str.clone(),
+        title: core.title.clone(),
+        one_liner: core.one_liner.clone(),
+        goal: core.goal.clone(),
+        lanes,
+    }
+    .into_response();
+
+    // Set HX-Push-Url so the browser URL updates to the spec view
+    response.headers_mut().insert(
+        axum::http::HeaderName::from_static("hx-push-url"),
+        axum::http::HeaderValue::from_str(&format!("/web/specs/{}", spec_id_str)).unwrap(),
+    );
+
+    response
 }
 
 /// Helper to parse a ULID from a path string, returning an error response on failure.
