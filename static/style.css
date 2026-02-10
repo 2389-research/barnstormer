@@ -1,5 +1,5 @@
-/* ABOUTME: Core stylesheet for the specd web UI — "Studio After Hours" aesthetic. */
-/* ABOUTME: Dark warm palette, chat-bubble activity panel, two-panel layout with Bricolage Grotesque + DM Sans. */
+/* ABOUTME: Core stylesheet for the specd web UI — warm light palette. */
+/* ABOUTME: Cream/parchment tones, DM Serif Display headings + DM Sans body, mission control layout. */
 
 /* --- Reset & base --- */
 *, *::before, *::after {
@@ -9,38 +9,40 @@
 }
 
 :root {
-    --bg-primary: #1C1C28;
-    --bg-secondary: #242436;
-    --bg-surface: #2E2E44;
-    --bg-card: #282840;
-    --text-primary: #E8E4DD;
-    --text-secondary: #9D9BB0;
-    --text-muted: #6C6A82;
-    --accent: #E06B74;
-    --accent-hover: #E8848C;
-    --border: #3A3A52;
-    --border-subtle: #32324A;
-    --success: #5CB08E;
-    --warning: #E0B060;
-    --danger: #E06B74;
+    /* Warm light palette */
+    --bg-primary: hsl(40, 20%, 97%);        /* #F7F5F2 warm off-white */
+    --bg-secondary: hsl(30, 12%, 93%);      /* #EDE9E4 warm light gray */
+    --bg-surface: hsl(0, 0%, 100%);         /* #FFFFFF white */
+    --bg-card: hsl(0, 0%, 100%);            /* #FFFFFF white */
+    --text-primary: hsl(20, 14%, 12%);      /* #231F1B warm near-black */
+    --text-secondary: hsl(20, 10%, 30%);    /* #4A4340 warm dark gray */
+    --text-muted: hsl(20, 6%, 52%);         /* #8A8480 warm medium gray */
+    --accent: hsl(30, 12%, 91%);            /* #E8E4DF warm accent */
+    --accent-hover: hsl(30, 12%, 85%);      /* slightly darker */
+    --border: hsl(30, 10%, 90%);            /* #E6E2DD warm border */
+    --border-subtle: hsl(30, 10%, 93%);     /* #EDEBE8 lighter border */
+    --success: hsl(162, 30%, 48%);          /* teal green */
+    --warning: hsl(38, 50%, 55%);           /* warm amber */
+    --danger: hsl(0, 60%, 50%);             /* red */
 
-    /* Chat-specific colors */
-    --human-bg: #3D3328;
-    --human-border: #5A4A38;
-    --human-accent: #D4A07A;
-    --agent-bg: #252A3A;
-    --agent-border: #384258;
-    --agent-accent: #6BA3BE;
+    /* Role/agent colors */
+    --badge-manager: hsl(20, 14%, 12%);     /* dark - orchestrator */
+    --badge-brainstormer: hsl(162, 30%, 48%); /* teal - researcher */
+    --badge-planner: hsl(250, 30%, 55%);    /* purple - architect */
+    --badge-dot_generator: hsl(162, 30%, 48%);
+    --badge-critic: hsl(38, 50%, 55%);
+    --badge-agent: hsl(20, 6%, 52%);
 
-    /* Role badge colors */
-    --badge-manager: #B07FD0;
-    --badge-brainstormer: #D4A07A;
-    --badge-planner: #6BA3BE;
-    --badge-dot_generator: #5CB08E;
-    --badge-critic: #E0B060;
-    --badge-agent: #9D9BB0;
+    /* Chat-specific colors — lighter, warmer versions */
+    --human-bg: hsl(30, 12%, 93%);          /* secondary bg for human messages */
+    --human-border: hsl(30, 10%, 90%);
+    --human-accent: hsl(20, 14%, 12%);      /* dark for human accent */
+    --agent-bg: hsl(0, 0%, 100%);           /* white for agent messages */
+    --agent-border: hsl(30, 10%, 90%);
+    --agent-accent: hsl(250, 30%, 55%);     /* purple for agent accent */
 
-    --nav-width: 180px;
+    --nav-width: 220px;
+    --chat-rail-width: 380px;
     --spacing-xs: 4px;
     --spacing-sm: 8px;
     --spacing-md: 16px;
@@ -49,8 +51,9 @@
     --radius: 8px;
     --radius-lg: 12px;
     --radius-bubble: 16px;
+    --radius-xl: 16px;
 
-    --font-display: 'Bricolage Grotesque', system-ui, sans-serif;
+    --font-display: 'DM Serif Display', Georgia, serif;
     --font-body: 'DM Sans', system-ui, sans-serif;
 }
 
@@ -85,6 +88,14 @@ html, body {
     display: flex;
     flex-direction: column;
     height: 100vh;
+    overflow: hidden;
+}
+
+.spec-compositor {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
 }
 
