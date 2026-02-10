@@ -112,7 +112,7 @@ mod tests {
             },
             Command::MoveCard {
                 card_id: Ulid::new(),
-                lane: "Done".to_string(),
+                lane: "Spec".to_string(),
                 order: 2.0,
                 updated_by: "human".to_string(),
             },

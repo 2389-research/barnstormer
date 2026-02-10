@@ -583,10 +583,10 @@ mod tests {
             (
                 EventPayload::CardMoved {
                     card_id,
-                    lane: "Done".to_string(),
+                    lane: "Spec".to_string(),
                     order: 1.0,
                 },
-                "moved to 'Done'",
+                "moved to 'Spec'",
             ),
             (EventPayload::CardDeleted { card_id }, "deleted"),
             (
