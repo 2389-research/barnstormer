@@ -7,7 +7,7 @@ use axum::extract::{Form, Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
-use specd_agent::{AgentRunner, SwarmOrchestrator};
+use specd_agent::SwarmOrchestrator;
 use specd_core::{Command, SpecState, spawn};
 use specd_store::JsonlLog;
 use ulid::Ulid;
@@ -130,6 +130,12 @@ pub async fn create_spec(
             tracing::error!("failed to persist event: {}", e);
         }
     }
+
+    // Subscribe the event persister BEFORE inserting the actor and starting
+    // agents so it catches all subsequent events (agent-produced, etc.).
+    // The CreateSpec events above were already persisted inline.
+    let persister_handle = spawn_event_persister(&handle, spec_id, &state.specd_home);
+    state.event_persisters.write().await.insert(spec_id, persister_handle);
 
     state.actors.write().await.insert(spec_id, handle);
 
@@ -470,7 +476,7 @@ pub async fn create_card(
         created_by: "human".to_string(),
     };
 
-    let events = match handle.send_command(cmd).await {
+    let _events = match handle.send_command(cmd).await {
         Ok(events) => events,
         Err(e) => {
             return (
@@ -484,7 +490,8 @@ pub async fn create_card(
         }
     };
 
-    persist_events(&state, spec_id, &events);
+    // Events are persisted by the background broadcast subscriber
+    // (spawned via spawn_event_persister when the actor was created).
 
     // Return refreshed board
     let spec_state = handle.read_state().await;
@@ -535,7 +542,7 @@ pub async fn update_card(
         updated_by: "human".to_string(),
     };
 
-    let events = match handle.send_command(cmd).await {
+    let _events = match handle.send_command(cmd).await {
         Ok(events) => events,
         Err(e) => {
             return (
@@ -549,7 +556,7 @@ pub async fn update_card(
         }
     };
 
-    persist_events(&state, spec_id, &events);
+    // Events are persisted by the background broadcast subscriber.
 
     // Return the updated card HTML
     let spec_state = handle.read_state().await;
@@ -616,7 +623,7 @@ pub async fn delete_card(
         updated_by: "human".to_string(),
     };
 
-    let events = match handle.send_command(cmd).await {
+    let _events = match handle.send_command(cmd).await {
         Ok(events) => events,
         Err(e) => {
             return (
@@ -630,7 +637,7 @@ pub async fn delete_card(
         }
     };
 
-    persist_events(&state, spec_id, &events);
+    // Events are persisted by the background broadcast subscriber.
 
     // Return empty content so HTMX removes the card element
     Html(String::new()).into_response()
@@ -952,7 +959,7 @@ pub async fn answer_question(
         answer: form.answer,
     };
 
-    let events = match handle.send_command(cmd).await {
+    let _events = match handle.send_command(cmd).await {
         Ok(events) => events,
         Err(e) => {
             return (
@@ -966,7 +973,7 @@ pub async fn answer_question(
         }
     };
 
-    persist_events(&state, spec_id, &events);
+    // Events are persisted by the background broadcast subscriber.
 
     // Return refreshed activity panel
     let spec_state = handle.read_state().await;
@@ -1039,7 +1046,7 @@ pub async fn chat(
         content: message,
     };
 
-    let events = match handle.send_command(cmd).await {
+    let _events = match handle.send_command(cmd).await {
         Ok(events) => events,
         Err(e) => {
             return (
@@ -1053,7 +1060,7 @@ pub async fn chat(
         }
     };
 
-    persist_events(&state, spec_id, &events);
+    // Events are persisted by the background broadcast subscriber.
 
     // Return refreshed activity panel
     let spec_state = handle.read_state().await;
@@ -1127,7 +1134,7 @@ pub async fn undo(State(state): State<SharedState>, Path(id): Path<String>) -> i
         }
     };
 
-    let events = match handle.send_command(Command::Undo).await {
+    let _events = match handle.send_command(Command::Undo).await {
         Ok(events) => events,
         Err(e) => {
             return (
@@ -1138,7 +1145,7 @@ pub async fn undo(State(state): State<SharedState>, Path(id): Path<String>) -> i
         }
     };
 
-    persist_events(&state, spec_id, &events);
+    // Events are persisted by the background broadcast subscriber.
 
     // Return refreshed board
     let spec_state = handle.read_state().await;
@@ -1412,17 +1419,21 @@ fn spawn_agent_loop(
                 // Extract agent and Arc fields, then drop the lock so async
                 // operations (actor reads, LLM API calls) do not block other
                 // tasks that need the swarm.
-                let (mut runner, actor_ref, question_pending) = {
+                let (mut runner, actor_ref, question_pending, client, model) = {
                     let mut s = swarm.lock().await;
                     let actor_ref = Arc::clone(&s.actor);
                     let question_pending = Arc::clone(&s.question_pending);
+                    let client = Arc::clone(&s.client);
+                    let model = s.model.clone();
                     // Temporarily swap out the agent runner so we can work on
-                    // it without holding the mutex.
-                    let runner = std::mem::replace(
-                        &mut s.agents[i],
-                        AgentRunner::placeholder(),
+                    // it without holding the mutex. AgentRunner is lightweight
+                    // (just role + context + id) so a temporary placeholder is cheap.
+                    let placeholder = specd_agent::AgentRunner::new(
+                        ulid::Ulid::nil(),
+                        specd_agent::AgentRole::Manager,
                     );
-                    (runner, actor_ref, question_pending)
+                    let runner = std::mem::replace(&mut s.agents[i], placeholder);
+                    (runner, actor_ref, question_pending, client, model)
                 };
 
                 SwarmOrchestrator::refresh_context_with_flag(
@@ -1433,10 +1444,12 @@ fn spawn_agent_loop(
                 )
                 .await;
 
-                let should_continue = SwarmOrchestrator::run_single_step(
+                let should_continue = SwarmOrchestrator::run_agent_step(
                     &mut runner,
                     &actor_ref,
                     &question_pending,
+                    &client,
+                    &model,
                 )
                 .await;
 
@@ -1508,26 +1521,56 @@ pub(crate) async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_h
     tracing::info!("auto-started {} agents for spec {}", agent_count, spec_id);
 }
 
-/// Helper to persist events to the JSONL log.
-fn persist_events(state: &SharedState, spec_id: Ulid, events: &[specd_core::Event]) {
-    let log_path = state
-        .specd_home
+/// Spawn a background task that subscribes to an actor's broadcast channel
+/// and persists every event to JSONL. This catches ALL events including
+/// those produced by agents, which bypass the inline `persist_events` path.
+///
+/// Returns the JoinHandle so the caller can store it for cleanup.
+pub fn spawn_event_persister(
+    actor: &specd_core::SpecActorHandle,
+    spec_id: Ulid,
+    specd_home: &std::path::Path,
+) -> tokio::task::JoinHandle<()> {
+    let mut rx = actor.subscribe();
+    let log_path = specd_home
         .join("specs")
         .join(spec_id.to_string())
         .join("events.jsonl");
 
-    match JsonlLog::open(&log_path) {
-        Ok(mut log) => {
-            for event in events {
-                if let Err(e) = log.append(event) {
-                    tracing::error!("failed to persist event: {}", e);
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    if let Ok(mut log) = JsonlLog::open(&log_path) {
+                        if let Err(e) = log.append(&event) {
+                            tracing::error!(
+                                "event persister failed to write event for spec {}: {}",
+                                spec_id,
+                                e
+                            );
+                        }
+                    } else {
+                        tracing::error!(
+                            "event persister failed to open log for spec {} at {}",
+                            spec_id,
+                            log_path.display()
+                        );
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        "event persister for spec {} lagged, missed {} events",
+                        spec_id,
+                        n
+                    );
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    tracing::debug!("event persister for spec {} shutting down (channel closed)", spec_id);
+                    break;
                 }
             }
         }
-        Err(e) => {
-            tracing::error!("failed to open JSONL log at {}: {}", log_path.display(), e);
-        }
-    }
+    })
 }
 
 #[cfg(test)]

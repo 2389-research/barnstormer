@@ -115,6 +115,12 @@ pub async fn create_spec(
         }
     }
 
+    // Subscribe the event persister BEFORE inserting the actor and starting
+    // agents so it catches all subsequent events (agent-produced, etc.).
+    // The CreateSpec events above were already persisted inline.
+    let persister_handle = crate::web::spawn_event_persister(&handle, spec_id, &state.specd_home);
+    state.event_persisters.write().await.insert(spec_id, persister_handle);
+
     // Store actor handle
     state.actors.write().await.insert(spec_id, handle);
 

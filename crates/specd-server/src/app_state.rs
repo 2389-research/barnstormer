@@ -24,6 +24,9 @@ pub struct SwarmHandle {
 pub struct AppState {
     pub actors: Arc<RwLock<HashMap<Ulid, SpecActorHandle>>>,
     pub swarms: Arc<RwLock<HashMap<Ulid, SwarmHandle>>>,
+    /// Background tasks that subscribe to actor broadcast channels and persist
+    /// every event to JSONL. Keyed by spec ULID for cleanup on shutdown.
+    pub event_persisters: Arc<RwLock<HashMap<Ulid, tokio::task::JoinHandle<()>>>>,
     pub specd_home: PathBuf,
     pub provider_status: ProviderStatus,
 }
@@ -37,6 +40,7 @@ impl AppState {
         Self {
             actors: Arc::new(RwLock::new(HashMap::new())),
             swarms: Arc::new(RwLock::new(HashMap::new())),
+            event_persisters: Arc::new(RwLock::new(HashMap::new())),
             specd_home,
             provider_status,
         }

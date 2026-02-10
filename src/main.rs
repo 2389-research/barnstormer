@@ -56,11 +56,18 @@ async fn main() {
             tracing::info!("recovered {} specs", recovered_specs.len());
 
             // Create AppState and spawn actors for recovered specs
-            let state = Arc::new(AppState::new(specd_home, ProviderStatus::detect()));
+            let state = Arc::new(AppState::new(specd_home.clone(), ProviderStatus::detect()));
             {
                 let mut actors = state.actors.write().await;
+                let mut persisters = state.event_persisters.write().await;
                 for (spec_id, spec_state) in recovered_specs {
                     let handle = specd_core::spawn(spec_id, spec_state);
+                    // Subscribe a background persister so all future events
+                    // (including agent-produced ones) are written to JSONL.
+                    let persister = specd_server::web::spawn_event_persister(
+                        &handle, spec_id, &specd_home,
+                    );
+                    persisters.insert(spec_id, persister);
                     actors.insert(spec_id, handle);
                     tracing::info!("spawned actor for spec {}", spec_id);
                 }

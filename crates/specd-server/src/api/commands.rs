@@ -1,12 +1,11 @@
 // ABOUTME: Command submission and undo API handlers for spec mutation.
-// ABOUTME: Routes commands to spec actors, persists resulting events to JSONL, and returns results.
+// ABOUTME: Routes commands to spec actors and returns results. Persistence is handled by background broadcast subscribers.
 
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use specd_core::Command;
-use specd_store::JsonlLog;
 use ulid::Ulid;
 
 use crate::app_state::SharedState;
@@ -51,35 +50,8 @@ pub async fn submit_command(
         }
     };
 
-    // Persist events to JSONL
-    let log_path = state
-        .specd_home
-        .join("specs")
-        .join(spec_id.to_string())
-        .join("events.jsonl");
-
-    let mut log = match JsonlLog::open(&log_path) {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::error!("failed to open JSONL log for persistence: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "failed to persist events" })),
-            )
-                .into_response();
-        }
-    };
-
-    for event in &events {
-        if let Err(e) = log.append(event) {
-            tracing::error!("failed to persist event: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "failed to persist events" })),
-            )
-                .into_response();
-        }
-    }
+    // Events are persisted by the background broadcast subscriber
+    // (spawned via spawn_event_persister when the actor was created).
 
     (
         StatusCode::OK,
@@ -124,35 +96,7 @@ pub async fn undo(State(state): State<SharedState>, Path(id): Path<String>) -> i
         }
     };
 
-    // Persist undo events to JSONL
-    let log_path = state
-        .specd_home
-        .join("specs")
-        .join(spec_id.to_string())
-        .join("events.jsonl");
-
-    let mut log = match JsonlLog::open(&log_path) {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::error!("failed to open JSONL log for undo persistence: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "failed to persist undo events" })),
-            )
-                .into_response();
-        }
-    };
-
-    for event in &events {
-        if let Err(e) = log.append(event) {
-            tracing::error!("failed to persist undo event: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "failed to persist undo events" })),
-            )
-                .into_response();
-        }
-    }
+    // Events are persisted by the background broadcast subscriber.
 
     (
         StatusCode::OK,
