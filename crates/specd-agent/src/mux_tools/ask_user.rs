@@ -55,7 +55,10 @@ impl Tool for AskUserBooleanTool {
     }
 
     async fn execute(&self, params: serde_json::Value) -> Result<ToolResult, anyhow::Error> {
-        if self.question_pending.load(Ordering::SeqCst) {
+        // Atomically check-and-set to avoid TOCTOU race between agents.
+        if self.question_pending.compare_exchange(
+            false, true, Ordering::SeqCst, Ordering::SeqCst,
+        ).is_err() {
             return Ok(ToolResult::text("Question already pending, skipping"));
         }
 
@@ -73,12 +76,14 @@ impl Tool for AskUserBooleanTool {
             default,
         };
 
-        self.actor
+        if let Err(e) = self.actor
             .send_command(Command::AskQuestion { question })
             .await
-            .map_err(|e| anyhow::anyhow!("failed to ask question: {}", e))?;
-
-        self.question_pending.store(true, Ordering::SeqCst);
+        {
+            // Reset flag on failure so another agent can retry.
+            self.question_pending.store(false, Ordering::SeqCst);
+            return Err(anyhow::anyhow!("failed to ask question: {}", e));
+        }
 
         Ok(ToolResult::text("Question asked"))
     }
@@ -131,7 +136,10 @@ impl Tool for AskUserMultipleChoiceTool {
     }
 
     async fn execute(&self, params: serde_json::Value) -> Result<ToolResult, anyhow::Error> {
-        if self.question_pending.load(Ordering::SeqCst) {
+        // Atomically check-and-set to avoid TOCTOU race between agents.
+        if self.question_pending.compare_exchange(
+            false, true, Ordering::SeqCst, Ordering::SeqCst,
+        ).is_err() {
             return Ok(ToolResult::text("Question already pending, skipping"));
         }
 
@@ -162,12 +170,14 @@ impl Tool for AskUserMultipleChoiceTool {
             allow_multi,
         };
 
-        self.actor
+        if let Err(e) = self.actor
             .send_command(Command::AskQuestion { question })
             .await
-            .map_err(|e| anyhow::anyhow!("failed to ask question: {}", e))?;
-
-        self.question_pending.store(true, Ordering::SeqCst);
+        {
+            // Reset flag on failure so another agent can retry.
+            self.question_pending.store(false, Ordering::SeqCst);
+            return Err(anyhow::anyhow!("failed to ask question: {}", e));
+        }
 
         Ok(ToolResult::text("Question asked"))
     }
@@ -219,7 +229,10 @@ impl Tool for AskUserFreeformTool {
     }
 
     async fn execute(&self, params: serde_json::Value) -> Result<ToolResult, anyhow::Error> {
-        if self.question_pending.load(Ordering::SeqCst) {
+        // Atomically check-and-set to avoid TOCTOU race between agents.
+        if self.question_pending.compare_exchange(
+            false, true, Ordering::SeqCst, Ordering::SeqCst,
+        ).is_err() {
             return Ok(ToolResult::text("Question already pending, skipping"));
         }
 
@@ -246,12 +259,14 @@ impl Tool for AskUserFreeformTool {
             validation_hint,
         };
 
-        self.actor
+        if let Err(e) = self.actor
             .send_command(Command::AskQuestion { question })
             .await
-            .map_err(|e| anyhow::anyhow!("failed to ask question: {}", e))?;
-
-        self.question_pending.store(true, Ordering::SeqCst);
+        {
+            // Reset flag on failure so another agent can retry.
+            self.question_pending.store(false, Ordering::SeqCst);
+            return Err(anyhow::anyhow!("failed to ask question: {}", e));
+        }
 
         Ok(ToolResult::text("Question asked"))
     }

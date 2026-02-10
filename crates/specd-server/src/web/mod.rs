@@ -9,7 +9,8 @@ use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
 use specd_agent::SwarmOrchestrator;
 use specd_core::{Command, SpecState, spawn};
-use specd_store::JsonlLog;
+use specd_store::{JsonlLog, SnapshotData, save_snapshot};
+use chrono::Utc;
 use ulid::Ulid;
 
 use crate::api::specs::SpecSummary;
@@ -1379,6 +1380,9 @@ pub async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_handle: 
 /// and persists every event to JSONL. This catches ALL events including
 /// those produced by agents, which bypass the inline `persist_events` path.
 ///
+/// On broadcast lag (missed events), saves a state snapshot so crash recovery
+/// can restore from the snapshot rather than relying on a gapped JSONL log.
+///
 /// Returns the JoinHandle so the caller can store it for cleanup.
 pub fn spawn_event_persister(
     actor: &specd_core::SpecActorHandle,
@@ -1386,10 +1390,15 @@ pub fn spawn_event_persister(
     specd_home: &std::path::Path,
 ) -> tokio::task::JoinHandle<()> {
     let mut rx = actor.subscribe();
+    let actor_handle = actor.clone();
     let log_path = specd_home
         .join("specs")
         .join(spec_id.to_string())
         .join("events.jsonl");
+    let snapshot_dir = specd_home
+        .join("specs")
+        .join(spec_id.to_string())
+        .join("snapshots");
 
     tokio::spawn(async move {
         let mut log = match JsonlLog::open(&log_path) {
@@ -1418,10 +1427,26 @@ pub fn spawn_event_persister(
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
-                        "event persister for spec {} lagged, missed {} events",
+                        "event persister for spec {} lagged, missed {} events — saving snapshot",
                         spec_id,
                         n
                     );
+                    // Save a snapshot so crash recovery can restore from it
+                    // rather than relying on the gapped JSONL log.
+                    let state = actor_handle.read_state().await.clone();
+                    let snap = SnapshotData {
+                        last_event_id: state.last_event_id,
+                        state: state.clone(),
+                        agent_contexts: std::collections::HashMap::new(),
+                        saved_at: Utc::now(),
+                    };
+                    if let Err(e) = save_snapshot(&snapshot_dir, &snap) {
+                        tracing::error!(
+                            "event persister for spec {} failed to save recovery snapshot: {}",
+                            spec_id,
+                            e
+                        );
+                    }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     tracing::debug!("event persister for spec {} shutting down (channel closed)", spec_id);

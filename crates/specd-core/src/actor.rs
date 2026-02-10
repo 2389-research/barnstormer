@@ -80,7 +80,7 @@ impl SpecActorHandle {
 /// applies them to state, and broadcasts them to subscribers.
 pub fn spawn(spec_id: Ulid, initial_state: SpecState) -> SpecActorHandle {
     let (cmd_tx, cmd_rx) = mpsc::channel::<CommandMessage>(64);
-    let (event_tx, _) = broadcast::channel::<Event>(256);
+    let (event_tx, _) = broadcast::channel::<Event>(4096);
     let last_event_id = initial_state.last_event_id;
     let state = Arc::new(RwLock::new(initial_state));
 
