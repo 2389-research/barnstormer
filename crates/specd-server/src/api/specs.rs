@@ -304,7 +304,7 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         let resp = app
             .oneshot(
-                Request::get(&format!("/api/specs/{}/state", spec_id))
+                Request::get(format!("/api/specs/{}/state", spec_id))
                     .body(Body::empty())
                     .unwrap(),
             )

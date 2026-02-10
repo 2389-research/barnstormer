@@ -623,7 +623,7 @@ mod tests {
         // Extract the node IDs and verify they are distinct
         let node_ids: Vec<&str> = node_lines
             .iter()
-            .map(|line| line.trim().split_whitespace().next().unwrap())
+            .map(|line| line.split_whitespace().next().unwrap())
             .collect();
         assert_ne!(
             node_ids[0], node_ids[1],

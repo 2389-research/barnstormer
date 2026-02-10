@@ -304,7 +304,7 @@ mod tests {
             "human".to_string(),
         );
 
-        let events = vec![
+        let events = [
             make_event(
                 1,
                 spec_id,

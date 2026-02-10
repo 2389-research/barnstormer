@@ -1224,7 +1224,6 @@ pub async fn start_agents(
 
     // Clone the existing actor handle so the swarm uses the same actor,
     // ensuring events flow through the server's main event bus.
-    let event_rx = actor_handle.subscribe();
     let swarm_actor_handle = actor_handle.clone();
     drop(actors);
 
@@ -1238,7 +1237,7 @@ pub async fn start_agents(
             spec_id: id,
             running: !swarm.is_paused(),
             started: true,
-            agent_count: swarm.agents.len(),
+            agent_count: swarm.agent_count(),
         }
         .into_response();
     }
@@ -1261,11 +1260,13 @@ pub async fn start_agents(
     let agent_count = {
         // This lock is uncontested since the swarm was just created
         let s = swarm.lock().await;
-        s.agents.len()
+        s.agent_count()
     };
 
-    // Spawn agent loop task and store the handle for cancellation
-    let task = spawn_agent_loop(Arc::clone(&swarm), event_rx);
+    // Spawn agent loop task and store the handle for cancellation.
+    // The loop lives in the agent crate; each agent gets its own
+    // broadcast receiver so events are never lost.
+    let task = tokio::spawn(specd_agent::run_loop(Arc::clone(&swarm)));
 
     // Insert into swarms map while still holding write lock
     swarms.insert(
@@ -1302,7 +1303,7 @@ pub async fn pause_agents(
                 spec_id: id,
                 running: false,
                 started: true,
-                agent_count: swarm.agents.len(),
+                agent_count: swarm.agent_count(),
             }
             .into_response()
         }
@@ -1335,7 +1336,7 @@ pub async fn resume_agents(
                 spec_id: id,
                 running: true,
                 started: true,
-                agent_count: swarm.agents.len(),
+                agent_count: swarm.agent_count(),
             }
             .into_response()
         }
@@ -1367,7 +1368,7 @@ pub async fn agent_status(
                 spec_id: id,
                 running: !swarm.is_paused(),
                 started: true,
-                agent_count: swarm.agents.len(),
+                agent_count: swarm.agent_count(),
             }
             .into_response()
         }
@@ -1381,97 +1382,6 @@ pub async fn agent_status(
     }
 }
 
-/// Spawn the background agent loop that drives all agents in the swarm.
-/// Returns the JoinHandle so the caller can track and cancel the task.
-fn spawn_agent_loop(
-    swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>,
-    event_rx: tokio::sync::broadcast::Receiver<specd_core::Event>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut event_rx = event_rx;
-        loop {
-            // Check if paused without holding the lock long
-            let is_paused = {
-                let s = swarm.lock().await;
-                s.is_paused()
-            };
-
-            if is_paused {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                continue;
-            }
-
-            let agent_count = {
-                let s = swarm.lock().await;
-                s.agents.len()
-            };
-
-            for i in 0..agent_count {
-                // Check pause again before each agent step
-                let is_paused = {
-                    let s = swarm.lock().await;
-                    s.is_paused()
-                };
-                if is_paused {
-                    break;
-                }
-
-                // Extract agent and Arc fields, then drop the lock so async
-                // operations (actor reads, LLM API calls) do not block other
-                // tasks that need the swarm.
-                let (mut runner, actor_ref, question_pending, client, model) = {
-                    let mut s = swarm.lock().await;
-                    let actor_ref = Arc::clone(&s.actor);
-                    let question_pending = Arc::clone(&s.question_pending);
-                    let client = Arc::clone(&s.client);
-                    let model = s.model.clone();
-                    // Temporarily swap out the agent runner so we can work on
-                    // it without holding the mutex. AgentRunner is lightweight
-                    // (just role + context + id) so a temporary placeholder is cheap.
-                    let placeholder = specd_agent::AgentRunner::new(
-                        ulid::Ulid::nil(),
-                        specd_agent::AgentRole::Manager,
-                    );
-                    let runner = std::mem::replace(&mut s.agents[i], placeholder);
-                    (runner, actor_ref, question_pending, client, model)
-                };
-
-                SwarmOrchestrator::refresh_context_with_flag(
-                    &mut runner,
-                    &actor_ref,
-                    &mut event_rx,
-                    Some(&question_pending),
-                )
-                .await;
-
-                let should_continue = SwarmOrchestrator::run_agent_step(
-                    &mut runner,
-                    &actor_ref,
-                    &question_pending,
-                    &client,
-                    &model,
-                )
-                .await;
-
-                // Put the agent runner back
-                {
-                    let mut s = swarm.lock().await;
-                    s.agents[i] = runner;
-                }
-
-                if should_continue {
-                    // Agent did work, small delay before next
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                } else {
-                    // Agent is done/idle, longer delay
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        }
-    })
-}
-
 /// Helper to start the agent swarm for a spec, if a provider is available.
 /// Returns silently if no provider is configured, if the swarm already exists,
 /// or if swarm creation fails. Used by both web and API create_spec handlers.
@@ -1483,7 +1393,6 @@ pub(crate) async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_h
 
     // Clone the existing actor handle so the swarm uses the same actor,
     // ensuring events flow through the server's main event bus.
-    let event_rx = actor_handle.subscribe();
     let swarm_actor_handle = actor_handle.clone();
 
     // Atomic check-and-insert: hold write lock to prevent TOCTOU race
@@ -1506,11 +1415,13 @@ pub(crate) async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_h
     let agent_count = {
         // This lock is uncontested since the swarm was just created
         let s = swarm.lock().await;
-        s.agents.len()
+        s.agent_count()
     };
 
-    // Spawn background agent loop and store the handle for cancellation
-    let task = spawn_agent_loop(Arc::clone(&swarm), event_rx);
+    // Spawn background agent loop and store the handle for cancellation.
+    // The loop lives in the agent crate; each agent gets its own
+    // broadcast receiver so events are never lost.
+    let task = tokio::spawn(specd_agent::run_loop(Arc::clone(&swarm)));
 
     // Insert into swarms map while still holding write lock
     swarms.insert(
@@ -1940,7 +1851,7 @@ mod tests {
         let app2 = create_router(Arc::clone(&state), None);
         let resp = app2
             .oneshot(
-                Request::post(&format!("/web/specs/{}/chat", spec_id))
+                Request::post(format!("/web/specs/{}/chat", spec_id))
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from("message=Hello+from+chat"))
                     .unwrap(),
@@ -1972,7 +1883,7 @@ mod tests {
         let fake_id = ulid::Ulid::new();
         let resp = app
             .oneshot(
-                Request::post(&format!("/web/specs/{}/chat", fake_id))
+                Request::post(format!("/web/specs/{}/chat", fake_id))
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from("message=Hello"))
                     .unwrap(),
@@ -2051,7 +1962,7 @@ mod tests {
         let app2 = create_router(Arc::clone(&state), None);
         let resp = app2
             .oneshot(
-                Request::get(&format!("/web/specs/{}/agents/status", spec_id))
+                Request::get(format!("/web/specs/{}/agents/status", spec_id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2092,7 +2003,7 @@ mod tests {
         let app2 = create_router(Arc::clone(&state), None);
         let resp = app2
             .oneshot(
-                Request::post(&format!("/web/specs/{}/agents/pause", spec_id))
+                Request::post(format!("/web/specs/{}/agents/pause", spec_id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2133,7 +2044,7 @@ mod tests {
         let app2 = create_router(Arc::clone(&state), None);
         let resp = app2
             .oneshot(
-                Request::post(&format!("/web/specs/{}/agents/resume", spec_id))
+                Request::post(format!("/web/specs/{}/agents/resume", spec_id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2156,7 +2067,7 @@ mod tests {
 
         let resp = app
             .oneshot(
-                Request::get(&format!("/web/specs/{}/agents/status", fake_id))
+                Request::get(format!("/web/specs/{}/agents/status", fake_id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2264,7 +2175,7 @@ mod tests {
 
         let resp = app
             .oneshot(
-                Request::post(&format!("/web/specs/{}/agents/start", fake_id))
+                Request::post(format!("/web/specs/{}/agents/start", fake_id))
                     .body(Body::empty())
                     .unwrap(),
             )

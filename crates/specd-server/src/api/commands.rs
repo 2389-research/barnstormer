@@ -172,7 +172,7 @@ mod tests {
 
         let resp = app
             .oneshot(
-                Request::post(&format!("/api/specs/{}/commands", spec_id))
+                Request::post(format!("/api/specs/{}/commands", spec_id))
                     .header("content-type", "application/json")
                     .body(Body::from(serde_json::to_vec(&cmd).unwrap()))
                     .unwrap(),
@@ -193,7 +193,7 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         let resp = app
             .oneshot(
-                Request::get(&format!("/api/specs/{}/state", spec_id))
+                Request::get(format!("/api/specs/{}/state", spec_id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -231,7 +231,7 @@ mod tests {
 
             let resp = app
                 .oneshot(
-                    Request::post(&format!("/api/specs/{}/commands", spec_id))
+                    Request::post(format!("/api/specs/{}/commands", spec_id))
                         .header("content-type", "application/json")
                         .body(Body::from(serde_json::to_vec(&cmd).unwrap()))
                         .unwrap(),
@@ -246,7 +246,7 @@ mod tests {
             let app = create_router(Arc::clone(&state), None);
             let resp = app
                 .oneshot(
-                    Request::get(&format!("/api/specs/{}/state", spec_id))
+                    Request::get(format!("/api/specs/{}/state", spec_id))
                         .body(Body::empty())
                         .unwrap(),
                 )
@@ -266,7 +266,7 @@ mod tests {
             let app = create_router(Arc::clone(&state), None);
             let resp = app
                 .oneshot(
-                    Request::post(&format!("/api/specs/{}/undo", spec_id))
+                    Request::post(format!("/api/specs/{}/undo", spec_id))
                         .body(Body::empty())
                         .unwrap(),
                 )
@@ -280,7 +280,7 @@ mod tests {
             let app = create_router(Arc::clone(&state), None);
             let resp = app
                 .oneshot(
-                    Request::get(&format!("/api/specs/{}/state", spec_id))
+                    Request::get(format!("/api/specs/{}/state", spec_id))
                         .body(Body::empty())
                         .unwrap(),
                 )

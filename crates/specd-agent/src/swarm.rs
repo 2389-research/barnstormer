@@ -81,7 +81,12 @@ impl AgentRunner {
 pub struct SwarmOrchestrator {
     pub spec_id: Ulid,
     pub actor: Arc<SpecActorHandle>,
-    pub agents: Vec<AgentRunner>,
+    /// Each slot holds an Option so the run_loop can temporarily take ownership
+    /// of a runner without needing a placeholder value (fixes Ulid::nil() hack).
+    pub agents: Vec<Option<AgentRunner>>,
+    /// Per-agent broadcast receivers so each agent sees all events independently.
+    /// One receiver per agent, created at swarm construction time.
+    event_receivers: Vec<broadcast::Receiver<Event>>,
     pub paused: Arc<AtomicBool>,
     pub question_pending: Arc<AtomicBool>,
     pub client: Arc<dyn LlmClient>,
@@ -110,15 +115,20 @@ impl SwarmOrchestrator {
             AgentRole::DotGenerator,
         ];
 
-        let agents: Vec<AgentRunner> = roles
+        let agents: Vec<Option<AgentRunner>> = roles
             .iter()
-            .map(|role| AgentRunner::new(spec_id, *role))
+            .map(|role| Some(AgentRunner::new(spec_id, *role)))
             .collect();
+
+        // Each agent gets its own broadcast receiver so events are not
+        // stolen by whichever agent drains the channel first.
+        let event_receivers = agents.iter().map(|_| actor.subscribe()).collect();
 
         Ok(Self {
             spec_id,
             actor,
             agents,
+            event_receivers,
             paused: Arc::new(AtomicBool::new(false)),
             question_pending: Arc::new(AtomicBool::new(false)),
             client: llm_client,
@@ -134,15 +144,24 @@ impl SwarmOrchestrator {
         client: Arc<dyn LlmClient>,
         model: String,
     ) -> Self {
+        let actor = Arc::new(actor);
+        let event_receivers = agents.iter().map(|_| actor.subscribe()).collect();
+        let agents = agents.into_iter().map(Some).collect();
         Self {
             spec_id,
-            actor: Arc::new(actor),
+            actor,
             agents,
+            event_receivers,
             paused: Arc::new(AtomicBool::new(false)),
             question_pending: Arc::new(AtomicBool::new(false)),
             client,
             model,
         }
+    }
+
+    /// Returns the number of agent slots in this swarm.
+    pub fn agent_count(&self) -> usize {
+        self.agents.len()
     }
 
     /// Pause all agent loops. Agents will complete their current step
@@ -229,18 +248,8 @@ impl SwarmOrchestrator {
                     "agent step completed"
                 );
 
-                // Emit a diff summary with the result content
-                let finish_cmd = Command::FinishAgentStep {
-                    agent_id: runner.agent_id.clone(),
-                    diff_summary: result.content,
-                };
-                if let Err(e) = actor.send_command(finish_cmd).await {
-                    tracing::warn!(
-                        agent = %runner.agent_id,
-                        error = %e,
-                        "failed to finish agent step"
-                    );
-                }
+                // FinishAgentStep is emitted by the emit_diff_summary tool,
+                // so we do not send it here to avoid duplicate events.
 
                 // Agent did work if it used any tools
                 result.tool_use_count > 0
@@ -295,13 +304,97 @@ impl SwarmOrchestrator {
 
         // Sync question_pending flag from actor state
         if let Some(flag) = question_pending {
-            flag.store(state.pending_question.is_some(), Ordering::Relaxed);
+            flag.store(state.pending_question.is_some(), Ordering::SeqCst);
         }
 
         // Copy recent transcript
         let transcript_len = state.transcript.len();
         let start = transcript_len.saturating_sub(10);
         runner.context.recent_transcript = state.transcript[start..].to_vec();
+    }
+}
+
+/// Run the agent loop. This drives all agents in the swarm through their
+/// think-act cycles. Runs until the task is cancelled (via JoinHandle::abort).
+///
+/// Each agent has its own broadcast receiver, so events are never stolen
+/// by whichever agent drains the channel first.
+pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
+    loop {
+        // Check pause and get agent count in one lock acquisition
+        let (is_paused, agent_count) = {
+            let s = swarm.lock().await;
+            (s.is_paused(), s.agents.len())
+        };
+
+        if is_paused {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            continue;
+        }
+
+        let mut any_work = false;
+        for i in 0..agent_count {
+            // Check pause before each agent
+            {
+                let s = swarm.lock().await;
+                if s.is_paused() {
+                    break;
+                }
+            }
+
+            // Extract runner, its event receiver, and shared fields.
+            // The Option::take() avoids needing a Ulid::nil() placeholder.
+            let (mut runner, mut event_rx, actor_ref, question_pending, client, model) = {
+                let mut s = swarm.lock().await;
+                let actor_ref = Arc::clone(&s.actor);
+                let question_pending = Arc::clone(&s.question_pending);
+                let client = Arc::clone(&s.client);
+                let model = s.model.clone();
+                let runner = s.agents[i]
+                    .take()
+                    .expect("agent runner should not be None during loop");
+                // Swap out the receiver with a fresh one; the old one keeps its
+                // buffered events so we drain them below.
+                let event_rx =
+                    std::mem::replace(&mut s.event_receivers[i], actor_ref.subscribe());
+                (runner, event_rx, actor_ref, question_pending, client, model)
+            };
+
+            SwarmOrchestrator::refresh_context_with_flag(
+                &mut runner,
+                &actor_ref,
+                &mut event_rx,
+                Some(&question_pending),
+            )
+            .await;
+
+            let did_work = SwarmOrchestrator::run_agent_step(
+                &mut runner,
+                &actor_ref,
+                &question_pending,
+                &client,
+                &model,
+            )
+            .await;
+
+            // Put the runner and its (now-drained) receiver back
+            {
+                let mut s = swarm.lock().await;
+                s.agents[i] = Some(runner);
+                s.event_receivers[i] = event_rx;
+            }
+
+            if did_work {
+                any_work = true;
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+
+        if any_work {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        } else {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
     }
 }
 
@@ -406,10 +499,10 @@ mod tests {
         );
 
         assert_eq!(swarm.agents.len(), 4);
-        assert_eq!(swarm.agents[0].role, AgentRole::Manager);
-        assert_eq!(swarm.agents[1].role, AgentRole::Brainstormer);
-        assert_eq!(swarm.agents[2].role, AgentRole::Planner);
-        assert_eq!(swarm.agents[3].role, AgentRole::DotGenerator);
+        assert_eq!(swarm.agents[0].as_ref().unwrap().role, AgentRole::Manager);
+        assert_eq!(swarm.agents[1].as_ref().unwrap().role, AgentRole::Brainstormer);
+        assert_eq!(swarm.agents[2].as_ref().unwrap().role, AgentRole::Planner);
+        assert_eq!(swarm.agents[3].as_ref().unwrap().role, AgentRole::DotGenerator);
 
         assert!(!swarm.is_paused());
         assert!(!swarm.has_pending_question());
@@ -576,6 +669,69 @@ mod tests {
         assert!(
             !question_pending.load(Ordering::SeqCst),
             "question_pending should be false after answer and refresh"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_loop_can_be_cancelled() {
+        let (spec_id, actor) = make_test_actor();
+        let swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            actor,
+            Vec::new(),
+            make_test_client(),
+            "stub-model".to_string(),
+        );
+        let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
+
+        let handle = tokio::spawn(run_loop(Arc::clone(&swarm)));
+
+        // Let it run briefly, then abort
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        handle.abort();
+
+        // Verify it was cancelled (abort causes JoinError)
+        let result = handle.await;
+        assert!(result.is_err(), "run_loop should be cancelled by abort");
+        assert!(result.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn agent_count_returns_slot_count() {
+        let (spec_id, actor) = make_test_actor();
+        let agents = vec![
+            AgentRunner::new(spec_id, AgentRole::Manager),
+            AgentRunner::new(spec_id, AgentRole::Brainstormer),
+        ];
+        let swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            actor,
+            agents,
+            make_test_client(),
+            "stub-model".to_string(),
+        );
+        assert_eq!(swarm.agent_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn each_agent_gets_own_event_receiver() {
+        let (spec_id, actor) = make_test_actor();
+        let agents = vec![
+            AgentRunner::new(spec_id, AgentRole::Manager),
+            AgentRunner::new(spec_id, AgentRole::Brainstormer),
+        ];
+        let swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            actor,
+            agents,
+            make_test_client(),
+            "stub-model".to_string(),
+        );
+        // Each agent should have a dedicated event receiver
+        assert_eq!(
+            swarm.event_receivers.len(),
+            2,
+            "each agent should have its own event receiver"
         );
     }
 }
