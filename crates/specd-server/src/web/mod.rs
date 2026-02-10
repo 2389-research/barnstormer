@@ -1903,6 +1903,56 @@ mod tests {
         assert!(html.contains("Agents stopped"), "nonexistent spec should show stopped: {}", html);
     }
 
+    #[test]
+    fn provider_status_template_renders_no_providers() {
+        let tmpl = ProviderStatusTemplate {
+            default_provider: "anthropic".to_string(),
+            default_model: None,
+            providers: vec![
+                ProviderInfoView { name: "anthropic".to_string(), has_api_key: false, model: "claude-sonnet-4-5-20250929".to_string() },
+                ProviderInfoView { name: "openai".to_string(), has_api_key: false, model: "gpt-4o".to_string() },
+                ProviderInfoView { name: "gemini".to_string(), has_api_key: false, model: "gemini-2.0-flash".to_string() },
+            ],
+            any_available: false,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("No provider configured"));
+        assert!(rendered.contains("disconnected"));
+    }
+
+    #[test]
+    fn provider_status_template_renders_with_provider() {
+        let tmpl = ProviderStatusTemplate {
+            default_provider: "anthropic".to_string(),
+            default_model: Some("claude-sonnet-4-5-20250929".to_string()),
+            providers: vec![
+                ProviderInfoView { name: "anthropic".to_string(), has_api_key: true, model: "claude-sonnet-4-5-20250929".to_string() },
+                ProviderInfoView { name: "openai".to_string(), has_api_key: false, model: "gpt-4o".to_string() },
+            ],
+            any_available: true,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("anthropic"));
+        assert!(rendered.contains("connected"));
+        assert!(rendered.contains("claude-sonnet-4-5-20250929"));
+    }
+
+    #[tokio::test]
+    async fn get_provider_status_returns_html() {
+        let state = test_state();
+        let app = create_router(state, None);
+        let resp = app
+            .oneshot(Request::get("/web/provider-status").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("provider-status"));
+    }
+
     #[tokio::test]
     async fn start_agents_for_nonexistent_spec_returns_404() {
         let state = test_state();
