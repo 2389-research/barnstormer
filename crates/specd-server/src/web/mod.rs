@@ -811,6 +811,16 @@ pub struct TranscriptQuery {
     pub container_id: Option<String>,
 }
 
+/// Validate and sanitize a container_id value. Only known IDs are accepted;
+/// anything else falls back to "activity-transcript" to prevent XSS via
+/// user-controlled values rendered into script tags and HTMX attributes.
+fn sanitize_container_id(raw: &str) -> String {
+    match raw {
+        "activity-transcript" | "chat-transcript" => raw.to_string(),
+        _ => "activity-transcript".to_string(),
+    }
+}
+
 /// Activity panel template.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/activity.html")]
@@ -929,9 +939,9 @@ pub async fn activity_transcript(
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
-    let container_id = query
-        .container_id
-        .unwrap_or_else(|| "activity-transcript".to_string());
+    let container_id = sanitize_container_id(
+        query.container_id.as_deref().unwrap_or("activity-transcript"),
+    );
 
     ActivityTranscriptTemplate {
         spec_id: id,
@@ -1224,11 +1234,13 @@ pub async fn answer_question(
 
     // Determine container_id from HX-Target header so the response replaces
     // the correct transcript container (activity panel vs chat tab).
-    let container_id = headers
-        .get("HX-Target")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim_start_matches('#').to_string())
-        .unwrap_or_else(|| "activity-transcript".to_string());
+    let container_id = sanitize_container_id(
+        headers
+            .get("HX-Target")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim_start_matches('#'))
+            .unwrap_or("activity-transcript"),
+    );
 
     // Return refreshed transcript partial
     let spec_state = handle.read_state().await;
@@ -1327,11 +1339,13 @@ pub async fn chat(
 
     // Determine container_id from HX-Target header so the response replaces
     // the correct transcript container (activity panel vs chat tab).
-    let container_id = headers
-        .get("HX-Target")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim_start_matches('#').to_string())
-        .unwrap_or_else(|| "activity-transcript".to_string());
+    let container_id = sanitize_container_id(
+        headers
+            .get("HX-Target")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim_start_matches('#'))
+            .unwrap_or("activity-transcript"),
+    );
 
     // Return refreshed transcript partial
     let spec_state = handle.read_state().await;
@@ -2964,5 +2978,109 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn activity_transcript_handler_defaults_container_id() {
+        let state = test_state();
+
+        // Create a spec
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("title=Container+Test&one_liner=Testing&goal=Verify"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        // GET transcript without container_id param
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(format!("/web/specs/{}/activity/transcript", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains(r#"id="activity-transcript""#),
+            "should default to activity-transcript container id"
+        );
+    }
+
+    #[tokio::test]
+    async fn activity_transcript_handler_accepts_container_id_param() {
+        let state = test_state();
+
+        // Create a spec
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("title=Container+Test&one_liner=Testing&goal=Verify"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        // GET transcript with container_id=chat-transcript
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(format!(
+                    "/web/specs/{}/activity/transcript?container_id=chat-transcript",
+                    spec_id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains(r#"id="chat-transcript""#),
+            "should use chat-transcript container id from query param"
+        );
+        assert!(
+            !html.contains(r#"id="activity-transcript""#),
+            "should not contain activity-transcript when chat-transcript requested"
+        );
+    }
+
+    #[test]
+    fn sanitize_container_id_rejects_unknown_values() {
+        assert_eq!(sanitize_container_id("activity-transcript"), "activity-transcript");
+        assert_eq!(sanitize_container_id("chat-transcript"), "chat-transcript");
+        assert_eq!(sanitize_container_id("'); alert('xss'); //"), "activity-transcript");
+        assert_eq!(sanitize_container_id("malicious-id"), "activity-transcript");
+        assert_eq!(sanitize_container_id(""), "activity-transcript");
     }
 }
