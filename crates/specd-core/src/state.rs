@@ -39,7 +39,7 @@ impl Default for SpecState {
             pending_question: None,
             undo_stack: Vec::new(),
             last_event_id: 0,
-            lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Done".to_string()],
+            lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
         }
     }
 }
@@ -463,13 +463,13 @@ mod tests {
             spec_id,
             EventPayload::CardMoved {
                 card_id,
-                lane: "Done".to_string(),
+                lane: "Spec".to_string(),
                 order: 3.5,
             },
         ));
 
         let card = &state.cards[&card_id];
-        assert_eq!(card.lane, "Done");
+        assert_eq!(card.lane, "Spec");
         assert_eq!(card.order, 3.5);
     }
 
@@ -695,7 +695,7 @@ mod tests {
         assert_eq!(state.undo_stack.len(), 3); // 2 creates + 1 move
         assert_eq!(
             state.lanes,
-            vec!["Ideas".to_string(), "Plan".to_string(), "Done".to_string()]
+            vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()]
         );
     }
 }
