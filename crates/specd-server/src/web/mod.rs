@@ -2501,7 +2501,7 @@ mod tests {
         assert!(rendered.contains("chat-input-area"), "should contain chat-input-area div");
         assert!(rendered.contains("chat-input-row"), "should contain chat-input-row div");
         assert!(rendered.contains(r#"hx-post="/web/specs/01HTEST/chat""#), "should post to chat endpoint");
-        assert!(rendered.contains(r#"hx-target="#chat-transcript""#), "chat form should target chat-transcript");
+        assert!(rendered.contains(r##"hx-target="#chat-transcript""##), "chat form should target chat-transcript");
         assert!(rendered.contains("Send a message..."), "should have placeholder text");
     }
 
