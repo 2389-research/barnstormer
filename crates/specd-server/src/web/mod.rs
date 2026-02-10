@@ -924,6 +924,215 @@ pub async fn activity_transcript(
     .into_response()
 }
 
+/// Chat panel template for the full-width Chat tab.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/chat_panel.html")]
+pub struct ChatPanelTemplate {
+    pub spec_id: String,
+    pub transcript: Vec<TranscriptEntry>,
+    pub pending_question: Option<QuestionData>,
+}
+
+/// GET /web/specs/{id}/chat-panel - Render the Chat tab content.
+pub async fn chat_panel(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    let spec_state = handle.read_state().await;
+
+    let transcript: Vec<TranscriptEntry> = spec_state
+        .transcript
+        .iter()
+        .map(|m| {
+            let (sender_label, is_human, role_class) = sender_display(&m.sender);
+            TranscriptEntry {
+                sender: m.sender.clone(),
+                sender_label,
+                is_human,
+                role_class,
+                content: m.content.clone(),
+                timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+            }
+        })
+        .collect();
+
+    let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
+
+    ChatPanelTemplate {
+        spec_id: id,
+        transcript,
+        pending_question,
+    }
+    .into_response()
+}
+
+/// Artifacts tab template showing exported spec content in multiple formats.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/artifacts.html")]
+pub struct ArtifactsTemplate {
+    pub spec_id: String,
+    pub markdown_content: String,
+    pub yaml_content: String,
+    pub dot_content: String,
+}
+
+/// GET /web/specs/{id}/artifacts - Render the Artifacts tab with all three export formats.
+pub async fn artifacts(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    let spec_state = handle.read_state().await;
+
+    let markdown_content = specd_core::export::export_markdown(&spec_state);
+    let yaml_content = specd_core::export::export_yaml(&spec_state).unwrap_or_else(|e| {
+        format!("# YAML export error: {}", e)
+    });
+    let dot_content = specd_core::export::export_dot(&spec_state);
+
+    ArtifactsTemplate {
+        spec_id: id,
+        markdown_content,
+        yaml_content,
+        dot_content,
+    }
+    .into_response()
+}
+
+/// GET /web/specs/{id}/export/markdown - Download spec as Markdown file.
+pub async fn export_markdown(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    let spec_state = handle.read_state().await;
+    let content = specd_core::export::export_markdown(&spec_state);
+
+    Response::builder()
+        .header("content-type", "text/markdown")
+        .header("content-disposition", "attachment; filename=\"spec.md\"")
+        .body(axum::body::Body::from(content))
+        .unwrap()
+        .into_response()
+}
+
+/// GET /web/specs/{id}/export/yaml - Download spec as YAML file.
+pub async fn export_yaml(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    let spec_state = handle.read_state().await;
+    let content = specd_core::export::export_yaml(&spec_state).unwrap_or_else(|e| {
+        format!("# YAML export error: {}", e)
+    });
+
+    Response::builder()
+        .header("content-type", "text/yaml")
+        .header("content-disposition", "attachment; filename=\"spec.yaml\"")
+        .body(axum::body::Body::from(content))
+        .unwrap()
+        .into_response()
+}
+
+/// GET /web/specs/{id}/export/dot - Download spec as DOT graph file.
+pub async fn export_dot(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    let spec_state = handle.read_state().await;
+    let content = specd_core::export::export_dot(&spec_state);
+
+    Response::builder()
+        .header("content-type", "text/plain")
+        .header("content-disposition", "attachment; filename=\"spec.dot\"")
+        .body(axum::body::Body::from(content))
+        .unwrap()
+        .into_response()
+}
+
 /// Form data for sending a chat message.
 #[derive(Deserialize)]
 pub struct ChatForm {
@@ -2215,6 +2424,298 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(resp.status(), 404);
+    }
+
+    // ---- Chat panel tests ----
+
+    #[test]
+    fn chat_panel_template_renders() {
+        let tmpl = ChatPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            transcript: vec![],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("chat-panel"), "should contain chat-panel div");
+    }
+
+    #[tokio::test]
+    async fn chat_panel_handler_returns_200() {
+        let state = test_state();
+
+        // Create a spec first
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("title=Chat+Panel+Test&one_liner=Test&goal=Test"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(format!("/web/specs/{}/chat-panel", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains("chat-panel"),
+            "chat panel response should contain chat-panel: {}",
+            html
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_panel_for_nonexistent_spec_returns_404() {
+        let state = test_state();
+        let app = create_router(state, None);
+        let fake_id = ulid::Ulid::new();
+        let resp = app
+            .oneshot(
+                Request::get(format!("/web/specs/{}/chat-panel", fake_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+    }
+
+    // ---- Artifacts tests ----
+
+    #[test]
+    fn artifacts_template_renders() {
+        let tmpl = ArtifactsTemplate {
+            spec_id: "01HTEST".to_string(),
+            markdown_content: "# My Spec".to_string(),
+            yaml_content: "title: My Spec".to_string(),
+            dot_content: "digraph {}".to_string(),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("artifacts-panel"), "should contain artifacts-panel div");
+    }
+
+    #[tokio::test]
+    async fn artifacts_handler_returns_200() {
+        let state = test_state();
+
+        // Create a spec first
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("title=Artifacts+Test&one_liner=Test&goal=Test"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(format!("/web/specs/{}/artifacts", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains("artifacts-panel"),
+            "artifacts response should contain artifacts-panel: {}",
+            html
+        );
+    }
+
+    #[tokio::test]
+    async fn artifacts_for_nonexistent_spec_returns_404() {
+        let state = test_state();
+        let app = create_router(state, None);
+        let fake_id = ulid::Ulid::new();
+        let resp = app
+            .oneshot(
+                Request::get(format!("/web/specs/{}/artifacts", fake_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+    }
+
+    // ---- Export download tests ----
+
+    /// Helper to create a spec and return its ULID.
+    async fn create_test_spec(state: &SharedState) -> ulid::Ulid {
+        let app = create_router(Arc::clone(state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("title=Export+Test&one_liner=Test&goal=Test"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let actors = state.actors.read().await;
+        *actors.keys().next().expect("should have a spec")
+    }
+
+    #[tokio::test]
+    async fn export_markdown_returns_200_with_correct_headers() {
+        let state = test_state();
+        let spec_id = create_test_spec(&state).await;
+
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::get(format!("/web/specs/{}/export/markdown", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "text/markdown"
+        );
+        assert_eq!(
+            resp.headers().get("content-disposition").unwrap(),
+            "attachment; filename=\"spec.md\""
+        );
+    }
+
+    #[tokio::test]
+    async fn export_yaml_returns_200_with_correct_headers() {
+        let state = test_state();
+        let spec_id = create_test_spec(&state).await;
+
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::get(format!("/web/specs/{}/export/yaml", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "text/yaml"
+        );
+        assert_eq!(
+            resp.headers().get("content-disposition").unwrap(),
+            "attachment; filename=\"spec.yaml\""
+        );
+    }
+
+    #[tokio::test]
+    async fn export_dot_returns_200_with_correct_headers() {
+        let state = test_state();
+        let spec_id = create_test_spec(&state).await;
+
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::get(format!("/web/specs/{}/export/dot", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "text/plain"
+        );
+        assert_eq!(
+            resp.headers().get("content-disposition").unwrap(),
+            "attachment; filename=\"spec.dot\""
+        );
+    }
+
+    #[tokio::test]
+    async fn export_markdown_for_nonexistent_spec_returns_404() {
+        let state = test_state();
+        let app = create_router(state, None);
+        let fake_id = ulid::Ulid::new();
+        let resp = app
+            .oneshot(
+                Request::get(format!("/web/specs/{}/export/markdown", fake_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn export_yaml_for_nonexistent_spec_returns_404() {
+        let state = test_state();
+        let app = create_router(state, None);
+        let fake_id = ulid::Ulid::new();
+        let resp = app
+            .oneshot(
+                Request::get(format!("/web/specs/{}/export/yaml", fake_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn export_dot_for_nonexistent_spec_returns_404() {
+        let state = test_state();
+        let app = create_router(state, None);
+        let fake_id = ulid::Ulid::new();
+        let resp = app
+            .oneshot(
+                Request::get(format!("/web/specs/{}/export/dot", fake_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 404);
     }
 }
