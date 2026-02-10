@@ -1384,6 +1384,31 @@ pub async fn chat(
                 .into_response();
         }
     };
+    // Drop actors read lock before acquiring swarms
+    drop(actors);
+
+    // Wake the agent loop so the manager responds to the human message promptly
+    // instead of waiting for the next idle-cycle poll (up to 5 seconds).
+    {
+        let swarms = state.swarms.read().await;
+        if let Some(swarm_handle) = swarms.get(&spec_id) {
+            let swarm = swarm_handle.swarm.lock().await;
+            swarm.notify_human_message();
+        }
+    }
+
+    // Re-acquire actors to read transcript for response
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
 
     // Events are persisted by the background broadcast subscriber.
 

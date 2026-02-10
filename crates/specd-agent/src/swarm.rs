@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Notify};
 use tracing;
 use ulid::Ulid;
 
@@ -26,7 +26,11 @@ const MANAGER_SYSTEM_PROMPT: &str = "You are the manager agent for a product spe
     and ask the user questions when clarification is needed. Start by reading the current state, \
     then decide what needs attention. If the spec is new or has few cards, ask the user a freeform \
     question to understand what they want to build. If cards exist, review them and suggest \
-    improvements or ask clarifying questions.";
+    improvements or ask clarifying questions.\n\n\
+    IMPORTANT: You are the primary point of contact for the human user. When you see messages from \
+    'human' in the recent transcript, treat them as top priority — acknowledge them with narration, \
+    take action based on their input, and route their requests to the appropriate workflow. \
+    The human is actively engaged, so always respond to their messages before doing other work.";
 
 /// System prompt for the Brainstormer agent role.
 const BRAINSTORMER_SYSTEM_PROMPT: &str = "You are the brainstormer agent. Your job is to generate \
@@ -127,6 +131,9 @@ pub struct SwarmOrchestrator {
     pub question_pending: Arc<AtomicBool>,
     pub client: Arc<dyn LlmClient>,
     pub model: String,
+    /// Signal that a human message has arrived; wakes the run_loop from its
+    /// idle sleep so the manager agent can respond promptly.
+    pub human_message_notify: Arc<Notify>,
 }
 
 impl SwarmOrchestrator {
@@ -167,6 +174,7 @@ impl SwarmOrchestrator {
             question_pending: Arc::new(AtomicBool::new(false)),
             client: llm_client,
             model: resolved_model,
+            human_message_notify: Arc::new(Notify::new()),
         })
     }
 
@@ -190,6 +198,7 @@ impl SwarmOrchestrator {
             question_pending: Arc::new(AtomicBool::new(false)),
             client,
             model,
+            human_message_notify: Arc::new(Notify::new()),
         }
     }
 
@@ -219,6 +228,12 @@ impl SwarmOrchestrator {
     /// Returns true if a question is currently pending for the user.
     pub fn has_pending_question(&self) -> bool {
         self.question_pending.load(Ordering::SeqCst)
+    }
+
+    /// Signal that a human message has arrived so the run_loop wakes
+    /// from its idle sleep and prioritises the manager agent.
+    pub fn notify_human_message(&self) {
+        self.human_message_notify.notify_one();
     }
 
     /// Re-create any agent runner slots that are `None` (e.g. from a cancelled task).
@@ -415,18 +430,89 @@ impl SwarmOrchestrator {
     }
 }
 
+/// Run a single agent step by index, extracting the runner from the swarm,
+/// refreshing its context, running the step, and putting it back.
+/// Returns true if the agent produced useful work.
+async fn run_agent_by_index(
+    swarm: &Arc<tokio::sync::Mutex<SwarmOrchestrator>>,
+    index: usize,
+) -> bool {
+    let extracted = {
+        let mut s = swarm.lock().await;
+        let actor_ref = Arc::clone(&s.actor);
+        let question_pending = Arc::clone(&s.question_pending);
+        let client = Arc::clone(&s.client);
+        let model = s.model.clone();
+        match s.agents[index].take() {
+            Some(runner) => {
+                // Swap out the receiver with a fresh one; the old one keeps its
+                // buffered events so we drain them below.
+                let event_rx =
+                    std::mem::replace(&mut s.event_receivers[index], actor_ref.subscribe());
+                Some((runner, event_rx, actor_ref, question_pending, client, model))
+            }
+            None => {
+                tracing::warn!(agent_index = index, "agent runner slot is empty, skipping");
+                None
+            }
+        }
+    };
+    let Some((mut runner, mut event_rx, actor_ref, question_pending, client, model)) = extracted
+    else {
+        return false;
+    };
+
+    SwarmOrchestrator::refresh_context_with_flag(
+        &mut runner,
+        &actor_ref,
+        &mut event_rx,
+        Some(&question_pending),
+    )
+    .await;
+
+    let did_work = SwarmOrchestrator::run_agent_step(
+        &mut runner,
+        &actor_ref,
+        &question_pending,
+        &client,
+        &model,
+    )
+    .await;
+
+    // Put the runner and its (now-drained) receiver back
+    {
+        let mut s = swarm.lock().await;
+        s.agents[index] = Some(runner);
+        s.event_receivers[index] = event_rx;
+    }
+
+    did_work
+}
+
+/// Find the index of the manager agent (first agent with AgentRole::Manager).
+fn find_manager_index(swarm: &SwarmOrchestrator) -> Option<usize> {
+    swarm.agents.iter().position(|opt| {
+        opt.as_ref()
+            .map(|r| r.role == AgentRole::Manager)
+            .unwrap_or(false)
+    })
+}
+
 /// Run the agent loop. This drives all agents in the swarm through their
 /// think-act cycles. Runs until the task is cancelled (via JoinHandle::abort).
 ///
 /// Each agent has its own broadcast receiver, so events are never stolen
 /// by whichever agent drains the channel first.
+///
+/// When a human sends a chat message, `human_message_notify` wakes the loop
+/// from its idle sleep so the manager agent responds promptly.
 pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
     loop {
         // Recover any empty slots from prior cancellations, then check pause.
-        let (is_paused, agent_count) = {
+        let (is_paused, agent_count, notify) = {
             let mut s = swarm.lock().await;
             s.recover_empty_slots();
-            (s.is_paused(), s.agents.len())
+            (s.is_paused(), s.agents.len(), Arc::clone(&s.human_message_notify))
         };
 
         if is_paused {
@@ -444,57 +530,7 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
                 }
             }
 
-            // Extract runner, its event receiver, and shared fields.
-            // The Option::take() avoids needing a Ulid::nil() placeholder.
-            let extracted = {
-                let mut s = swarm.lock().await;
-                let actor_ref = Arc::clone(&s.actor);
-                let question_pending = Arc::clone(&s.question_pending);
-                let client = Arc::clone(&s.client);
-                let model = s.model.clone();
-                match s.agents[i].take() {
-                    Some(runner) => {
-                        // Swap out the receiver with a fresh one; the old one keeps its
-                        // buffered events so we drain them below.
-                        let event_rx =
-                            std::mem::replace(&mut s.event_receivers[i], actor_ref.subscribe());
-                        Some((runner, event_rx, actor_ref, question_pending, client, model))
-                    }
-                    None => {
-                        tracing::warn!(agent_index = i, "agent runner slot is empty, skipping");
-                        None
-                    }
-                }
-            };
-            let Some((mut runner, mut event_rx, actor_ref, question_pending, client, model)) =
-                extracted
-            else {
-                continue;
-            };
-
-            SwarmOrchestrator::refresh_context_with_flag(
-                &mut runner,
-                &actor_ref,
-                &mut event_rx,
-                Some(&question_pending),
-            )
-            .await;
-
-            let did_work = SwarmOrchestrator::run_agent_step(
-                &mut runner,
-                &actor_ref,
-                &question_pending,
-                &client,
-                &model,
-            )
-            .await;
-
-            // Put the runner and its (now-drained) receiver back
-            {
-                let mut s = swarm.lock().await;
-                s.agents[i] = Some(runner);
-                s.event_receivers[i] = event_rx;
-            }
+            let did_work = run_agent_by_index(&swarm, i).await;
 
             if did_work {
                 any_work = true;
@@ -502,10 +538,28 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
             }
         }
 
-        if any_work {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        // Wait between cycles. Use tokio::select! so a human message
+        // notification can interrupt the idle sleep and wake us early.
+        let sleep_duration = if any_work {
+            std::time::Duration::from_secs(1)
         } else {
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            std::time::Duration::from_secs(5)
+        };
+
+        tokio::select! {
+            _ = tokio::time::sleep(sleep_duration) => {}
+            _ = notify.notified() => {
+                // Human message arrived — run the manager agent immediately
+                // before starting the next full cycle.
+                let manager_idx = {
+                    let s = swarm.lock().await;
+                    find_manager_index(&s)
+                };
+                if let Some(idx) = manager_idx {
+                    tracing::info!("human message received, prioritising manager agent");
+                    run_agent_by_index(&swarm, idx).await;
+                }
+            }
         }
     }
 }
@@ -1006,5 +1060,82 @@ mod tests {
         assert_eq!(plnr.context.last_event_seen, 18);
         assert_eq!(plnr.context.key_decisions, vec!["Decision B"]);
         assert_ne!(plnr.agent_id, original_planner.agent_id);
+    }
+
+    #[tokio::test]
+    async fn notify_human_message_wakes_run_loop() {
+        let (spec_id, actor) = make_test_actor();
+        let swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            actor,
+            Vec::new(),
+            make_test_client(),
+            "stub-model".to_string(),
+        );
+        let notify = Arc::clone(&swarm.human_message_notify);
+        let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
+
+        let handle = tokio::spawn(run_loop(Arc::clone(&swarm)));
+
+        // Let it enter the idle sleep
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Send the notification — should wake the loop instead of sleeping 5s
+        notify.notify_one();
+
+        // Give it a moment to process the wake, then abort
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        handle.abort();
+
+        let result = handle.await;
+        assert!(result.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn find_manager_index_finds_manager() {
+        let (spec_id, actor) = make_test_actor();
+        let agents = vec![
+            AgentRunner::new(spec_id, AgentRole::Brainstormer),
+            AgentRunner::new(spec_id, AgentRole::Manager),
+            AgentRunner::new(spec_id, AgentRole::Planner),
+        ];
+        let swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            actor,
+            agents,
+            make_test_client(),
+            "stub-model".to_string(),
+        );
+        assert_eq!(find_manager_index(&swarm), Some(1));
+    }
+
+    #[tokio::test]
+    async fn find_manager_index_returns_none_without_manager() {
+        let (spec_id, actor) = make_test_actor();
+        let agents = vec![
+            AgentRunner::new(spec_id, AgentRole::Brainstormer),
+            AgentRunner::new(spec_id, AgentRole::Planner),
+        ];
+        let swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            actor,
+            agents,
+            make_test_client(),
+            "stub-model".to_string(),
+        );
+        assert_eq!(find_manager_index(&swarm), None);
+    }
+
+    #[test]
+    fn manager_prompt_mentions_human_priority() {
+        let prompt = system_prompt_for_role(&AgentRole::Manager);
+        assert!(
+            prompt.contains("human"),
+            "manager prompt should mention human messages"
+        );
+        assert!(
+            prompt.contains("top priority"),
+            "manager prompt should prioritize human messages"
+        );
     }
 }
