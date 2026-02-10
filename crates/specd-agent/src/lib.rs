@@ -3,9 +3,11 @@
 
 pub mod client;
 pub mod context;
+pub mod mux_tools;
 pub mod providers;
 pub mod runtime;
 pub mod swarm;
+pub mod testing;
 pub mod tools;
 
 pub use context::{AgentContext, AgentRole, contexts_from_snapshot_map, contexts_to_snapshot_map};

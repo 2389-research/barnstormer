@@ -19,3 +19,4 @@ chrono.workspace = true
 reqwest.workspace = true
 mux.workspace = true
 anyhow.workspace = true
+futures.workspace = true
