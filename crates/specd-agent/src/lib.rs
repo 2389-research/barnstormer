@@ -1,2 +1,10 @@
 // ABOUTME: Agent system for specd, orchestrating AI-assisted spec refinement.
 // ABOUTME: Defines agent traits and step execution for spec exploration workflows.
+
+pub mod context;
+pub mod runtime;
+pub mod tools;
+
+pub use context::{AgentContext, AgentRole};
+pub use runtime::{AgentAction, AgentError, AgentRuntime};
+pub use tools::all_tool_definitions;
