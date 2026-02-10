@@ -1,4 +1,4 @@
-<div hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
+<div class="activity-panel" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
     {% include "partials/activity_transcript.html" %}
 </div>
 
@@ -7,8 +7,10 @@
           hx-target="#activity-container"
           hx-swap="innerHTML">
         <div class="chat-input-row">
-            <input type="text" name="message" placeholder="Type a message..." autocomplete="off" required>
-            <button type="submit" class="btn btn-primary btn-sm">Send</button>
+            <input type="text" name="message" placeholder="Send a message..." autocomplete="off" required>
+            <button type="submit" class="btn btn-send" title="Send">
+                &#10148;
+            </button>
         </div>
     </form>
 </div>
@@ -19,10 +21,11 @@
          hx-trigger="load"
          hx-swap="outerHTML">
     </div>
-    <button class="btn btn-sm"
+    <button class="btn btn-sm btn-undo"
             hx-post="/web/specs/{{ spec_id }}/undo"
             hx-target="#spec-content"
-            hx-swap="innerHTML">
+            hx-swap="innerHTML"
+            title="Undo last action">
         Undo
     </button>
 </div>

@@ -714,8 +714,38 @@ pub async fn document(
 /// Activity transcript data for templates.
 pub struct TranscriptEntry {
     pub sender: String,
+    pub sender_label: String,
+    pub is_human: bool,
+    pub role_class: String,
     pub content: String,
     pub timestamp: String,
+}
+
+/// Derive a display label and CSS class from a raw sender ID.
+/// "human" → ("You", true, "human"), "manager-01J..." → ("Manager", false, "manager"), etc.
+fn sender_display(sender: &str) -> (String, bool, String) {
+    if sender == "human" {
+        return ("You".to_string(), true, "human".to_string());
+    }
+    // Agent IDs look like "manager-01JTEST..." or "brainstormer-01JTEST..."
+    let role = sender.split('-').next().unwrap_or(sender);
+    let label = match role {
+        "manager" => "Manager",
+        "brainstormer" => "Brainstormer",
+        "planner" => "Planner",
+        "dot_generator" => "Dot Generator",
+        "critic" => "Critic",
+        _ => role,
+    };
+    let mut capitalized = String::new();
+    for (i, ch) in label.chars().enumerate() {
+        if i == 0 {
+            capitalized.extend(ch.to_uppercase());
+        } else {
+            capitalized.push(ch);
+        }
+    }
+    (capitalized, false, role.to_string())
 }
 
 /// Question data for templates.
@@ -820,10 +850,16 @@ pub async fn activity(
     let transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
-        .map(|m| TranscriptEntry {
-            sender: m.sender.clone(),
-            content: m.content.clone(),
-            timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+        .map(|m| {
+            let (sender_label, is_human, role_class) = sender_display(&m.sender);
+            TranscriptEntry {
+                sender: m.sender.clone(),
+                sender_label,
+                is_human,
+                role_class,
+                content: m.content.clone(),
+                timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+            }
         })
         .collect();
 
@@ -865,10 +901,16 @@ pub async fn activity_transcript(
     let transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
-        .map(|m| TranscriptEntry {
-            sender: m.sender.clone(),
-            content: m.content.clone(),
-            timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+        .map(|m| {
+            let (sender_label, is_human, role_class) = sender_display(&m.sender);
+            TranscriptEntry {
+                sender: m.sender.clone(),
+                sender_label,
+                is_human,
+                role_class,
+                content: m.content.clone(),
+                timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+            }
         })
         .collect();
 
@@ -955,10 +997,16 @@ pub async fn answer_question(
     let transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
-        .map(|m| TranscriptEntry {
-            sender: m.sender.clone(),
-            content: m.content.clone(),
-            timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+        .map(|m| {
+            let (sender_label, is_human, role_class) = sender_display(&m.sender);
+            TranscriptEntry {
+                sender: m.sender.clone(),
+                sender_label,
+                is_human,
+                role_class,
+                content: m.content.clone(),
+                timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+            }
         })
         .collect();
 
@@ -1042,10 +1090,16 @@ pub async fn chat(
     let transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
-        .map(|m| TranscriptEntry {
-            sender: m.sender.clone(),
-            content: m.content.clone(),
-            timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+        .map(|m| {
+            let (sender_label, is_human, role_class) = sender_display(&m.sender);
+            TranscriptEntry {
+                sender: m.sender.clone(),
+                sender_label,
+                is_human,
+                role_class,
+                content: m.content.clone(),
+                timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+            }
         })
         .collect();
 
@@ -1633,13 +1687,16 @@ mod tests {
             spec_id: "01HTEST".to_string(),
             transcript: vec![TranscriptEntry {
                 sender: "agent-1".to_string(),
+                sender_label: "Agent-1".to_string(),
+                is_human: false,
+                role_class: "agent".to_string(),
                 content: "Started analysis".to_string(),
                 timestamp: "12:34:56".to_string(),
             }],
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("agent-1"));
+        assert!(rendered.contains("Agent-1"), "should contain sender_label");
         assert!(rendered.contains("Started analysis"));
     }
 
@@ -1773,13 +1830,16 @@ mod tests {
             spec_id: "01HTEST".to_string(),
             transcript: vec![TranscriptEntry {
                 sender: "agent-1".to_string(),
+                sender_label: "Agent-1".to_string(),
+                is_human: false,
+                role_class: "agent".to_string(),
                 content: "Started analysis".to_string(),
                 timestamp: "12:34:56".to_string(),
             }],
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("agent-1"));
+        assert!(rendered.contains("Agent-1"), "should contain sender_label");
         assert!(rendered.contains("Started analysis"));
         assert!(!rendered.contains("chat-input"), "transcript template should not contain chat input");
     }
@@ -1793,7 +1853,7 @@ mod tests {
         };
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("chat-input"), "should contain chat input div");
-        assert!(rendered.contains("Type a message"), "should contain placeholder text");
+        assert!(rendered.contains("Send a message"), "should contain placeholder text");
         assert!(rendered.contains("/chat"), "should contain chat form action");
     }
 
