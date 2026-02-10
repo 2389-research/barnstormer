@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use crate::client;
 use crate::context::{AgentContext, AgentRole};
 use crate::mux_tools;
-use crate::runtime::AgentError;
 use specd_core::actor::SpecActorHandle;
 use specd_core::command::Command;
 use specd_core::event::Event;
@@ -98,15 +97,13 @@ pub struct SwarmOrchestrator {
 impl SwarmOrchestrator {
     /// Create a new orchestrator with default agents for the given spec.
     /// Uses the default provider (from env or "anthropic") and model.
-    pub fn with_defaults(spec_id: Ulid, actor: SpecActorHandle) -> Result<Self, AgentError> {
+    pub fn with_defaults(spec_id: Ulid, actor: SpecActorHandle) -> Result<Self, anyhow::Error> {
         let provider =
             std::env::var("SPECD_DEFAULT_PROVIDER").unwrap_or_else(|_| "anthropic".to_string());
         let model_override = std::env::var("SPECD_DEFAULT_MODEL").ok();
 
         let (llm_client, resolved_model) =
-            client::create_llm_client(&provider, model_override.as_deref()).map_err(|e| {
-                AgentError::ProviderError(e.to_string())
-            })?;
+            client::create_llm_client(&provider, model_override.as_deref())?;
 
         let actor = Arc::new(actor);
 
