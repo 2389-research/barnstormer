@@ -6,16 +6,17 @@
 
 {% block nav %}
 <div class="rail-header">
-    <h2>Specs</h2>
+    <span>Your specs</span>
 </div>
-<div id="spec-list" hx-get="/web/specs" hx-trigger="load" hx-swap="innerHTML">
+<div class="spec-list" id="spec-list" hx-get="/web/specs" hx-trigger="load" hx-swap="innerHTML">
     <p class="loading">Loading specs...</p>
 </div>
 <div id="provider-status" hx-get="/web/provider-status" hx-trigger="load" hx-swap="innerHTML">
 </div>
 <div class="rail-footer">
-    <button class="btn btn-primary" hx-get="/web/specs/new" hx-target="#workspace" hx-swap="innerHTML">
-        + New Spec
+    <button class="new-spec-btn" hx-get="/web/specs/new" hx-target="#workspace" hx-swap="innerHTML">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        New spec
     </button>
 </div>
 {% endblock %}

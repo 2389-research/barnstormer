@@ -1,7 +1,10 @@
-{# ABOUTME: Full-width chat panel available as a secondary canvas view. #}
-{# ABOUTME: Distinct layout from the mission ticker — larger bubbles, avatars, centered, chat-app feel. #}
+{# ABOUTME: Chat panel for the right rail of the spec compositor. #}
+{# ABOUTME: Message list with avatars, question cards, and textarea input. SSE provided by parent. #}
 
-<div class="chat-panel" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
+<div class="chat-panel">
+    <div class="chat-panel-header">
+        <span class="chat-panel-title">Chat</span>
+    </div>
     {% include "partials/chat_transcript.html" %}
 
     <div class="chat-input-area">
@@ -10,8 +13,10 @@
               hx-swap="outerHTML"
               hx-on::after-request="this.reset()">
             <div class="chat-input-row">
-                <input type="text" name="message" placeholder="Send a message..." autocomplete="off" required>
-                <button type="submit" class="btn btn-send" title="Send">&#10148;</button>
+                <textarea name="message" placeholder="Ask the agents anything..." rows="1" required></textarea>
+                <button type="submit" class="btn btn-send" title="Send">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+                </button>
             </div>
         </form>
     </div>

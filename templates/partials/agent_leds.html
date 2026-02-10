@@ -1,10 +1,7 @@
 {# ABOUTME: Agent status LED indicators for the command bar. #}
 {# ABOUTME: Shows colored dots indicating agent swarm state: active, paused, or stopped. #}
 
-<div class="agent-leds"
-     hx-get="/web/specs/{{ spec_id }}/agents/leds"
-     hx-trigger="every 5s"
-     hx-swap="innerHTML">
+<div class="agent-leds">
     {% if running %}
     <span class="led led-manager led-active" title="Manager"></span>
     <span class="led led-brainstormer led-active" title="Brainstormer"></span>

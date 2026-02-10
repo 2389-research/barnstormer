@@ -1,36 +1,30 @@
-<div class="agent-status" id="agent-status">
+{# ABOUTME: Agent status pill button for the command bar. #}
+{# ABOUTME: Single toggle: dark pill when running (with green dot), light when paused/stopped. #}
+
+<div id="agent-status">
     {% if running %}
-    <div class="agent-status-active">
-        <span class="status-dot connected"></span>
-        <span>Agents running ({{ agent_count }})</span>
-        <button class="btn btn-sm btn-danger"
-                hx-post="/web/specs/{{ spec_id }}/agents/pause"
-                hx-target="#agent-status"
-                hx-swap="outerHTML">
-            Pause
-        </button>
-    </div>
+    <button class="agent-pill agent-pill-running"
+            hx-post="/web/specs/{{ spec_id }}/agents/pause"
+            hx-target="#agent-status"
+            hx-swap="outerHTML">
+        <span class="agent-pill-dot"></span>
+        Agents active
+    </button>
     {% else if started %}
-    <div class="agent-status-paused">
-        <span class="status-dot disconnected"></span>
-        <span>Agents paused</span>
-        <button class="btn btn-sm btn-success"
-                hx-post="/web/specs/{{ spec_id }}/agents/resume"
-                hx-target="#agent-status"
-                hx-swap="outerHTML">
-            Resume
-        </button>
-    </div>
+    <button class="agent-pill agent-pill-paused"
+            hx-post="/web/specs/{{ spec_id }}/agents/resume"
+            hx-target="#agent-status"
+            hx-swap="outerHTML">
+        <span class="agent-pill-dot"></span>
+        Agents paused
+    </button>
     {% else %}
-    <div class="agent-status-stopped">
-        <span class="status-dot disconnected"></span>
-        <span>Agents stopped</span>
-        <button class="btn btn-sm btn-primary"
-                hx-post="/web/specs/{{ spec_id }}/agents/start"
-                hx-target="#agent-status"
-                hx-swap="outerHTML">
-            Start Agents
-        </button>
-    </div>
+    <button class="agent-pill agent-pill-stopped"
+            hx-post="/web/specs/{{ spec_id }}/agents/start"
+            hx-target="#agent-status"
+            hx-swap="outerHTML">
+        <span class="agent-pill-dot"></span>
+        Start agents
+    </button>
     {% endif %}
 </div>

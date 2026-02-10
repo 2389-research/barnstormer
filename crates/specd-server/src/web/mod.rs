@@ -350,7 +350,7 @@ pub struct SpecViewTemplate {
     pub lanes: Vec<LaneData>,
 }
 
-/// GET /web/specs/{id} - Render the full spec view (board + right rail).
+/// GET /web/specs/{id} - Render the spec compositor (command bar + canvas + chat rail).
 pub async fn spec_view(
     State(state): State<SharedState>,
     Path(id): Path<String>,
@@ -789,6 +789,7 @@ pub struct TranscriptEntry {
     pub sender_label: String,
     pub is_human: bool,
     pub is_step: bool,
+    pub is_continuation: bool,
     pub role_class: String,
     pub content: String,
     pub timestamp: String,
@@ -802,9 +803,22 @@ fn to_transcript_entry(m: &specd_core::TranscriptMessage) -> TranscriptEntry {
         sender_label,
         is_human,
         is_step: m.kind.is_step(),
+        is_continuation: false,
         role_class,
         content: m.content.clone(),
         timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+    }
+}
+
+/// Mark consecutive entries from the same sender as continuations.
+/// The first entry in a run keeps `is_continuation = false`; subsequent
+/// entries from the same sender get `is_continuation = true` so the
+/// template can skip the avatar/name row.
+fn mark_continuations(entries: &mut [TranscriptEntry]) {
+    for i in 1..entries.len() {
+        if entries[i].sender == entries[i - 1].sender && !entries[i].is_step && !entries[i - 1].is_step {
+            entries[i].is_continuation = true;
+        }
     }
 }
 
@@ -824,23 +838,25 @@ fn sender_display(sender: &str) -> (String, bool, String) {
     // Agent IDs look like "manager-01JTEST..." or "brainstormer-01JTEST..."
     let role = sender.split('-').next().unwrap_or(sender);
     let label = match role {
-        "manager" => "Manager",
-        "brainstormer" => "Brainstormer",
-        "planner" => "Planner",
+        "manager" => "Orchestrator",
+        "brainstormer" => "Researcher",
+        "planner" => "Architect",
         "dot_generator" => "Dot Generator",
         "critic" => "Critic",
-        _ => role,
-    };
-    let mut capitalized = String::new();
-    for (i, ch) in label.chars().enumerate() {
-        if i == 0 {
-            capitalized.extend(ch.to_uppercase());
-        } else {
-            capitalized.push(ch);
+        _ => {
+            let mut capitalized = String::new();
+            for (i, ch) in role.chars().enumerate() {
+                if i == 0 {
+                    capitalized.extend(ch.to_uppercase());
+                } else {
+                    capitalized.push(ch);
+                }
+            }
+            return (capitalized, false, normalize_css_class(role));
         }
-    }
+    };
     let role_class = normalize_css_class(role);
-    (capitalized, false, role_class)
+    (label.to_string(), false, role_class)
 }
 
 /// Normalize a string into a valid CSS class name: lowercase, replacing
@@ -916,12 +932,12 @@ pub struct TranscriptQuery {
 }
 
 /// Validate and sanitize a container_id value. Only known IDs are accepted;
-/// anything else falls back to "activity-transcript" to prevent XSS via
+/// anything else falls back to "chat-transcript" to prevent XSS via
 /// user-controlled values rendered into script tags and HTMX attributes.
 fn sanitize_container_id(raw: &str) -> String {
     match raw {
         "activity-transcript" | "chat-transcript" | "mission-ticker" => raw.to_string(),
-        _ => "mission-ticker".to_string(),
+        _ => "chat-transcript".to_string(),
     }
 }
 
@@ -1023,12 +1039,13 @@ pub async fn activity_transcript(
 
     let is_chat = container_id == "chat-transcript";
 
-    let transcript: Vec<TranscriptEntry> = spec_state
+    let mut transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
         .filter(|m| !is_chat || is_chat_participant(&m.sender))
         .map(to_transcript_entry)
         .collect();
+    mark_continuations(&mut transcript);
 
     if is_chat {
         ChatTranscriptTemplate {
@@ -1094,12 +1111,13 @@ pub async fn chat_panel(
 
     let spec_state = handle.read_state().await;
 
-    let transcript: Vec<TranscriptEntry> = spec_state
+    let mut transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
         .filter(|m| is_chat_participant(&m.sender))
         .map(to_transcript_entry)
         .collect();
+    mark_continuations(&mut transcript);
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
@@ -2359,6 +2377,7 @@ mod tests {
                 sender_label: "Agent-1".to_string(),
                 is_human: false,
                 is_step: false,
+                is_continuation: false,
                 role_class: "agent".to_string(),
                 content: "Started analysis".to_string(),
                 timestamp: "12:34:56".to_string(),
@@ -2513,6 +2532,7 @@ mod tests {
                 sender_label: "Agent-1".to_string(),
                 is_human: false,
                 is_step: false,
+                is_continuation: false,
                 role_class: "agent".to_string(),
                 content: "Started analysis".to_string(),
                 timestamp: "12:34:56".to_string(),
@@ -2535,6 +2555,7 @@ mod tests {
                 sender_label: "You".to_string(),
                 is_human: true,
                 is_step: false,
+                is_continuation: false,
                 role_class: "human".to_string(),
                 content: "Hello chat".to_string(),
                 timestamp: "12:00:00".to_string(),
@@ -2587,31 +2608,30 @@ mod tests {
             lanes: vec![],
         };
         let rendered = tmpl.render().unwrap();
-        // Command bar with title
+        // Command bar with title and subtitle
         assert!(rendered.contains("command-bar"), "should contain command-bar");
         assert!(rendered.contains("Test Spec"), "should contain spec title");
         assert!(rendered.contains("A test spec"), "should contain one-liner");
-        // View toggles for document, board, diagram
+        // Capsule view toggles for document, board, diagram
+        assert!(rendered.contains("view-toggles-capsule"), "should contain capsule view toggles");
         assert!(rendered.contains("data-view=\"document\""), "should contain document toggle");
         assert!(rendered.contains("data-view=\"board\""), "should contain board toggle");
         assert!(rendered.contains("data-view=\"diagram\""), "should contain diagram toggle");
-        // Document toggle should be active by default
         assert!(rendered.contains("view-toggle active"), "document toggle should be active");
-        // Canvas area
+        // Canvas and chat rail
         assert!(rendered.contains("id=\"canvas\""), "should contain canvas element");
-        // Mission strip
-        assert!(rendered.contains("mission-strip"), "should contain mission-strip");
-        assert!(rendered.contains("mission-ticker"), "should contain mission-ticker");
-        // Agent LEDs and controls in command bar
-        assert!(rendered.contains("agent-leds"), "should contain agent-leds");
+        assert!(rendered.contains("spec-body"), "should contain spec-body row");
+        assert!(rendered.contains("chat-rail"), "should contain chat-rail");
+        assert!(rendered.contains("chat-panel"), "should load chat panel");
+        // Agent controls in command bar
         assert!(rendered.contains("agent-controls"), "should contain agent-controls");
-        // Chat input in mission strip
-        assert!(rendered.contains("Direct the agents"), "should contain input placeholder");
+        // SSE on spec-compositor
+        assert!(rendered.contains("sse-connect"), "should have SSE connection");
         // Old layout elements should NOT be present
+        assert!(!rendered.contains("mission-strip"), "should not contain mission-strip");
+        assert!(!rendered.contains("mission-ticker"), "should not contain mission-ticker");
         assert!(!rendered.contains("tab-bar"), "should not contain old tab-bar");
-        assert!(!rendered.contains("data-tab="), "should not contain old data-tab attributes");
         assert!(!rendered.contains("right-rail"), "should not contain right-rail references");
-        assert!(!rendered.contains("spec-content"), "should not contain old spec-content");
     }
 
     #[test]
@@ -2635,6 +2655,7 @@ mod tests {
                 sender_label: "Manager".to_string(),
                 is_human: false,
                 is_step: false,
+                is_continuation: false,
                 role_class: "manager".to_string(),
                 content: "Analyzing requirements".to_string(),
                 timestamp: "12:34:56".to_string(),
@@ -2782,8 +2803,8 @@ mod tests {
         };
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("agent-status"), "should contain agent-status id");
-        assert!(rendered.contains("Agents stopped"), "should show stopped state");
-        assert!(rendered.contains("Start Agents"), "should show start button");
+        assert!(rendered.contains("agent-pill-stopped"), "should have stopped pill class");
+        assert!(rendered.contains("Start agents"), "should show start agents text");
         assert!(rendered.contains("/agents/start"), "should have start action URL");
     }
 
@@ -2796,8 +2817,8 @@ mod tests {
             agent_count: 4,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("Agents running (4)"), "should show running state with count");
-        assert!(rendered.contains("Pause"), "should show pause button");
+        assert!(rendered.contains("agent-pill-running"), "should have running pill class");
+        assert!(rendered.contains("Agents active"), "should show active state");
         assert!(rendered.contains("/agents/pause"), "should have pause action URL");
     }
 
@@ -2810,8 +2831,8 @@ mod tests {
             agent_count: 4,
         };
         let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("agent-pill-paused"), "should have paused pill class");
         assert!(rendered.contains("Agents paused"), "should show paused state");
-        assert!(rendered.contains("Resume"), "should show resume button");
         assert!(rendered.contains("/agents/resume"), "should have resume action URL");
     }
 
@@ -2853,7 +2874,7 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("Agents stopped"), "should show stopped when no swarm: {}", html);
+        assert!(html.contains("Start agents"), "should show stopped pill when no swarm: {}", html);
     }
 
     #[tokio::test]
@@ -2894,7 +2915,7 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("Agents stopped"), "pause with no swarm should show stopped: {}", html);
+        assert!(html.contains("Start agents"), "pause with no swarm should show stopped pill: {}", html);
     }
 
     #[tokio::test]
@@ -2935,7 +2956,7 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("Agents stopped"), "resume with no swarm should show stopped: {}", html);
+        assert!(html.contains("Start agents"), "resume with no swarm should show stopped pill: {}", html);
     }
 
     #[tokio::test]
@@ -2958,7 +2979,7 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("Agents stopped"), "nonexistent spec should show stopped: {}", html);
+        assert!(html.contains("Start agents"), "nonexistent spec should show stopped pill: {}", html);
     }
 
     #[test]
@@ -3089,6 +3110,7 @@ mod tests {
                     sender_label: "You".to_string(),
                     is_human: true,
                     is_step: false,
+                    is_continuation: false,
                     role_class: "human".to_string(),
                     content: "Hello from human".to_string(),
                     timestamp: "12:34:56".to_string(),
@@ -3098,6 +3120,7 @@ mod tests {
                     sender_label: "Manager".to_string(),
                     is_human: false,
                     is_step: false,
+                    is_continuation: false,
                     role_class: "manager".to_string(),
                     content: "Agent response here".to_string(),
                     timestamp: "12:35:00".to_string(),
@@ -3108,9 +3131,9 @@ mod tests {
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("Hello from human"), "should contain human message content");
         assert!(rendered.contains("Agent response here"), "should contain agent message content");
-        assert!(rendered.contains("chat-row-human"), "should have human chat row class");
-        assert!(rendered.contains("chat-row-agent"), "should have agent chat row class");
-        assert!(rendered.contains("Manager"), "should show agent sender label");
+        assert!(rendered.contains("chat-message"), "should have chat-message class");
+        assert!(rendered.contains("chat-avatar"), "should have avatar element");
+        assert!(rendered.contains("chat-sender"), "should have sender label element");
         assert!(!rendered.contains("No messages yet"), "should not show empty state when entries exist");
     }
 
@@ -3141,11 +3164,11 @@ mod tests {
         assert!(rendered.contains("chat-input-row"), "should contain chat-input-row div");
         assert!(rendered.contains(r#"hx-post="/web/specs/01HTEST/chat""#), "should post to chat endpoint");
         assert!(rendered.contains(r##"hx-target="#chat-transcript""##), "chat form should target chat-transcript");
-        assert!(rendered.contains("Send a message..."), "should have placeholder text");
+        assert!(rendered.contains("Ask the agents anything"), "should have placeholder text");
     }
 
     #[test]
-    fn chat_panel_contains_sse_connection() {
+    fn chat_panel_contains_header_and_transcript() {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
@@ -3153,9 +3176,8 @@ mod tests {
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("sse-connect"), "should contain sse-connect attribute");
-        assert!(rendered.contains(r#"sse-connect="/api/specs/01HTEST/events/stream""#), "should connect to correct SSE endpoint");
-        assert!(rendered.contains(r#"hx-ext="sse""#), "should have hx-ext sse");
+        assert!(rendered.contains("chat-panel-header"), "should contain chat panel header");
+        assert!(rendered.contains("Chat"), "should contain Chat title");
         assert!(rendered.contains("sse:transcript_appended"), "should listen for transcript_appended event");
     }
 
@@ -3679,9 +3701,9 @@ mod tests {
         assert_eq!(sanitize_container_id("activity-transcript"), "activity-transcript");
         assert_eq!(sanitize_container_id("chat-transcript"), "chat-transcript");
         assert_eq!(sanitize_container_id("mission-ticker"), "mission-ticker");
-        assert_eq!(sanitize_container_id("'); alert('xss'); //"), "mission-ticker");
-        assert_eq!(sanitize_container_id("malicious-id"), "mission-ticker");
-        assert_eq!(sanitize_container_id(""), "mission-ticker");
+        assert_eq!(sanitize_container_id("'); alert('xss'); //"), "chat-transcript");
+        assert_eq!(sanitize_container_id("malicious-id"), "chat-transcript");
+        assert_eq!(sanitize_container_id(""), "chat-transcript");
     }
 
     // ---- sender_display tests ----
@@ -3697,7 +3719,7 @@ mod tests {
     #[test]
     fn sender_display_manager_role() {
         let (label, is_human, role_class) = sender_display("manager-01JTESTID123");
-        assert_eq!(label, "Manager");
+        assert_eq!(label, "Orchestrator");
         assert!(!is_human, "agent should not be flagged as human");
         assert_eq!(role_class, "manager");
     }
@@ -3705,7 +3727,7 @@ mod tests {
     #[test]
     fn sender_display_brainstormer_role() {
         let (label, is_human, role_class) = sender_display("brainstormer-01JTESTID456");
-        assert_eq!(label, "Brainstormer");
+        assert_eq!(label, "Researcher");
         assert!(!is_human);
         assert_eq!(role_class, "brainstormer");
     }

@@ -1,62 +1,69 @@
-{# ABOUTME: Mission control compositor: command bar + canvas + mission strip. #}
+{# ABOUTME: Spec compositor: command bar + canvas + chat rail. #}
 {# ABOUTME: Loaded into #workspace when a spec is selected; default view is the document canvas. #}
+
+<div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
 
 <header class="command-bar">
     <div class="command-bar-left">
-        <span class="command-bar-diamond">&#9670;</span>
-        <h1 class="command-bar-title">{{ title }}</h1>
-        <span class="command-bar-oneliner">{{ one_liner }}</span>
+        <span class="command-bar-title">{{ title }}</span>
+        <span class="command-bar-chevron">&#8250;</span>
+        <span class="command-bar-subtitle">{{ one_liner }}</span>
     </div>
-    <div class="view-toggles">
+    <div class="view-toggles-capsule">
         <button class="view-toggle active" data-view="document"
                 hx-get="/web/specs/{{ spec_id }}/document"
-                hx-target="#canvas" hx-swap="innerHTML">&#128196;</button>
+                hx-target="#canvas" hx-swap="innerHTML">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <span class="view-toggle-label">Document</span>
+        </button>
         <button class="view-toggle" data-view="board"
                 hx-get="/web/specs/{{ spec_id }}/board"
-                hx-target="#canvas" hx-swap="innerHTML">&#128451;</button>
+                hx-target="#canvas" hx-swap="innerHTML">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            <span class="view-toggle-label">Board</span>
+        </button>
         <button class="view-toggle" data-view="diagram"
                 hx-get="/web/specs/{{ spec_id }}/diagram"
-                hx-target="#canvas" hx-swap="innerHTML">&#9672;</button>
+                hx-target="#canvas" hx-swap="innerHTML">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+            <span class="view-toggle-label">Diagram</span>
+        </button>
     </div>
     <div class="command-bar-right">
-        <div id="agent-leds" hx-get="/web/specs/{{ spec_id }}/agents/leds"
-             hx-trigger="load" hx-swap="innerHTML"></div>
         <div id="agent-controls" hx-get="/web/specs/{{ spec_id }}/agents/status"
-             hx-trigger="load" hx-swap="innerHTML"></div>
-        <a href="/web/specs/{{ spec_id }}/artifacts" hx-get="/web/specs/{{ spec_id }}/artifacts"
-           hx-target="#canvas" hx-swap="innerHTML" class="btn btn-sm" title="Artifacts">&#8615;</a>
+             hx-trigger="load, sse:agent_step_started, sse:agent_step_finished, refreshAgents from:body"
+             hx-swap="innerHTML"></div>
     </div>
 </header>
 
-<main class="canvas" id="canvas"
-      hx-get="/web/specs/{{ spec_id }}/document"
-      hx-trigger="load" hx-swap="innerHTML">
-</main>
+<div class="spec-body">
+    <main class="canvas" id="canvas"
+          hx-get="/web/specs/{{ spec_id }}/document"
+          hx-trigger="load" hx-swap="innerHTML">
+    </main>
+    <aside class="chat-rail" id="chat-rail"
+           hx-get="/web/specs/{{ spec_id }}/chat-panel"
+           hx-trigger="load" hx-swap="innerHTML">
+    </aside>
+</div>
 
-<footer class="mission-strip" id="mission-strip"
-        hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
-    <div id="mission-ticker"
-         hx-trigger="sse:transcript_appended, sse:question_asked, sse:question_answered, sse:agent_step_started, sse:agent_step_finished"
-         hx-get="/web/specs/{{ spec_id }}/ticker"
-         hx-target="#mission-ticker" hx-swap="innerHTML">
-    </div>
-    <form class="mission-input" hx-post="/web/specs/{{ spec_id }}/chat"
-          hx-target="#mission-ticker" hx-swap="innerHTML"
-          hx-on::after-request="this.reset()">
-        <span class="prompt-prefix">&gt;</span>
-        <input type="text" name="message" placeholder="Direct the agents..." autocomplete="off" required>
-        <button type="submit" class="btn btn-send">&#9166;</button>
-    </form>
-</footer>
+</div>
 
 <script>
     // View toggle active state management
-    document.querySelectorAll('.view-toggles .view-toggle').forEach(function(btn) {
+    document.querySelectorAll('.view-toggles-capsule .view-toggle').forEach(function(btn) {
         btn.addEventListener('click', function() {
-            document.querySelectorAll('.view-toggles .view-toggle').forEach(function(b) {
+            document.querySelectorAll('.view-toggles-capsule .view-toggle').forEach(function(b) {
                 b.classList.remove('active');
             });
             btn.classList.add('active');
         });
+    });
+
+    // Refresh agent status when agent controls are swapped (start/pause/resume)
+    document.body.addEventListener('htmx:afterSwap', function(evt) {
+        if (evt.detail.target && evt.detail.target.id === 'agent-status') {
+            document.body.dispatchEvent(new CustomEvent('refreshAgents'));
+        }
     });
 </script>

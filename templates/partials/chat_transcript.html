@@ -1,5 +1,5 @@
-{# ABOUTME: Chat-style transcript partial for SSE refresh in the Chat tab. #}
-{# ABOUTME: Uses distinct markup from activity_transcript.html — larger bubbles, avatars, centered layout. #}
+{# ABOUTME: Chat transcript partial with avatar initials and message continuations. #}
+{# ABOUTME: SSE-refreshed via parent compositor; shows grouped messages and question cards. #}
 
 <div id="{{ container_id }}"
      class="chat-transcript-wrap"
@@ -16,19 +16,15 @@
             <span class="chat-status-time">{{ entry.timestamp }}</span>
         </div>
         {% else %}
-        <div class="chat-row {% if entry.is_human %}chat-row-human{% else %}chat-row-agent{% endif %}">
-            {% if !entry.is_human %}
-            <div class="chat-avatar">
-                <span class="chat-avatar-badge badge-{{ entry.role_class }}">{{ entry.sender_label|truncate(1) }}</span>
+        <div class="chat-message {% if entry.is_continuation %}chat-continuation{% endif %}">
+            {% if !entry.is_continuation %}
+            <div class="chat-message-header">
+                <div class="chat-avatar avatar-{{ entry.role_class }}">{{ entry.sender_label|truncate(1) }}</div>
+                <span class="chat-sender">{{ entry.sender_label }}</span>
+                <span class="chat-time">{{ entry.timestamp }}</span>
             </div>
             {% endif %}
-            <div class="chat-msg {% if entry.is_human %}chat-msg-human{% else %}chat-msg-agent{% endif %}">
-                {% if !entry.is_human %}
-                <div class="chat-msg-sender">{{ entry.sender_label }}</div>
-                {% endif %}
-                <div class="chat-msg-body">{{ entry.content }}</div>
-                <div class="chat-msg-time">{{ entry.timestamp }}</div>
-            </div>
+            <div class="chat-body">{{ entry.content }}</div>
         </div>
         {% endif %}
         {% endfor %}
@@ -43,55 +39,44 @@
 
     {% match pending_question %}
     {% when Some with (q) %}
-    <div class="chat-question-bar">
+    <div class="chat-question-card">
+        <div class="chat-message-header">
+            <div class="chat-avatar avatar-question">?</div>
+            <span class="chat-sender">Quick decision</span>
+        </div>
         {% match q %}
         {% when QuestionData::Boolean { question_id, question, default } %}
-        <div class="chat-question-label">Agent is asking:</div>
-        <p class="chat-question-text">{{ question }}</p>
+        <div class="chat-question-body">{{ question }}</div>
         <form hx-post="/web/specs/{{ spec_id }}/answer"
               hx-target="#{{ container_id }}"
               hx-swap="outerHTML"
-              class="chat-question-form">
+              class="chat-question-options">
             <input type="hidden" name="question_id" value="{{ question_id }}">
-            <div class="chat-question-actions">
-                <button type="submit" name="answer" value="Yes" class="btn btn-answer btn-yes">Yes</button>
-                <button type="submit" name="answer" value="No" class="btn btn-answer btn-no">No</button>
-            </div>
+            <button type="submit" name="answer" value="Yes" class="chat-option-btn">Yes</button>
+            <button type="submit" name="answer" value="No" class="chat-option-btn">No</button>
         </form>
 
         {% when QuestionData::MultipleChoice { question_id, question, choices, allow_multi } %}
-        <div class="chat-question-label">Agent is asking:</div>
-        <p class="chat-question-text">{{ question }}</p>
+        <div class="chat-question-body">{{ question }}</div>
         <form hx-post="/web/specs/{{ spec_id }}/answer"
               hx-target="#{{ container_id }}"
               hx-swap="outerHTML"
-              class="chat-question-form">
+              class="chat-question-options">
             <input type="hidden" name="question_id" value="{{ question_id }}">
-            <div class="chat-question-choices">
-                {% for choice in choices %}
-                <label class="chat-choice">
-                    {% if allow_multi %}
-                    <input type="checkbox" name="answer" value="{{ choice }}">
-                    {% else %}
-                    <input type="radio" name="answer" value="{{ choice }}">
-                    {% endif %}
-                    <span>{{ choice }}</span>
-                </label>
-                {% endfor %}
-            </div>
-            <button type="submit" class="btn btn-answer btn-submit">Submit</button>
+            {% for choice in choices %}
+            <button type="submit" name="answer" value="{{ choice }}" class="chat-option-btn">{{ choice }}</button>
+            {% endfor %}
         </form>
 
         {% when QuestionData::Freeform { question_id, question, placeholder } %}
-        <div class="chat-question-label">Agent is asking:</div>
-        <p class="chat-question-text">{{ question }}</p>
+        <div class="chat-question-body">{{ question }}</div>
         <form hx-post="/web/specs/{{ spec_id }}/answer"
               hx-target="#{{ container_id }}"
               hx-swap="outerHTML"
-              class="chat-question-form">
+              class="chat-question-options">
             <input type="hidden" name="question_id" value="{{ question_id }}">
             <textarea name="answer" placeholder="{{ placeholder }}" rows="2" class="chat-question-textarea"></textarea>
-            <button type="submit" class="btn btn-answer btn-submit">Submit</button>
+            <button type="submit" class="chat-option-btn">Submit</button>
         </form>
         {% endmatch %}
     </div>
