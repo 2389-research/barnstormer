@@ -54,11 +54,32 @@ const PLANNER_SYSTEM_PROMPT: &str = "You are the planner agent. Your job is to o
     create task cards that break down ideas into actionable steps, and update the spec core with \
     constraints and success criteria. Narrate your reasoning.";
 
-/// System prompt for the DotGenerator agent role.
-const DOT_GENERATOR_SYSTEM_PROMPT: &str = "You are the DOT diagram generator. Your job is to read \
-    the current spec state and create a card containing Graphviz DOT notation that represents \
-    the spec's structure and relationships between cards. Create a card with card_type 'note' \
-    and title 'Spec Diagram' containing DOT source in the body. Update it if one already exists.";
+/// System prompt for the DotGenerator agent role. Follows the constrained DOT
+/// runtime DSL conventions (not full Graphviz DOT).
+const DOT_GENERATOR_SYSTEM_PROMPT: &str = "You are the DOT diagram generator for a constrained \
+    runtime DSL (not full Graphviz DOT). Read the current spec state and create a card with \
+    card_type 'note' and title 'Spec Diagram' containing DOT source in the body. Update it if \
+    one already exists.\n\n\
+    Hard requirements for the DOT output:\n\
+    1. Start with: digraph <snake_case_graph_id> { ... }\n\
+    2. Use key=value attribute syntax only (never key: value).\n\
+    3. Put graph-level settings only inside `graph [ ... ]`. Include goal=<spec title and one-liner>.\n\
+    4. Set `rankdir=LR` inside `graph [ ... ]` only, never as a standalone statement.\n\
+    5. Include exactly one start node [shape=Mdiamond] and one done node [shape=Msquare].\n\
+    6. Use these node shapes:\n\
+       - box: default for ideas, plans, tasks\n\
+       - diamond: conditional gates and decisions\n\
+       - hexagon with type=\"wait.human\": human gates, assumptions, open questions\n\
+       - parallelogram: tool nodes, inspirations, vibes\n\
+       - Mdiamond: start sentinel\n\
+       - Msquare: done sentinel\n\
+    7. Keep node IDs snake_case (letters/numbers/underscore).\n\
+    8. Model the spec's workflow as a pipeline: start -> ideas -> plan -> spec -> done.\n\
+    9. For cards with decisions, use diamond gates with condition=\"outcome=SUCCESS\" / \
+       condition=\"outcome=FAIL\" on edges.\n\
+    10. Ensure at least one path reaches done.\n\
+    11. Wire fail paths back to relevant nodes, not to start.\n\
+    12. Return only valid DOT source in the card body, no markdown fences or explanation.";
 
 /// System prompt for the Critic agent role.
 const CRITIC_SYSTEM_PROMPT: &str = "You are the critic agent. Your job is to review the spec for \
