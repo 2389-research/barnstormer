@@ -2,90 +2,7 @@
 {# ABOUTME: Contains transcript with SSE updates, chat input, and question widget. #}
 
 <div class="chat-panel" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
-    <div id="chat-transcript"
-         hx-trigger="sse:transcript_appended, sse:question_asked, sse:question_answered, sse:agent_step_started, sse:agent_step_finished"
-         hx-get="/web/specs/{{ spec_id }}/activity/transcript"
-         hx-target="#chat-transcript"
-         hx-swap="outerHTML">
-        <div class="activity-feed" id="chat-feed">
-            {% for entry in transcript %}
-            <div class="message {% if entry.is_human %}message-human{% else %}message-agent{% endif %}">
-                <div class="message-bubble {% if entry.is_human %}bubble-human{% else %}bubble-agent{% endif %}">
-                    {% if !entry.is_human %}
-                    <div class="message-sender">
-                        <span class="sender-badge badge-{{ entry.role_class }}">{{ entry.sender_label }}</span>
-                    </div>
-                    {% endif %}
-                    <div class="message-content">{{ entry.content }}</div>
-                    <div class="message-time">{{ entry.timestamp }}</div>
-                </div>
-            </div>
-            {% endfor %}
-            {% if transcript.is_empty() %}
-            <div class="empty-chat">
-                <div class="empty-chat-icon">&#9672;</div>
-                <p>No messages yet.</p>
-                <p class="empty-chat-hint">Start a conversation with the agents below.</p>
-            </div>
-            {% endif %}
-        </div>
-
-        {% match pending_question %}
-        {% when Some with (q) %}
-        <div class="question-widget" id="question-widget">
-            {% match q %}
-            {% when QuestionData::Boolean { question_id, question, default } %}
-            <div class="question-header">Agent is asking:</div>
-            <p class="question-text">{{ question }}</p>
-            <form hx-post="/web/specs/{{ spec_id }}/answer"
-                  hx-target="#activity-container"
-                  hx-swap="innerHTML">
-                <input type="hidden" name="question_id" value="{{ question_id }}">
-                <div class="bool-buttons">
-                    <button type="submit" name="answer" value="Yes" class="btn btn-answer btn-yes">Yes</button>
-                    <button type="submit" name="answer" value="No" class="btn btn-answer btn-no">No</button>
-                </div>
-            </form>
-
-            {% when QuestionData::MultipleChoice { question_id, question, choices, allow_multi } %}
-            <div class="question-header">Agent is asking:</div>
-            <p class="question-text">{{ question }}</p>
-            <form hx-post="/web/specs/{{ spec_id }}/answer"
-                  hx-target="#activity-container"
-                  hx-swap="innerHTML">
-                <input type="hidden" name="question_id" value="{{ question_id }}">
-                <div class="question-choices">
-                    {% for choice in choices %}
-                    <label class="choice-label">
-                        {% if allow_multi %}
-                        <input type="checkbox" name="answer" value="{{ choice }}">
-                        {% else %}
-                        <input type="radio" name="answer" value="{{ choice }}">
-                        {% endif %}
-                        <span class="choice-text">{{ choice }}</span>
-                    </label>
-                    {% endfor %}
-                </div>
-                <button type="submit" class="btn btn-answer btn-submit">Submit</button>
-            </form>
-
-            {% when QuestionData::Freeform { question_id, question, placeholder } %}
-            <div class="question-header">Agent is asking:</div>
-            <p class="question-text">{{ question }}</p>
-            <form hx-post="/web/specs/{{ spec_id }}/answer"
-                  hx-target="#activity-container"
-                  hx-swap="innerHTML">
-                <input type="hidden" name="question_id" value="{{ question_id }}">
-                <div class="form-group">
-                    <textarea name="answer" placeholder="{{ placeholder }}" rows="3"></textarea>
-                </div>
-                <button type="submit" class="btn btn-answer btn-submit">Submit</button>
-            </form>
-            {% endmatch %}
-        </div>
-        {% when None %}
-        {% endmatch %}
-    </div>
+    {% include "partials/activity_transcript.html" %}
 
     <div class="chat-input-area">
         <form hx-post="/web/specs/{{ spec_id }}/chat"
@@ -98,11 +15,3 @@
         </form>
     </div>
 </div>
-
-<script>
-    // Auto-scroll to bottom of chat feed on load/update
-    (function() {
-        var feed = document.getElementById('chat-feed');
-        if (feed) { feed.scrollTop = feed.scrollHeight; }
-    })();
-</script>

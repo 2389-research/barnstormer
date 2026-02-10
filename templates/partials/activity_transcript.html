@@ -1,12 +1,12 @@
 {# ABOUTME: Partial template for the activity transcript and pending question widget. #}
-{# ABOUTME: Rendered inside the SSE refresh target so that chat input is not wiped on updates. #}
+{# ABOUTME: Parameterized by container_id so both the activity panel and chat tab can share it. #}
 
-<div id="activity-transcript"
+<div id="{{ container_id }}"
      hx-trigger="sse:transcript_appended, sse:question_asked, sse:question_answered, sse:agent_step_started, sse:agent_step_finished"
-     hx-get="/web/specs/{{ spec_id }}/activity/transcript"
-     hx-target="#activity-transcript"
+     hx-get="/web/specs/{{ spec_id }}/activity/transcript?container_id={{ container_id }}"
+     hx-target="#{{ container_id }}"
      hx-swap="outerHTML">
-    <div class="activity-feed" id="activity-feed">
+    <div class="activity-feed" id="{{ container_id }}-feed">
         {% for entry in transcript %}
         <div class="message {% if entry.is_human %}message-human{% else %}message-agent{% endif %}">
             <div class="message-bubble {% if entry.is_human %}bubble-human{% else %}bubble-agent{% endif %}">
@@ -89,7 +89,7 @@
 <script>
     // Auto-scroll to bottom of activity feed on load/update
     (function() {
-        var feed = document.getElementById('activity-feed');
+        var feed = document.getElementById('{{ container_id }}-feed');
         if (feed) { feed.scrollTop = feed.scrollHeight; }
     })();
 </script>

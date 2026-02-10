@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Form, Path, State};
+use axum::extract::{Form, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
@@ -804,21 +804,32 @@ fn question_to_view_data(q: &specd_core::UserQuestion) -> QuestionData {
     }
 }
 
+/// Query parameters for the transcript endpoint, allowing callers to specify
+/// which container the response should target (activity panel vs chat tab).
+#[derive(Deserialize)]
+pub struct TranscriptQuery {
+    pub container_id: Option<String>,
+}
+
 /// Activity panel template.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/activity.html")]
 pub struct ActivityTemplate {
     pub spec_id: String,
+    pub container_id: String,
     pub transcript: Vec<TranscriptEntry>,
     pub pending_question: Option<QuestionData>,
 }
 
 /// Activity transcript partial template (transcript entries + question widget only).
 /// Used by the SSE refresh target so that chat input is not wiped on updates.
+/// The `container_id` field controls the DOM IDs so the same template can serve
+/// both the right-rail activity panel and the full-width chat tab.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/activity_transcript.html")]
 pub struct ActivityTranscriptTemplate {
     pub spec_id: String,
+    pub container_id: String,
     pub transcript: Vec<TranscriptEntry>,
     pub pending_question: Option<QuestionData>,
 }
@@ -867,6 +878,7 @@ pub async fn activity(
 
     ActivityTemplate {
         spec_id: id,
+        container_id: "activity-transcript".to_string(),
         transcript,
         pending_question,
     }
@@ -878,6 +890,7 @@ pub async fn activity(
 pub async fn activity_transcript(
     State(state): State<SharedState>,
     Path(id): Path<String>,
+    Query(query): Query<TranscriptQuery>,
 ) -> impl IntoResponse {
     let spec_id = match parse_spec_id(&id) {
         Ok(id) => id,
@@ -916,8 +929,13 @@ pub async fn activity_transcript(
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
+    let container_id = query
+        .container_id
+        .unwrap_or_else(|| "activity-transcript".to_string());
+
     ActivityTranscriptTemplate {
         spec_id: id,
+        container_id,
         transcript,
         pending_question,
     }
@@ -929,6 +947,7 @@ pub async fn activity_transcript(
 #[template(path = "partials/chat_panel.html")]
 pub struct ChatPanelTemplate {
     pub spec_id: String,
+    pub container_id: String,
     pub transcript: Vec<TranscriptEntry>,
     pub pending_question: Option<QuestionData>,
 }
@@ -977,6 +996,7 @@ pub async fn chat_panel(
 
     ChatPanelTemplate {
         spec_id: id,
+        container_id: "chat-transcript".to_string(),
         transcript,
         pending_question,
     }
@@ -1221,6 +1241,7 @@ pub async fn answer_question(
 
     ActivityTemplate {
         spec_id: id,
+        container_id: "activity-transcript".to_string(),
         transcript,
         pending_question: None,
     }
@@ -1234,6 +1255,7 @@ const CHAT_MAX_LENGTH: usize = 10_000;
 pub async fn chat(
     State(state): State<SharedState>,
     Path(id): Path<String>,
+    headers: axum::http::HeaderMap,
     Form(form): Form<ChatForm>,
 ) -> impl IntoResponse {
     let spec_id = match parse_spec_id(&id) {
@@ -1294,7 +1316,15 @@ pub async fn chat(
 
     // Events are persisted by the background broadcast subscriber.
 
-    // Return refreshed activity panel
+    // Determine container_id from HX-Target header so the response replaces
+    // the correct transcript container (activity panel vs chat tab).
+    let container_id = headers
+        .get("HX-Target")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim_start_matches('#').to_string())
+        .unwrap_or_else(|| "activity-transcript".to_string());
+
+    // Return refreshed transcript partial
     let spec_state = handle.read_state().await;
     let transcript: Vec<TranscriptEntry> = spec_state
         .transcript
@@ -1314,8 +1344,9 @@ pub async fn chat(
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
-    ActivityTemplate {
+    ActivityTranscriptTemplate {
         spec_id: id,
+        container_id,
         transcript,
         pending_question,
     }
@@ -1887,17 +1918,19 @@ mod tests {
     fn activity_template_renders_empty() {
         let tmpl = ActivityTemplate {
             spec_id: "01HTEST".to_string(),
+            container_id: "activity-transcript".to_string(),
             transcript: vec![],
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("activity-feed"));
+        assert!(rendered.contains("activity-transcript-feed"));
     }
 
     #[test]
     fn activity_template_renders_with_entries() {
         let tmpl = ActivityTemplate {
             spec_id: "01HTEST".to_string(),
+            container_id: "activity-transcript".to_string(),
             transcript: vec![TranscriptEntry {
                 sender: "agent-1".to_string(),
                 sender_label: "Agent-1".to_string(),
@@ -1917,6 +1950,7 @@ mod tests {
     fn activity_template_renders_boolean_question() {
         let tmpl = ActivityTemplate {
             spec_id: "01HTEST".to_string(),
+            container_id: "activity-transcript".to_string(),
             transcript: vec![],
             pending_question: Some(QuestionData::Boolean {
                 question_id: "01HQID".to_string(),
@@ -1934,6 +1968,7 @@ mod tests {
     fn activity_template_renders_freeform_question() {
         let tmpl = ActivityTemplate {
             spec_id: "01HTEST".to_string(),
+            container_id: "activity-transcript".to_string(),
             transcript: vec![],
             pending_question: Some(QuestionData::Freeform {
                 question_id: "01HQID".to_string(),
@@ -1950,6 +1985,7 @@ mod tests {
     fn activity_template_renders_multiple_choice_question() {
         let tmpl = ActivityTemplate {
             spec_id: "01HTEST".to_string(),
+            container_id: "activity-transcript".to_string(),
             transcript: vec![],
             pending_question: Some(QuestionData::MultipleChoice {
                 question_id: "01HQID".to_string(),
@@ -2029,18 +2065,20 @@ mod tests {
     fn activity_transcript_template_renders_empty() {
         let tmpl = ActivityTranscriptTemplate {
             spec_id: "01HTEST".to_string(),
+            container_id: "activity-transcript".to_string(),
             transcript: vec![],
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("activity-transcript"), "should contain activity-transcript id");
-        assert!(rendered.contains("activity-feed"), "should contain activity-feed div");
+        assert!(rendered.contains("activity-transcript-feed"), "should contain activity-transcript-feed div");
     }
 
     #[test]
     fn activity_transcript_template_renders_with_entries() {
         let tmpl = ActivityTranscriptTemplate {
             spec_id: "01HTEST".to_string(),
+            container_id: "activity-transcript".to_string(),
             transcript: vec![TranscriptEntry {
                 sender: "agent-1".to_string(),
                 sender_label: "Agent-1".to_string(),
@@ -2058,9 +2096,34 @@ mod tests {
     }
 
     #[test]
+    fn transcript_template_renders_with_custom_container_id() {
+        let tmpl = ActivityTranscriptTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![TranscriptEntry {
+                sender: "human".to_string(),
+                sender_label: "You".to_string(),
+                is_human: true,
+                role_class: "human".to_string(),
+                content: "Hello chat".to_string(),
+                timestamp: "12:00:00".to_string(),
+            }],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("id=\"chat-transcript\""), "should use chat-transcript as container id");
+        assert!(rendered.contains("id=\"chat-transcript-feed\""), "should use chat-transcript-feed as feed id");
+        assert!(rendered.contains("hx-target=\"#chat-transcript\""), "should target chat-transcript");
+        assert!(rendered.contains("container_id=chat-transcript"), "hx-get should include container_id param");
+        assert!(!rendered.contains("id=\"activity-transcript\""), "should not contain activity-transcript id");
+        assert!(rendered.contains("Hello chat"), "should render transcript content");
+    }
+
+    #[test]
     fn activity_template_does_not_contain_chat_input() {
         let tmpl = ActivityTemplate {
             spec_id: "01HTEST".to_string(),
+            container_id: "activity-transcript".to_string(),
             transcript: vec![],
             pending_question: None,
         };
@@ -2073,6 +2136,7 @@ mod tests {
     fn activity_template_contains_agent_controls() {
         let tmpl = ActivityTemplate {
             spec_id: "01HTEST".to_string(),
+            container_id: "activity-transcript".to_string(),
             transcript: vec![],
             pending_question: None,
         };
@@ -2469,6 +2533,7 @@ mod tests {
     fn chat_panel_template_renders() {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
             transcript: vec![],
             pending_question: None,
         };
@@ -2480,6 +2545,7 @@ mod tests {
     fn chat_panel_renders_with_transcript_entries() {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
             transcript: vec![
                 TranscriptEntry {
                     sender: "human".to_string(),
@@ -2506,26 +2572,28 @@ mod tests {
         assert!(rendered.contains("message-human"), "should have human message class");
         assert!(rendered.contains("message-agent"), "should have agent message class");
         assert!(rendered.contains("Manager"), "should show agent sender label");
-        assert!(!rendered.contains("No messages yet"), "should not show empty state when entries exist");
+        assert!(!rendered.contains("No activity yet"), "should not show empty state when entries exist");
     }
 
     #[test]
     fn chat_panel_renders_empty_transcript() {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
             transcript: vec![],
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("No messages yet"), "should show empty state message");
+        assert!(rendered.contains("No activity yet"), "should show empty state message");
         assert!(rendered.contains("empty-chat"), "should have empty-chat class");
-        assert!(rendered.contains("Start a conversation with the agents below"), "should show hint text");
+        assert!(rendered.contains("Start a conversation or launch agents to begin"), "should show hint text");
     }
 
     #[test]
     fn chat_panel_contains_chat_input_form() {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
             transcript: vec![],
             pending_question: None,
         };
@@ -2541,6 +2609,7 @@ mod tests {
     fn chat_panel_contains_sse_connection() {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
             transcript: vec![],
             pending_question: None,
         };
