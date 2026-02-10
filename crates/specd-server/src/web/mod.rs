@@ -2063,6 +2063,41 @@ mod tests {
         assert!(html.contains("provider-status"));
     }
 
+    /// Create a test state that explicitly has no LLM providers configured,
+    /// regardless of the actual environment variables on the machine.
+    fn test_state_no_provider() -> SharedState {
+        let dir = tempfile::TempDir::new().unwrap();
+        let provider_status = ProviderStatus {
+            default_provider: "anthropic".to_string(),
+            default_model: None,
+            providers: vec![],
+            any_available: false,
+        };
+        Arc::new(AppState::new(dir.keep(), provider_status))
+    }
+
+    #[tokio::test]
+    async fn create_spec_with_no_provider_does_not_start_agents() {
+        let state = test_state_no_provider();
+        let app = create_router(Arc::clone(&state), None);
+
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("title=No+Agent+Test&one_liner=No+agents&goal=Verify+no+agents"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        // Since provider_status.any_available is false, try_start_agents should
+        // return early and no swarm should be created.
+        let swarms = state.swarms.read().await;
+        assert!(swarms.is_empty(), "no swarm should be created without provider");
+    }
+
     #[tokio::test]
     async fn start_agents_for_nonexistent_spec_returns_404() {
         let state = test_state();
