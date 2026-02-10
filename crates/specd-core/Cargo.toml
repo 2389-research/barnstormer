@@ -11,3 +11,4 @@ chrono.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tokio.workspace = true
+serde_yaml.workspace = true

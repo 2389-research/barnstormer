@@ -22,6 +22,10 @@ askama = "0.14"
 askama-derive-axum = "0.1"
 rusqlite = { version = "0.34", features = ["bundled"] }
 async-trait = "0.1"
+serde_yaml = "0.9"
+tokio-stream = "0.1"
+futures = "0.3"
+http = "1"
 
 specd-core = { path = "crates/specd-core" }
 specd-store = { path = "crates/specd-store" }

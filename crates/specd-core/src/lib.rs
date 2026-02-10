@@ -5,6 +5,7 @@ pub mod actor;
 pub mod card;
 pub mod command;
 pub mod event;
+pub mod export;
 pub mod model;
 pub mod state;
 pub mod transcript;
