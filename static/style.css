@@ -990,6 +990,8 @@ html, body {
     display: flex;
     flex-direction: column;
     height: calc(100vh - 140px);
+    height: calc(100dvh - 140px);
+    min-height: 0;
     max-width: 800px;
     margin: 0 auto;
 }
@@ -1113,13 +1115,14 @@ html, body {
     word-wrap: break-word;
 }
 
-.btn-copy, .btn-download {
+.artifacts-panel .btn-copy,
+.artifacts-panel .btn-download {
     font-size: 0.72rem;
     padding: var(--spacing-xs) var(--spacing-sm);
     border-radius: 12px;
 }
 
-.btn-download {
+.artifacts-panel .btn-download {
     text-decoration: none;
     color: var(--text-primary);
 }

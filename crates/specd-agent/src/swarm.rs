@@ -59,7 +59,9 @@ fn tool_usage_guide(agent_id: &str) -> String {
         "\n\nYour agent ID is: {agent_id}\n\n\
         You have the following tools:\n\
         - read_state: Read the current spec (title, goal, cards, transcript). Call this FIRST.\n\
-        - write_commands: Submit commands to modify the spec. Commands use JSON with a 'type' field. Examples:\n\
+        - write_commands: Submit commands to modify the spec. You MUST wrap commands in a {{\"commands\": [...]}} object. Example:\n\
+          {{\"commands\": [{{\"type\": \"CreateCard\", \"card_type\": \"idea\", \"title\": \"My Idea\", \"body\": \"Details here\", \"lane\": null, \"created_by\": \"{agent_id}\"}}]}}\n\
+          Individual command types:\n\
           * {{\"type\": \"CreateCard\", \"card_type\": \"idea\", \"title\": \"My Idea\", \"body\": \"Details here\", \"lane\": null, \"created_by\": \"{agent_id}\"}}\n\
           * {{\"type\": \"UpdateSpecCore\", \"description\": \"A detailed description\", \"constraints\": null, \"success_criteria\": null, \"risks\": null, \"notes\": null, \"title\": null, \"one_liner\": null, \"goal\": null}}\n\
           * {{\"type\": \"MoveCard\", \"card_id\": \"<ULID from read_state>\", \"lane\": \"Plan\", \"order\": 1.0, \"updated_by\": \"{agent_id}\"}}\n\
@@ -219,6 +221,31 @@ impl SwarmOrchestrator {
         self.question_pending.load(Ordering::SeqCst)
     }
 
+    /// Re-create any agent runner slots that are `None` (e.g. from a cancelled task).
+    /// Each restored slot gets a fresh AgentRunner and event receiver.
+    /// Only works for slots whose index maps to a known default role.
+    pub fn recover_empty_slots(&mut self) {
+        let default_roles = [
+            AgentRole::Manager,
+            AgentRole::Brainstormer,
+            AgentRole::Planner,
+            AgentRole::DotGenerator,
+        ];
+        for i in 0..self.agents.len() {
+            if self.agents[i].is_none()
+                && let Some(&role) = default_roles.get(i)
+            {
+                tracing::warn!(
+                    agent_index = i,
+                    role = %role,
+                    "recovering empty agent slot after cancellation"
+                );
+                self.agents[i] = Some(AgentRunner::new(self.spec_id, role));
+                self.event_receivers[i] = self.actor.subscribe();
+            }
+        }
+    }
+
     /// Collect all agent contexts for inclusion in a snapshot.
     pub fn collect_agent_contexts(&self) -> HashMap<String, serde_json::Value> {
         let contexts: Vec<AgentContext> = self
@@ -231,6 +258,8 @@ impl SwarmOrchestrator {
 
     /// Restore agent contexts from a snapshot map.
     /// Matches by agent_role, since agent_ids may differ between sessions.
+    /// Restores all agents whose role matches (not just the first),
+    /// so duplicate-role swarms are handled correctly.
     pub fn restore_agent_contexts(&mut self, map: &HashMap<String, serde_json::Value>) {
         let restored = crate::context::contexts_from_snapshot_map(map);
         for ctx in restored {
@@ -241,7 +270,6 @@ impl SwarmOrchestrator {
                     runner.context.rolling_summary = ctx.rolling_summary.clone();
                     runner.context.key_decisions = ctx.key_decisions.clone();
                     runner.context.last_event_seen = ctx.last_event_seen;
-                    break;
                 }
             }
         }
@@ -315,17 +343,22 @@ impl SwarmOrchestrator {
                 result.tool_use_count > 0
             }
             Err(e) => {
+                // Log the full error details for debugging
                 tracing::error!(
                     agent = %runner.agent_id,
                     error = %e,
                     "agent step failed"
                 );
-                // Post the error to the activity feed so users can see it
-                let error_msg = format!("[{}] step failed: {}", runner.role.label(), e);
+                // Show a sanitized, user-friendly message in the transcript
+                // without exposing internal error details.
+                let user_msg = format!(
+                    "[{}] encountered an issue and will retry on the next cycle.",
+                    runner.role.label(),
+                );
                 let _ = actor
                     .send_command(Command::AppendTranscript {
                         sender: runner.agent_id.clone(),
-                        content: error_msg,
+                        content: user_msg,
                     })
                     .await;
                 false
@@ -389,9 +422,10 @@ impl SwarmOrchestrator {
 /// by whichever agent drains the channel first.
 pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
     loop {
-        // Check pause and get agent count in one lock acquisition
+        // Recover any empty slots from prior cancellations, then check pause.
         let (is_paused, agent_count) = {
-            let s = swarm.lock().await;
+            let mut s = swarm.lock().await;
+            s.recover_empty_slots();
             (s.is_paused(), s.agents.len())
         };
 

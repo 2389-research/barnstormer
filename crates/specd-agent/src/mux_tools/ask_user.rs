@@ -55,13 +55,7 @@ impl Tool for AskUserBooleanTool {
     }
 
     async fn execute(&self, params: serde_json::Value) -> Result<ToolResult, anyhow::Error> {
-        // Atomically check-and-set to avoid TOCTOU race between agents.
-        if self.question_pending.compare_exchange(
-            false, true, Ordering::SeqCst, Ordering::SeqCst,
-        ).is_err() {
-            return Ok(ToolResult::text("Question already pending, skipping"));
-        }
-
+        // Validate params BEFORE setting the flag so invalid calls don't block future questions.
         let question_text = params
             .get("question")
             .and_then(|v| v.as_str())
@@ -69,6 +63,13 @@ impl Tool for AskUserBooleanTool {
             .to_string();
 
         let default = params.get("default").and_then(|v| v.as_bool());
+
+        // Atomically check-and-set to avoid TOCTOU race between agents.
+        if self.question_pending.compare_exchange(
+            false, true, Ordering::SeqCst, Ordering::SeqCst,
+        ).is_err() {
+            return Ok(ToolResult::text("Question already pending, skipping"));
+        }
 
         let question = UserQuestion::Boolean {
             question_id: Ulid::new(),
@@ -136,13 +137,7 @@ impl Tool for AskUserMultipleChoiceTool {
     }
 
     async fn execute(&self, params: serde_json::Value) -> Result<ToolResult, anyhow::Error> {
-        // Atomically check-and-set to avoid TOCTOU race between agents.
-        if self.question_pending.compare_exchange(
-            false, true, Ordering::SeqCst, Ordering::SeqCst,
-        ).is_err() {
-            return Ok(ToolResult::text("Question already pending, skipping"));
-        }
-
+        // Validate params BEFORE setting the flag so invalid calls don't block future questions.
         let question_text = params
             .get("question")
             .and_then(|v| v.as_str())
@@ -162,6 +157,13 @@ impl Tool for AskUserMultipleChoiceTool {
             .get("allow_multi")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+
+        // Atomically check-and-set to avoid TOCTOU race between agents.
+        if self.question_pending.compare_exchange(
+            false, true, Ordering::SeqCst, Ordering::SeqCst,
+        ).is_err() {
+            return Ok(ToolResult::text("Question already pending, skipping"));
+        }
 
         let question = UserQuestion::MultipleChoice {
             question_id: Ulid::new(),
@@ -229,13 +231,7 @@ impl Tool for AskUserFreeformTool {
     }
 
     async fn execute(&self, params: serde_json::Value) -> Result<ToolResult, anyhow::Error> {
-        // Atomically check-and-set to avoid TOCTOU race between agents.
-        if self.question_pending.compare_exchange(
-            false, true, Ordering::SeqCst, Ordering::SeqCst,
-        ).is_err() {
-            return Ok(ToolResult::text("Question already pending, skipping"));
-        }
-
+        // Validate params BEFORE setting the flag so invalid calls don't block future questions.
         let question_text = params
             .get("question")
             .and_then(|v| v.as_str())
@@ -251,6 +247,13 @@ impl Tool for AskUserFreeformTool {
             .get("validation_hint")
             .and_then(|v| v.as_str())
             .map(String::from);
+
+        // Atomically check-and-set to avoid TOCTOU race between agents.
+        if self.question_pending.compare_exchange(
+            false, true, Ordering::SeqCst, Ordering::SeqCst,
+        ).is_err() {
+            return Ok(ToolResult::text("Question already pending, skipping"));
+        }
 
         let question = UserQuestion::Freeform {
             question_id: Ulid::new(),

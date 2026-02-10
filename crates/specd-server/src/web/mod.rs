@@ -745,7 +745,17 @@ fn sender_display(sender: &str) -> (String, bool, String) {
             capitalized.push(ch);
         }
     }
-    (capitalized, false, role.to_string())
+    let role_class = normalize_css_class(role);
+    (capitalized, false, role_class)
+}
+
+/// Normalize a string into a valid CSS class name: lowercase, replacing
+/// any character that is not `[a-z0-9_-]` with a hyphen.
+fn normalize_css_class(raw: &str) -> String {
+    raw.to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-' { c } else { '-' })
+        .collect()
 }
 
 /// Question data for templates.
@@ -1118,16 +1128,25 @@ pub async fn export_yaml(
     };
 
     let spec_state = handle.read_state().await;
-    let content = specd_core::export::export_yaml(&spec_state).unwrap_or_else(|e| {
-        format!("# YAML export error: {}", e)
-    });
-
-    Response::builder()
-        .header("content-type", "text/yaml")
-        .header("content-disposition", "attachment; filename=\"spec.yaml\"")
-        .body(axum::body::Body::from(content))
-        .unwrap()
-        .into_response()
+    match specd_core::export::export_yaml(&spec_state) {
+        Ok(content) => Response::builder()
+            .header("content-type", "text/yaml")
+            .header(
+                "content-disposition",
+                "attachment; filename=\"spec.yaml\"",
+            )
+            .body(axum::body::Body::from(content))
+            .unwrap()
+            .into_response(),
+        Err(e) => {
+            tracing::error!("YAML export failed for spec {}: {}", id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html("<p class=\"error-msg\">Failed to export YAML.</p>".to_string()),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// GET /web/specs/{id}/export/dot - Download spec as DOT graph file.
@@ -1718,17 +1737,40 @@ pub fn spawn_event_persister(
         .join("snapshots");
 
     tokio::spawn(async move {
-        let mut log = match JsonlLog::open(&log_path) {
-            Ok(l) => l,
-            Err(e) => {
-                tracing::error!(
-                    "event persister failed to open log for spec {} at {}: {}",
-                    spec_id,
-                    log_path.display(),
-                    e
-                );
-                return;
+        // Retry opening the JSONL log a few times before giving up, in case
+        // the directory or filesystem is temporarily unavailable at startup.
+        const MAX_OPEN_RETRIES: u32 = 5;
+        const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+
+        let mut log = None;
+        for attempt in 1..=MAX_OPEN_RETRIES {
+            match JsonlLog::open(&log_path) {
+                Ok(l) => {
+                    log = Some(l);
+                    break;
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "event persister failed to open log for spec {} at {} (attempt {}/{}): {}",
+                        spec_id,
+                        log_path.display(),
+                        attempt,
+                        MAX_OPEN_RETRIES,
+                        e
+                    );
+                    if attempt < MAX_OPEN_RETRIES {
+                        tokio::time::sleep(RETRY_DELAY).await;
+                    }
+                }
             }
+        }
+        let Some(mut log) = log else {
+            tracing::error!(
+                "event persister giving up on spec {} after {} retries",
+                spec_id,
+                MAX_OPEN_RETRIES,
+            );
+            return;
         };
 
         loop {
@@ -2769,8 +2811,8 @@ mod tests {
             dot_content: "digraph {}".to_string(),
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("btn-copy"), "should contain copy buttons with btn-copy class");
-        // Count actual copy button elements (class attribute on button tags, not JS selectors)
+        // Count actual copy button elements by matching the class attribute on button tags,
+        // not bare "btn-copy" which also matches JS selector references.
         let copy_count = rendered.matches("class=\"btn btn-sm btn-copy\"").count();
         assert_eq!(copy_count, 3, "should have exactly 3 copy buttons, found {}", copy_count);
     }
@@ -3082,5 +3124,198 @@ mod tests {
         assert_eq!(sanitize_container_id("'); alert('xss'); //"), "activity-transcript");
         assert_eq!(sanitize_container_id("malicious-id"), "activity-transcript");
         assert_eq!(sanitize_container_id(""), "activity-transcript");
+    }
+
+    // ---- sender_display tests ----
+
+    #[test]
+    fn sender_display_human() {
+        let (label, is_human, role_class) = sender_display("human");
+        assert_eq!(label, "You");
+        assert!(is_human, "human should be flagged as is_human");
+        assert_eq!(role_class, "human");
+    }
+
+    #[test]
+    fn sender_display_manager_role() {
+        let (label, is_human, role_class) = sender_display("manager-01JTESTID123");
+        assert_eq!(label, "Manager");
+        assert!(!is_human, "agent should not be flagged as human");
+        assert_eq!(role_class, "manager");
+    }
+
+    #[test]
+    fn sender_display_brainstormer_role() {
+        let (label, is_human, role_class) = sender_display("brainstormer-01JTESTID456");
+        assert_eq!(label, "Brainstormer");
+        assert!(!is_human);
+        assert_eq!(role_class, "brainstormer");
+    }
+
+    #[test]
+    fn sender_display_dot_generator_role() {
+        let (label, is_human, role_class) = sender_display("dot_generator-01JTESTID789");
+        assert_eq!(label, "Dot Generator");
+        assert!(!is_human);
+        assert_eq!(role_class, "dot_generator");
+    }
+
+    #[test]
+    fn sender_display_unknown_sender() {
+        let (label, is_human, role_class) = sender_display("CustomRole-01JTESTID");
+        // The capitalization loop uppercases only the first character and keeps
+        // the rest as-is, so "CustomRole" becomes "CustomRole" (already capitalized).
+        assert_eq!(label, "CustomRole", "unknown role should keep original casing except first char");
+        assert!(!is_human);
+        assert_eq!(role_class, "customrole", "role_class should be normalized to lowercase");
+    }
+
+    #[test]
+    fn sender_display_unusual_characters() {
+        let (_label, is_human, role_class) = sender_display("My Agent!@#");
+        assert!(!is_human);
+        // No '-' separator, so the entire string is the role. Normalization:
+        // lowercase + replace space/!/@ /# with hyphens → "my-agent---"
+        assert_eq!(role_class, "my-agent---", "special chars should be replaced with hyphens");
+    }
+
+    // ---- normalize_css_class tests ----
+
+    #[test]
+    fn normalize_css_class_lowercases() {
+        assert_eq!(normalize_css_class("Manager"), "manager");
+    }
+
+    #[test]
+    fn normalize_css_class_replaces_special_chars() {
+        assert_eq!(normalize_css_class("dot generator"), "dot-generator");
+        assert_eq!(normalize_css_class("foo@bar"), "foo-bar");
+    }
+
+    #[test]
+    fn normalize_css_class_preserves_valid_chars() {
+        assert_eq!(normalize_css_class("my_role-1"), "my_role-1");
+    }
+
+    // ---- Handler tests for chat and answer with HX-Target ----
+
+    #[tokio::test]
+    async fn post_chat_with_hx_target_returns_chat_transcript() {
+        let state = test_state();
+
+        // Create a spec
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("title=HX+Chat+Test&one_liner=Test&goal=Test"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        // POST to /chat with HX-Target: #chat-transcript
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::post(format!("/web/specs/{}/chat", spec_id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("HX-Target", "#chat-transcript")
+                    .body(Body::from("message=Hello+from+chat+tab"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains(r#"id="chat-transcript""#),
+            "response should target chat-transcript container: {}",
+            html
+        );
+        assert!(
+            html.contains("Hello from chat tab"),
+            "response should contain the posted message: {}",
+            html
+        );
+    }
+
+    #[tokio::test]
+    async fn post_answer_with_hx_target_returns_chat_transcript() {
+        let state = test_state();
+
+        // Create a spec
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("title=Answer+Test&one_liner=Test&goal=Test"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        // Ask a question via the actor so we have a pending question to answer
+        let question_id = ulid::Ulid::new();
+        {
+            let actors = state.actors.read().await;
+            let handle = actors.get(&spec_id).expect("actor should exist");
+            handle
+                .send_command(Command::AskQuestion {
+                    question: specd_core::UserQuestion::Freeform {
+                        question_id,
+                        question: "What color?".to_string(),
+                        placeholder: None,
+                        validation_hint: None,
+                    },
+                })
+                .await
+                .unwrap();
+        }
+
+        // POST to /answer with HX-Target: #chat-transcript
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::post(format!("/web/specs/{}/answer", spec_id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("HX-Target", "#chat-transcript")
+                    .body(Body::from(format!(
+                        "question_id={}&answer=Blue",
+                        question_id
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains(r#"id="chat-transcript""#),
+            "response should target chat-transcript container: {}",
+            html
+        );
     }
 }

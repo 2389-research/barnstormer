@@ -58,7 +58,9 @@ impl LlmClient for StubLlmClient {
         &self,
         _req: &Request,
     ) -> Pin<Box<dyn Stream<Item = Result<StreamEvent, LlmError>> + Send + 'static>> {
-        unimplemented!("StubLlmClient does not support streaming")
+        // Return an empty stream rather than panicking. Callers that need
+        // streaming behaviour should use a real client or a dedicated mock.
+        Box::pin(futures::stream::empty())
     }
 }
 
