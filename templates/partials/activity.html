@@ -2,19 +2,6 @@
     {% include "partials/activity_transcript.html" %}
 </div>
 
-<div class="chat-input" id="chat-input">
-    <form hx-post="/web/specs/{{ spec_id }}/chat"
-          hx-target="#activity-container"
-          hx-swap="innerHTML">
-        <div class="chat-input-row">
-            <input type="text" name="message" placeholder="Send a message..." autocomplete="off" required>
-            <button type="submit" class="btn btn-send" title="Send">
-                &#10148;
-            </button>
-        </div>
-    </form>
-</div>
-
 <div class="agent-controls">
     <div id="agent-status"
          hx-get="/web/specs/{{ spec_id }}/agents/status"

@@ -2058,16 +2058,48 @@ mod tests {
     }
 
     #[test]
-    fn activity_template_renders_chat_input() {
+    fn activity_template_does_not_contain_chat_input() {
         let tmpl = ActivityTemplate {
             spec_id: "01HTEST".to_string(),
             transcript: vec![],
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("chat-input"), "should contain chat input div");
-        assert!(rendered.contains("Send a message"), "should contain placeholder text");
-        assert!(rendered.contains("/chat"), "should contain chat form action");
+        assert!(!rendered.contains("chat-input"), "activity should not contain chat input div");
+        assert!(!rendered.contains("Send a message"), "activity should not contain chat placeholder");
+    }
+
+    #[test]
+    fn activity_template_contains_agent_controls() {
+        let tmpl = ActivityTemplate {
+            spec_id: "01HTEST".to_string(),
+            transcript: vec![],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("agent-controls"), "activity should contain agent controls");
+        assert!(rendered.contains("agent-status"), "activity should contain agent status");
+        assert!(rendered.contains("Undo"), "activity should contain undo button");
+    }
+
+    #[test]
+    fn spec_view_template_contains_all_four_tabs() {
+        let tmpl = SpecViewTemplate {
+            spec_id: "01HTEST".to_string(),
+            title: "Test Spec".to_string(),
+            one_liner: "A test spec".to_string(),
+            goal: "Test goal".to_string(),
+            lanes: vec![],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Board"), "should contain Board tab");
+        assert!(rendered.contains("Document"), "should contain Document tab");
+        assert!(rendered.contains("Chat"), "should contain Chat tab");
+        assert!(rendered.contains("Artifacts"), "should contain Artifacts tab");
+        assert!(rendered.contains("data-tab=\"board\""), "Board tab should have data-tab attribute");
+        assert!(rendered.contains("data-tab=\"document\""), "Document tab should have data-tab attribute");
+        assert!(rendered.contains("data-tab=\"chat\""), "Chat tab should have data-tab attribute");
+        assert!(rendered.contains("data-tab=\"artifacts\""), "Artifacts tab should have data-tab attribute");
     }
 
     #[tokio::test]

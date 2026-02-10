@@ -4,17 +4,29 @@
 </div>
 
 <div class="tab-bar">
-    <button class="tab active"
+    <button class="tab active" data-tab="board"
             hx-get="/web/specs/{{ spec_id }}/board"
             hx-target="#spec-content"
             hx-swap="innerHTML">
         Board
     </button>
-    <button class="tab"
+    <button class="tab" data-tab="document"
             hx-get="/web/specs/{{ spec_id }}/document"
             hx-target="#spec-content"
             hx-swap="innerHTML">
         Document
+    </button>
+    <button class="tab" data-tab="chat"
+            hx-get="/web/specs/{{ spec_id }}/chat-panel"
+            hx-target="#spec-content"
+            hx-swap="innerHTML">
+        Chat
+    </button>
+    <button class="tab" data-tab="artifacts"
+            hx-get="/web/specs/{{ spec_id }}/artifacts"
+            hx-target="#spec-content"
+            hx-swap="innerHTML">
+        Artifacts
     </button>
     <button class="btn btn-sm"
             hx-get="/web/specs/{{ spec_id }}/cards/new"
@@ -32,4 +44,12 @@
     // Load the activity panel into the right rail when a spec is viewed
     document.getElementById('right-rail').innerHTML = '<div class="rail-header"><h2>Activity</h2></div><div hx-get="/web/specs/{{ spec_id }}/activity" hx-trigger="load" hx-swap="innerHTML" id="activity-container"></div>';
     htmx.process(document.getElementById('right-rail'));
+
+    // Track active tab highlighting
+    document.querySelectorAll('.tab-bar .tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.tab-bar .tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+        });
+    });
 </script>
