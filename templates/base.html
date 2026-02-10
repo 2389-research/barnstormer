@@ -16,15 +16,8 @@
 </head>
 <body>
     <div class="app-layout">
-        <nav class="left-rail">
-            {% block left_rail %}{% endblock %}
-        </nav>
-        <main class="main-content" id="main-content">
-            {% block main %}{% endblock %}
-        </main>
-        <aside class="right-rail" id="right-rail">
-            {% block right_rail %}{% endblock %}
-        </aside>
+        <nav class="nav-rail">{% block nav %}{% endblock %}</nav>
+        <div class="workspace" id="workspace">{% block workspace %}{% endblock %}</div>
     </div>
     {% block scripts %}{% endblock %}
 </body>

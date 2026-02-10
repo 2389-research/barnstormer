@@ -1,5 +1,5 @@
 /* ABOUTME: Core stylesheet for the specd web UI — "Studio After Hours" aesthetic. */
-/* ABOUTME: Dark warm palette, chat-bubble activity panel, three-panel layout with Bricolage Grotesque + DM Sans. */
+/* ABOUTME: Dark warm palette, chat-bubble activity panel, two-panel layout with Bricolage Grotesque + DM Sans. */
 
 /* --- Reset & base --- */
 *, *::before, *::after {
@@ -40,8 +40,7 @@
     --badge-critic: #E0B060;
     --badge-agent: #9D9BB0;
 
-    --rail-width: 240px;
-    --right-rail-width: 380px;
+    --nav-width: 180px;
     --spacing-xs: 4px;
     --spacing-sm: 8px;
     --spacing-md: 16px;
@@ -66,15 +65,15 @@ html, body {
     -moz-osx-font-smoothing: grayscale;
 }
 
-/* --- Three-panel layout --- */
+/* --- Two-panel layout --- */
 .app-layout {
     display: grid;
-    grid-template-columns: var(--rail-width) 1fr var(--right-rail-width);
+    grid-template-columns: var(--nav-width) 1fr;
     height: 100vh;
     overflow: hidden;
 }
 
-.left-rail {
+.nav-rail {
     background: var(--bg-secondary);
     border-right: 1px solid var(--border-subtle);
     display: flex;
@@ -82,18 +81,10 @@ html, body {
     overflow-y: auto;
 }
 
-.main-content {
-    overflow-y: auto;
-    padding: var(--spacing-lg);
-}
-
-.right-rail {
-    background: var(--bg-secondary);
-    border-left: 1px solid var(--border-subtle);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-}
+.workspace { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+.command-bar { display: flex; align-items: center; gap: var(--spacing-md); padding: 0 var(--spacing-md); height: 48px; background: var(--bg-secondary); border-bottom: 1px solid var(--border-subtle); }
+.canvas { flex: 1; overflow-y: auto; padding: var(--spacing-lg); }
+.mission-strip { flex-shrink: 0; border-top: 1px solid var(--border-subtle); background: var(--bg-secondary); display: flex; flex-direction: column; }
 
 /* --- Rail sections --- */
 .rail-header {
@@ -1458,7 +1449,7 @@ html, body {
     font-size: 0.85rem;
 }
 
-/* --- Activity container (fills right rail when chat input is removed) --- */
+/* --- Activity container (flex-fills its parent when chat input is removed) --- */
 #activity-container {
     flex: 1;
     display: flex;
@@ -1470,26 +1461,16 @@ html, body {
 @media (max-width: 900px) {
     .app-layout {
         grid-template-columns: 1fr;
-        grid-template-rows: auto 1fr auto;
+        grid-template-rows: auto 1fr;
     }
 
-    .left-rail {
+    .nav-rail {
         border-right: none;
         border-bottom: 1px solid var(--border-subtle);
         max-height: 200px;
     }
 
-    .right-rail {
-        border-left: none;
-        border-top: 1px solid var(--border-subtle);
-        max-height: 300px;
-    }
-
     .board {
         grid-template-columns: 1fr;
-    }
-
-    :root {
-        --right-rail-width: 1fr;
     }
 }
