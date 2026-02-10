@@ -998,18 +998,23 @@ html, body {
 
 .chat-transcript-wrap {
     flex: 1;
-    overflow-y: auto;
     display: flex;
     flex-direction: column;
+    min-height: 0;
 }
 
 .chat-messages {
     flex: 1;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
-    justify-content: flex-end;
     gap: var(--spacing-sm);
     padding: var(--spacing-md) 0;
+}
+
+/* Hide general chat input when agent is asking a question */
+.chat-panel:has(.chat-question-bar) .chat-input-area {
+    display: none;
 }
 
 /* Chat rows: human right-aligned, agent left-aligned */

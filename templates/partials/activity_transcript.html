@@ -87,16 +87,9 @@
 </div>
 
 <script>
-    // Auto-scroll to bottom of activity feed, but only if the user is already
-    // near the bottom (within 80px). This avoids yanking the viewport away
-    // when the user is reading earlier messages.
     (function() {
         var feed = document.getElementById('{{ container_id }}-feed');
         if (!feed) return;
-        var nearBottomThreshold = 80;
-        var distanceFromBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight;
-        if (distanceFromBottom <= nearBottomThreshold) {
-            feed.scrollTop = feed.scrollHeight;
-        }
+        feed.scrollTop = feed.scrollHeight;
     })();
 </script>

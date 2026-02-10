@@ -95,10 +95,6 @@
     (function() {
         var feed = document.getElementById('{{ container_id }}-feed');
         if (!feed) return;
-        var threshold = 80;
-        var dist = feed.scrollHeight - feed.scrollTop - feed.clientHeight;
-        if (dist <= threshold) {
-            feed.scrollTop = feed.scrollHeight;
-        }
+        feed.scrollTop = feed.scrollHeight;
     })();
 </script>
