@@ -160,6 +160,7 @@ pub async fn get_spec_state(
 mod tests {
     use super::*;
     use crate::app_state::AppState;
+    use crate::providers::ProviderStatus;
     use crate::routes::create_router;
     use axum::body::Body;
     use http::Request;
@@ -168,7 +169,7 @@ mod tests {
 
     fn test_state() -> SharedState {
         let dir = tempfile::TempDir::new().unwrap();
-        Arc::new(AppState::new(dir.keep()))
+        Arc::new(AppState::new(dir.keep(), ProviderStatus::detect()))
     }
 
     #[tokio::test]

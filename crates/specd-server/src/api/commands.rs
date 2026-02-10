@@ -165,6 +165,7 @@ pub async fn undo(State(state): State<SharedState>, Path(id): Path<String>) -> i
 mod tests {
     use crate::app_state::AppState;
     use crate::app_state::SharedState;
+    use crate::providers::ProviderStatus;
     use crate::routes::create_router;
     use axum::body::Body;
     use axum::http::StatusCode;
@@ -174,7 +175,7 @@ mod tests {
 
     fn test_state() -> SharedState {
         let dir = tempfile::TempDir::new().unwrap();
-        Arc::new(AppState::new(dir.keep()))
+        Arc::new(AppState::new(dir.keep(), ProviderStatus::detect()))
     }
 
     /// Helper: create a spec and return (state, spec_id).

@@ -1027,6 +1027,42 @@ pub async fn undo(State(state): State<SharedState>, Path(id): Path<String>) -> i
     BoardTemplate { spec_id: id, lanes }.into_response()
 }
 
+/// Provider status partial template.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/provider_status.html")]
+pub struct ProviderStatusTemplate {
+    pub default_provider: String,
+    pub default_model: Option<String>,
+    pub providers: Vec<ProviderInfoView>,
+    pub any_available: bool,
+}
+
+/// Provider info view for template rendering.
+pub struct ProviderInfoView {
+    pub name: String,
+    pub has_api_key: bool,
+    pub model: String,
+}
+
+/// GET /web/provider-status - Provider status partial.
+pub async fn provider_status(State(state): State<SharedState>) -> ProviderStatusTemplate {
+    let ps = &state.provider_status;
+    ProviderStatusTemplate {
+        default_provider: ps.default_provider.clone(),
+        default_model: ps.default_model.clone(),
+        providers: ps
+            .providers
+            .iter()
+            .map(|p| ProviderInfoView {
+                name: p.name.clone(),
+                has_api_key: p.has_api_key,
+                model: p.model.clone(),
+            })
+            .collect(),
+        any_available: ps.any_available,
+    }
+}
+
 /// Helper to persist events to the JSONL log.
 fn persist_events(state: &SharedState, spec_id: Ulid, events: &[specd_core::Event]) {
     let log_path = state
@@ -1048,6 +1084,7 @@ fn persist_events(state: &SharedState, spec_id: Ulid, events: &[specd_core::Even
 mod tests {
     use super::*;
     use crate::app_state::AppState;
+    use crate::providers::ProviderStatus;
     use crate::routes::create_router;
     use axum::body::Body;
     use http::Request;
@@ -1056,7 +1093,7 @@ mod tests {
 
     fn test_state() -> SharedState {
         let dir = tempfile::TempDir::new().unwrap();
-        Arc::new(AppState::new(dir.keep()))
+        Arc::new(AppState::new(dir.keep(), ProviderStatus::detect()))
     }
 
     #[test]

@@ -5,13 +5,13 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use http::Request;
-use specd_server::{AppState, create_router};
+use specd_server::{AppState, ProviderStatus, create_router};
 use specd_store::StorageManager;
 use tower::ServiceExt;
 
 /// Helper to create a test AppState with a temp directory.
 fn test_app_state(home: std::path::PathBuf) -> Arc<AppState> {
-    Arc::new(AppState::new(home))
+    Arc::new(AppState::new(home, ProviderStatus::detect()))
 }
 
 /// Helper to extract JSON body from a response.

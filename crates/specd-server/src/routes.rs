@@ -44,6 +44,7 @@ pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
         .route("/web/specs/{id}/answer", post(web::answer_question))
         .route("/web/specs/{id}/chat", post(web::chat))
         .route("/web/specs/{id}/undo", post(web::undo))
+        .route("/web/provider-status", get(web::provider_status))
         .route("/web/specs/{id}/cards/new", get(web::create_card_form))
         .route("/web/specs/{id}/cards", post(web::create_card))
         .route(
@@ -74,13 +75,17 @@ async fn health() -> axum::Json<serde_json::Value> {
 mod tests {
     use super::*;
     use crate::app_state::AppState;
+    use crate::providers::ProviderStatus;
     use axum::body::Body;
     use http::Request;
     use std::sync::Arc;
     use tower::ServiceExt;
 
     fn test_state() -> SharedState {
-        Arc::new(AppState::new(std::env::temp_dir().join("specd-test")))
+        Arc::new(AppState::new(
+            std::env::temp_dir().join("specd-test"),
+            ProviderStatus::detect(),
+        ))
     }
 
     #[tokio::test]

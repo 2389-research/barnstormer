@@ -10,24 +10,28 @@ use specd_core::SpecActorHandle;
 use tokio::sync::RwLock;
 use ulid::Ulid;
 
+use crate::providers::ProviderStatus;
+
 /// Shared application state accessible by all Axum handlers.
 /// Stores a map of spec actors keyed by their ULID and the SPECD_HOME directory.
 pub struct AppState {
     pub actors: Arc<RwLock<HashMap<Ulid, SpecActorHandle>>>,
     pub swarms: Arc<RwLock<HashMap<Ulid, Arc<SwarmOrchestrator>>>>,
     pub specd_home: PathBuf,
+    pub provider_status: ProviderStatus,
 }
 
 /// Type alias for the Arc-wrapped state used with Axum's State extractor.
 pub type SharedState = Arc<AppState>;
 
 impl AppState {
-    /// Create a new AppState with the given home directory and an empty actor map.
-    pub fn new(specd_home: PathBuf) -> Self {
+    /// Create a new AppState with the given home directory, provider status, and an empty actor map.
+    pub fn new(specd_home: PathBuf, provider_status: ProviderStatus) -> Self {
         Self {
             actors: Arc::new(RwLock::new(HashMap::new())),
             swarms: Arc::new(RwLock::new(HashMap::new())),
             specd_home,
+            provider_status,
         }
     }
 }

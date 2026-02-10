@@ -1,0 +1,24 @@
+<div class="provider-status">
+    {% if any_available %}
+    <div class="provider-active">
+        <span class="status-dot connected"></span>
+        <span class="provider-label">{{ default_provider }}</span>
+        {% if let Some(model) = default_model %}
+        <span class="provider-model">{{ model }}</span>
+        {% endif %}
+    </div>
+    {% else %}
+    <div class="provider-inactive">
+        <span class="status-dot disconnected"></span>
+        <span class="provider-label">No provider configured</span>
+    </div>
+    {% endif %}
+    <div class="provider-list">
+        {% for p in providers %}
+        <div class="provider-item">
+            <span class="status-dot {% if p.has_api_key %}connected{% else %}disconnected{% endif %}"></span>
+            <span>{{ p.name }}</span>
+        </div>
+        {% endfor %}
+    </div>
+</div>

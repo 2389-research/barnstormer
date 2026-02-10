@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Parser;
-use specd_server::{AppState, create_router};
+use specd_server::{AppState, ProviderStatus, create_router};
 use specd_store::StorageManager;
 
 #[derive(Parser)]
@@ -56,7 +56,7 @@ async fn main() {
             tracing::info!("recovered {} specs", recovered_specs.len());
 
             // Create AppState and spawn actors for recovered specs
-            let state = Arc::new(AppState::new(specd_home));
+            let state = Arc::new(AppState::new(specd_home, ProviderStatus::detect()));
             {
                 let mut actors = state.actors.write().await;
                 for (spec_id, spec_state) in recovered_specs {
