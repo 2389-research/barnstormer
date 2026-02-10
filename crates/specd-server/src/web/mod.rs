@@ -804,6 +804,12 @@ pub async fn activity(
     .into_response()
 }
 
+/// Form data for sending a chat message.
+#[derive(Deserialize)]
+pub struct ChatForm {
+    pub message: String,
+}
+
 /// Form data for answering a question.
 #[derive(Deserialize)]
 pub struct AnswerForm {
@@ -882,6 +888,103 @@ pub async fn answer_question(
         spec_id: id,
         transcript,
         pending_question: None,
+    }
+    .into_response()
+}
+
+/// POST /web/specs/{id}/chat - Send a free-text message as the human.
+pub async fn chat(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    Form(form): Form<ChatForm>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    let cmd = Command::AppendTranscript {
+        sender: "human".to_string(),
+        content: form.message,
+    };
+
+    let events = match handle.send_command(cmd).await {
+        Ok(events) => events,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Html(format!(
+                    "<p class=\"error-msg\">Failed to send message: {}</p>",
+                    e
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    persist_events(&state, spec_id, &events);
+
+    // Return refreshed activity panel
+    let spec_state = handle.read_state().await;
+    let transcript: Vec<TranscriptEntry> = spec_state
+        .transcript
+        .iter()
+        .map(|m| TranscriptEntry {
+            sender: m.sender.clone(),
+            content: m.content.clone(),
+            timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+        })
+        .collect();
+
+    let pending_question = spec_state.pending_question.as_ref().map(|q| match q {
+        specd_core::UserQuestion::Boolean {
+            question_id,
+            question,
+            default,
+        } => QuestionData::Boolean {
+            question_id: question_id.to_string(),
+            question: question.clone(),
+            default: *default,
+        },
+        specd_core::UserQuestion::MultipleChoice {
+            question_id,
+            question,
+            choices,
+            allow_multi,
+        } => QuestionData::MultipleChoice {
+            question_id: question_id.to_string(),
+            question: question.clone(),
+            choices: choices.clone(),
+            allow_multi: *allow_multi,
+        },
+        specd_core::UserQuestion::Freeform {
+            question_id,
+            question,
+            placeholder,
+            ..
+        } => QuestionData::Freeform {
+            question_id: question_id.to_string(),
+            question: question.clone(),
+            placeholder: placeholder.clone().unwrap_or_default(),
+        },
+    });
+
+    ActivityTemplate {
+        spec_id: id,
+        transcript,
+        pending_question,
     }
     .into_response()
 }
