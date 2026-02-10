@@ -1328,7 +1328,7 @@ pub async fn agent_status(
 /// Helper to start the agent swarm for a spec, if a provider is available.
 /// Returns silently if no provider is configured, if the swarm already exists,
 /// or if swarm creation fails. Used by both web and API create_spec handlers.
-pub(crate) async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_handle: &specd_core::SpecActorHandle) {
+pub async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_handle: &specd_core::SpecActorHandle) {
     if !state.provider_status.any_available {
         tracing::info!("no LLM provider configured, skipping agent start for spec {}", spec_id);
         return;

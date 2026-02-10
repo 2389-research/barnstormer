@@ -34,11 +34,19 @@ impl Tool for WriteCommandsTool {
             "properties": {
                 "commands": {
                     "type": "array",
+                    "description": "List of commands to execute against the spec. Each command is an object with a 'type' field.",
                     "items": {
                         "type": "object",
-                        "description": "A Command object. Must include a 'type' field matching one of: CreateCard, UpdateCard, MoveCard, DeleteCard, UpdateSpecCore, AppendTranscript."
-                    },
-                    "description": "List of commands to execute against the spec."
+                        "description": "A tagged command object. The 'type' field selects the variant. Valid types and their fields:\n\n- CreateCard: { type: \"CreateCard\", card_type: string (\"idea\"|\"task\"|\"constraint\"|\"risk\"|\"note\"), title: string, body: string|null, lane: string|null (default \"Ideas\"), created_by: string (your agent_id) }\n- UpdateCard: { type: \"UpdateCard\", card_id: string (ULID), title: string|null, body: string|null|null, card_type: string|null, refs: [string]|null, updated_by: string }\n- MoveCard: { type: \"MoveCard\", card_id: string (ULID), lane: string (\"Ideas\"|\"Plan\"|\"Done\"), order: number, updated_by: string }\n- DeleteCard: { type: \"DeleteCard\", card_id: string (ULID), updated_by: string }\n- UpdateSpecCore: { type: \"UpdateSpecCore\", title: string|null, one_liner: string|null, goal: string|null, description: string|null, constraints: string|null, success_criteria: string|null, risks: string|null, notes: string|null }\n- AppendTranscript: { type: \"AppendTranscript\", sender: string (your agent_id), content: string }",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": ["CreateCard", "UpdateCard", "MoveCard", "DeleteCard", "UpdateSpecCore", "AppendTranscript"],
+                                "description": "The command type to execute."
+                            }
+                        },
+                        "required": ["type"]
+                    }
                 }
             },
             "required": ["commands"]

@@ -22,28 +22,55 @@ use specd_core::event::Event;
 
 /// System prompt for the Manager agent role.
 const MANAGER_SYSTEM_PROMPT: &str = "You are the manager agent for a product specification. \
-    You coordinate the spec refinement process, ensure all aspects are covered, and ask the user \
-    questions when clarification is needed. You have access to tools for reading state, writing \
-    commands, asking questions, and narrating your reasoning.";
+    You coordinate the spec refinement process: identify gaps, ensure all aspects are covered, \
+    and ask the user questions when clarification is needed. Start by reading the current state, \
+    then decide what needs attention. If the spec is new or has few cards, ask the user a freeform \
+    question to understand what they want to build. If cards exist, review them and suggest \
+    improvements or ask clarifying questions.";
 
 /// System prompt for the Brainstormer agent role.
 const BRAINSTORMER_SYSTEM_PROMPT: &str = "You are the brainstormer agent. Your job is to generate \
-    creative ideas, explore possibilities, and create idea cards. Focus on breadth over depth.";
+    creative ideas, explore possibilities, and create idea cards. Focus on breadth over depth. \
+    Read the current state first, then create cards with card_type 'idea' for each new idea. \
+    Add a body with a brief explanation. Narrate your thought process so the user can follow along.";
 
 /// System prompt for the Planner agent role.
 const PLANNER_SYSTEM_PROMPT: &str = "You are the planner agent. Your job is to organize ideas into \
-    structured plans, move cards between lanes, and ensure the spec has clear goals and constraints.";
+    structured plans. Read the current state, then: move promising idea cards to the 'Plan' lane, \
+    create task cards that break down ideas into actionable steps, and update the spec core with \
+    constraints and success criteria. Narrate your reasoning.";
 
 /// System prompt for the DotGenerator agent role.
 const DOT_GENERATOR_SYSTEM_PROMPT: &str = "You are the DOT diagram generator. Your job is to read \
-    the current spec state and generate Graphviz DOT notation representing the spec's structure \
-    and relationships.";
+    the current spec state and create a card containing Graphviz DOT notation that represents \
+    the spec's structure and relationships between cards. Create a card with card_type 'note' \
+    and title 'Spec Diagram' containing DOT source in the body. Update it if one already exists.";
 
 /// System prompt for the Critic agent role.
 const CRITIC_SYSTEM_PROMPT: &str = "You are the critic agent. Your job is to review the spec for \
-    gaps, inconsistencies, and potential issues. Provide constructive feedback and suggestions.";
+    gaps, inconsistencies, and potential issues. Read the current state, then create cards with \
+    card_type 'risk' or 'constraint' for issues you find. Narrate your analysis and provide \
+    constructive feedback. Ask the user questions when you identify ambiguities that need human input.";
 
-/// Return the system prompt for a given agent role.
+/// Tool usage and workflow guidance appended to all agent system prompts at runtime.
+/// Includes the agent's own ID so it can use it in commands.
+fn tool_usage_guide(agent_id: &str) -> String {
+    format!(
+        "\n\nYour agent ID is: {agent_id}\n\n\
+        You have the following tools:\n\
+        - read_state: Read the current spec (title, goal, cards, transcript). Call this FIRST.\n\
+        - write_commands: Submit commands to modify the spec. Commands use JSON with a 'type' field. Examples:\n\
+          * {{\"type\": \"CreateCard\", \"card_type\": \"idea\", \"title\": \"My Idea\", \"body\": \"Details here\", \"lane\": null, \"created_by\": \"{agent_id}\"}}\n\
+          * {{\"type\": \"UpdateSpecCore\", \"description\": \"A detailed description\", \"constraints\": null, \"success_criteria\": null, \"risks\": null, \"notes\": null, \"title\": null, \"one_liner\": null, \"goal\": null}}\n\
+          * {{\"type\": \"MoveCard\", \"card_id\": \"<ULID from read_state>\", \"lane\": \"Plan\", \"order\": 1.0, \"updated_by\": \"{agent_id}\"}}\n\
+        - emit_narration: Post a message to the activity feed. Use this OFTEN to explain your reasoning.\n\
+        - emit_diff_summary: Mark your step as finished with a change summary. Call this LAST.\n\
+        - ask_user_boolean / ask_user_freeform / ask_user_multiple_choice: Ask the user questions.\n\n\
+        Workflow: 1) read_state 2) emit_narration (explain plan) 3) write_commands (make changes) 4) emit_diff_summary (finish)"
+    )
+}
+
+/// Return the base system prompt for a given agent role (without tool guide).
 pub fn system_prompt_for_role(role: &AgentRole) -> &'static str {
     match role {
         AgentRole::Manager => MANAGER_SYSTEM_PROMPT,
@@ -52,6 +79,12 @@ pub fn system_prompt_for_role(role: &AgentRole) -> &'static str {
         AgentRole::DotGenerator => DOT_GENERATOR_SYSTEM_PROMPT,
         AgentRole::Critic => CRITIC_SYSTEM_PROMPT,
     }
+}
+
+/// Build the full system prompt for an agent, including the tool usage guide
+/// with the agent's ID substituted in.
+fn full_system_prompt(role: &AgentRole, agent_id: &str) -> String {
+    format!("{}{}", system_prompt_for_role(role), tool_usage_guide(agent_id))
 }
 
 /// Wraps a single agent's role and mutable context.
@@ -247,10 +280,10 @@ impl SwarmOrchestrator {
         )
         .await;
 
-        // Create agent definition with role-specific system prompt
+        // Create agent definition with role-specific system prompt + tool guide
         let definition = AgentDefinition::new(
             runner.role.label(),
-            system_prompt_for_role(&runner.role),
+            full_system_prompt(&runner.role, &runner.agent_id),
         )
         .model(model)
         .max_iterations(10);
@@ -287,6 +320,14 @@ impl SwarmOrchestrator {
                     error = %e,
                     "agent step failed"
                 );
+                // Post the error to the activity feed so users can see it
+                let error_msg = format!("[{}] step failed: {}", runner.role.label(), e);
+                let _ = actor
+                    .send_command(Command::AppendTranscript {
+                        sender: runner.agent_id.clone(),
+                        content: error_msg,
+                    })
+                    .await;
                 false
             }
         }
@@ -371,20 +412,30 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
 
             // Extract runner, its event receiver, and shared fields.
             // The Option::take() avoids needing a Ulid::nil() placeholder.
-            let (mut runner, mut event_rx, actor_ref, question_pending, client, model) = {
+            let extracted = {
                 let mut s = swarm.lock().await;
                 let actor_ref = Arc::clone(&s.actor);
                 let question_pending = Arc::clone(&s.question_pending);
                 let client = Arc::clone(&s.client);
                 let model = s.model.clone();
-                let runner = s.agents[i]
-                    .take()
-                    .expect("agent runner should not be None during loop");
-                // Swap out the receiver with a fresh one; the old one keeps its
-                // buffered events so we drain them below.
-                let event_rx =
-                    std::mem::replace(&mut s.event_receivers[i], actor_ref.subscribe());
-                (runner, event_rx, actor_ref, question_pending, client, model)
+                match s.agents[i].take() {
+                    Some(runner) => {
+                        // Swap out the receiver with a fresh one; the old one keeps its
+                        // buffered events so we drain them below.
+                        let event_rx =
+                            std::mem::replace(&mut s.event_receivers[i], actor_ref.subscribe());
+                        Some((runner, event_rx, actor_ref, question_pending, client, model))
+                    }
+                    None => {
+                        tracing::warn!(agent_index = i, "agent runner slot is empty, skipping");
+                        None
+                    }
+                }
+            };
+            let Some((mut runner, mut event_rx, actor_ref, question_pending, client, model)) =
+                extracted
+            else {
+                continue;
             };
 
             SwarmOrchestrator::refresh_context_with_flag(

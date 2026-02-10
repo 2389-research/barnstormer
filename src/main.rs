@@ -73,6 +73,14 @@ async fn main() {
                 }
             }
 
+            // Auto-start agents for recovered specs if a provider is available
+            {
+                let actors = state.actors.read().await;
+                for (spec_id, handle) in actors.iter() {
+                    specd_server::web::try_start_agents(&state, *spec_id, handle).await;
+                }
+            }
+
             let auth_token = std::env::var("SPECD_AUTH_TOKEN")
                 .ok()
                 .filter(|t| !t.is_empty());
