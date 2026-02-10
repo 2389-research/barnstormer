@@ -721,6 +721,13 @@ pub struct TranscriptEntry {
     pub timestamp: String,
 }
 
+/// Returns true if the sender is part of the human ↔ manager conversation.
+/// Used to filter the chat tab to only show direct messages between the
+/// human and the manager agent, keeping other agents in the activity feed.
+fn is_chat_participant(sender: &str) -> bool {
+    sender == "human" || sender.starts_with("manager-")
+}
+
 /// Derive a display label and CSS class from a raw sender ID.
 /// "human" → ("You", true, "human"), "manager-01J..." → ("Manager", false, "manager"), etc.
 fn sender_display(sender: &str) -> (String, bool, String) {
@@ -931,9 +938,18 @@ pub async fn activity_transcript(
 
     let spec_state = handle.read_state().await;
 
+    let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
+
+    let container_id = sanitize_container_id(
+        query.container_id.as_deref().unwrap_or("activity-transcript"),
+    );
+
+    let is_chat = container_id == "chat-transcript";
+
     let transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
+        .filter(|m| !is_chat || is_chat_participant(&m.sender))
         .map(|m| {
             let (sender_label, is_human, role_class) = sender_display(&m.sender);
             TranscriptEntry {
@@ -947,13 +963,7 @@ pub async fn activity_transcript(
         })
         .collect();
 
-    let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
-
-    let container_id = sanitize_container_id(
-        query.container_id.as_deref().unwrap_or("activity-transcript"),
-    );
-
-    if container_id == "chat-transcript" {
+    if is_chat {
         ChatTranscriptTemplate {
             spec_id: id,
             container_id,
@@ -1020,6 +1030,7 @@ pub async fn chat_panel(
     let transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
+        .filter(|m| is_chat_participant(&m.sender))
         .map(|m| {
             let (sender_label, is_human, role_class) = sender_display(&m.sender);
             TranscriptEntry {
@@ -1284,9 +1295,13 @@ pub async fn answer_question(
 
     // Return refreshed transcript partial
     let spec_state = handle.read_state().await;
+
+    let is_chat = container_id == "chat-transcript";
+
     let transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
+        .filter(|m| !is_chat || is_chat_participant(&m.sender))
         .map(|m| {
             let (sender_label, is_human, role_class) = sender_display(&m.sender);
             TranscriptEntry {
@@ -1300,7 +1315,7 @@ pub async fn answer_question(
         })
         .collect();
 
-    if container_id == "chat-transcript" {
+    if is_chat {
         ChatTranscriptTemplate {
             spec_id: id,
             container_id,
@@ -1424,9 +1439,13 @@ pub async fn chat(
 
     // Return refreshed transcript partial
     let spec_state = handle.read_state().await;
+
+    let is_chat = container_id == "chat-transcript";
+
     let transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
+        .filter(|m| !is_chat || is_chat_participant(&m.sender))
         .map(|m| {
             let (sender_label, is_human, role_class) = sender_display(&m.sender);
             TranscriptEntry {
@@ -1442,7 +1461,7 @@ pub async fn chat(
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
-    if container_id == "chat-transcript" {
+    if is_chat {
         ChatTranscriptTemplate {
             spec_id: id,
             container_id,
@@ -3243,6 +3262,26 @@ mod tests {
         // No '-' separator, so the entire string is the role. Normalization:
         // lowercase + replace space/!/@ /# with hyphens → "my-agent---"
         assert_eq!(role_class, "my-agent---", "special chars should be replaced with hyphens");
+    }
+
+    // ---- is_chat_participant tests ----
+
+    #[test]
+    fn chat_participant_human() {
+        assert!(is_chat_participant("human"));
+    }
+
+    #[test]
+    fn chat_participant_manager() {
+        assert!(is_chat_participant("manager-01JTESTID123"));
+    }
+
+    #[test]
+    fn chat_participant_rejects_other_agents() {
+        assert!(!is_chat_participant("brainstormer-01JTESTID"));
+        assert!(!is_chat_participant("planner-01JTESTID"));
+        assert!(!is_chat_participant("dot_generator-01JTESTID"));
+        assert!(!is_chat_participant("critic-01JTESTID"));
     }
 
     // ---- normalize_css_class tests ----
