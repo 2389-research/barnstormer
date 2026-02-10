@@ -28,6 +28,8 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 http = "1"
 reqwest = { version = "0.12", features = ["json"] }
+anyhow = "1"
+mux = { path = "../mux-rs" }
 
 specd-core = { path = "crates/specd-core" }
 specd-store = { path = "crates/specd-store" }

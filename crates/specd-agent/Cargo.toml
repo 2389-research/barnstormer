@@ -17,3 +17,5 @@ thiserror.workspace = true
 ulid.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
+mux.workspace = true
+anyhow.workspace = true
