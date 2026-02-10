@@ -10,9 +10,9 @@ use crate::state::SpecState;
 /// Export the spec state as a DOT graph conforming to the DOT Runner
 /// constrained runtime DSL (spec Section 9.3).
 ///
-/// Lane flow: Cards in "Ideas" get edges from start. Cards in "Done" get
-/// edges to done. Cards in "Plan" connect between Ideas cards and Done cards.
-/// Other lanes are placed between Plan and Done in alphabetical order.
+/// Lane flow: Cards in "Ideas" get edges from start. Cards in "Spec" get
+/// edges to done. Cards in "Plan" connect between Ideas cards and Spec cards.
+/// Other lanes are placed between Plan and Spec in alphabetical order.
 pub fn export_dot(state: &SpecState) -> String {
     let mut out = String::new();
 
@@ -82,8 +82,8 @@ pub fn export_dot(state: &SpecState) -> String {
         .map(|cards| cards.iter().map(|c| card_node_id(c)).collect())
         .unwrap_or_default();
 
-    let done_cards: Vec<String> = cards_by_lane
-        .get("Done")
+    let spec_cards: Vec<String> = cards_by_lane
+        .get("Spec")
         .map(|cards| cards.iter().map(|c| card_node_id(c)).collect())
         .unwrap_or_default();
 
@@ -101,33 +101,33 @@ pub fn export_dot(state: &SpecState) -> String {
         }
     }
 
-    // Plan cards -> Done cards (if both exist)
-    if !plan_cards.is_empty() && !done_cards.is_empty() {
+    // Plan cards -> Spec cards (if both exist)
+    if !plan_cards.is_empty() && !spec_cards.is_empty() {
         for plan_id in &plan_cards {
-            for done_id in &done_cards {
-                writeln!(out, "    {} -> {}", plan_id, done_id).unwrap();
+            for spec_id in &spec_cards {
+                writeln!(out, "    {} -> {}", plan_id, spec_id).unwrap();
             }
         }
     }
 
-    // If there are no Plan cards, connect Ideas directly to Done
-    if plan_cards.is_empty() && !ideas_cards.is_empty() && !done_cards.is_empty() {
+    // If there are no Plan cards, connect Ideas directly to Spec
+    if plan_cards.is_empty() && !ideas_cards.is_empty() && !spec_cards.is_empty() {
         for idea_id in &ideas_cards {
-            for done_id in &done_cards {
-                writeln!(out, "    {} -> {}", idea_id, done_id).unwrap();
+            for spec_id in &spec_cards {
+                writeln!(out, "    {} -> {}", idea_id, spec_id).unwrap();
             }
         }
     }
 
-    // Done cards -> done sentinel
-    for node_id in &done_cards {
+    // Spec cards -> done sentinel
+    for node_id in &spec_cards {
         writeln!(out, "    {} -> done", node_id).unwrap();
     }
 
-    // Handle cards in custom lanes (non-default): connect between Plan and Done
+    // Handle cards in custom lanes (non-default): connect between Plan and Spec
     let custom_lane_cards: Vec<String> = ordered_lanes
         .iter()
-        .filter(|l| !["Ideas", "Plan", "Done"].contains(&l.as_str()))
+        .filter(|l| !["Ideas", "Plan", "Spec"].contains(&l.as_str()))
         .flat_map(|l| {
             cards_by_lane
                 .get(l.as_str())
@@ -141,7 +141,7 @@ pub fn export_dot(state: &SpecState) -> String {
         })
         .collect();
 
-    // Custom lanes connect from Plan (or Ideas if no Plan) and to Done
+    // Custom lanes connect from Plan (or Ideas if no Plan) and to Spec
     if !custom_lane_cards.is_empty() {
         let sources = if !plan_cards.is_empty() {
             &plan_cards
@@ -154,8 +154,8 @@ pub fn export_dot(state: &SpecState) -> String {
             }
         }
         for custom in &custom_lane_cards {
-            for done_id in &done_cards {
-                writeln!(out, "    {} -> {}", custom, done_id).unwrap();
+            for spec_id in &spec_cards {
+                writeln!(out, "    {} -> {}", custom, spec_id).unwrap();
             }
         }
     }
@@ -252,13 +252,13 @@ fn group_cards_by_lane(state: &SpecState) -> BTreeMap<&str, Vec<&Card>> {
     by_lane
 }
 
-/// Produce the ordered list of lane names: Ideas, Plan, Done first,
+/// Produce the ordered list of lane names: Ideas, Plan, Spec first,
 /// then any additional lanes sorted alphabetically.
 fn ordered_lane_names(
     state: &SpecState,
     cards_by_lane: &BTreeMap<&str, Vec<&Card>>,
 ) -> Vec<String> {
-    let default_lanes = ["Ideas", "Plan", "Done"];
+    let default_lanes = ["Ideas", "Plan", "Spec"];
     let mut lanes: Vec<String> = Vec::new();
 
     for dl in &default_lanes {
@@ -310,7 +310,7 @@ mod tests {
             pending_question: None,
             undo_stack: Vec::new(),
             last_event_id: 0,
-            lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Done".to_string()],
+            lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
         }
     }
 
@@ -388,15 +388,15 @@ mod tests {
 
         let card_idea = make_card("idea", "Brainstorm", "Ideas", 1.0, "human");
         let card_plan = make_card("plan", "Roadmap", "Plan", 1.0, "human");
-        let card_done = make_card("task", "Shipped", "Done", 1.0, "human");
+        let card_spec = make_card("task", "Shipped", "Spec", 1.0, "human");
 
         let idea_id = card_node_id(&card_idea);
         let plan_id = card_node_id(&card_plan);
-        let done_id = card_node_id(&card_done);
+        let spec_id = card_node_id(&card_spec);
 
         state.cards.insert(card_idea.card_id, card_idea);
         state.cards.insert(card_plan.card_id, card_plan);
-        state.cards.insert(card_done.card_id, card_done);
+        state.cards.insert(card_spec.card_id, card_spec);
 
         let dot = export_dot(&state);
 
@@ -418,17 +418,17 @@ mod tests {
             dot
         );
 
-        // Plan -> Done
-        let plan_done_edge = format!("{} -> {}", plan_id, done_id);
+        // Plan -> Spec
+        let plan_spec_edge = format!("{} -> {}", plan_id, spec_id);
         assert!(
-            dot.contains(&plan_done_edge),
+            dot.contains(&plan_spec_edge),
             "Expected '{}' in:\n{}",
-            plan_done_edge,
+            plan_spec_edge,
             dot
         );
 
-        // Done -> done sentinel
-        let done_sentinel = format!("{} -> done", done_id);
+        // Spec -> done sentinel
+        let done_sentinel = format!("{} -> done", spec_id);
         assert!(
             dot.contains(&done_sentinel),
             "Expected '{}' in:\n{}",
@@ -542,26 +542,26 @@ mod tests {
     }
 
     #[test]
-    fn export_dot_direct_ideas_to_done_when_no_plan() {
+    fn export_dot_direct_ideas_to_spec_when_no_plan() {
         let mut state = make_state_with_core();
 
         let card_idea = make_card("idea", "Spark", "Ideas", 1.0, "human");
-        let card_done = make_card("task", "Complete", "Done", 1.0, "human");
+        let card_spec = make_card("task", "Complete", "Spec", 1.0, "human");
 
         let spark_id = card_node_id(&card_idea);
-        let complete_id = card_node_id(&card_done);
+        let complete_id = card_node_id(&card_spec);
 
         state.cards.insert(card_idea.card_id, card_idea);
-        state.cards.insert(card_done.card_id, card_done);
+        state.cards.insert(card_spec.card_id, card_spec);
 
         let dot = export_dot(&state);
 
-        // With no Plan cards, Ideas should connect directly to Done
-        let idea_done_edge = format!("{} -> {}", spark_id, complete_id);
+        // With no Plan cards, Ideas should connect directly to Spec
+        let idea_spec_edge = format!("{} -> {}", spark_id, complete_id);
         assert!(
-            dot.contains(&idea_done_edge),
+            dot.contains(&idea_spec_edge),
             "Expected '{}' in:\n{}",
-            idea_done_edge,
+            idea_spec_edge,
             dot
         );
         let start_edge = format!("start -> {}", spark_id);

@@ -9,7 +9,7 @@ use crate::state::SpecState;
 
 /// Render a SpecState as a Markdown string with deterministic ordering.
 ///
-/// Lane ordering: Ideas, Plan, Done first (in that order), then any other
+/// Lane ordering: Ideas, Plan, Spec first (in that order), then any other
 /// lanes sorted alphabetically. Cards within each lane are ordered by their
 /// `order` field (f64), with `card_id` as a tiebreaker.
 pub fn export_markdown(state: &SpecState) -> String {
@@ -122,13 +122,13 @@ fn group_cards_by_lane(state: &SpecState) -> BTreeMap<&str, Vec<&Card>> {
     by_lane
 }
 
-/// Produce the ordered list of lane names: Ideas, Plan, Done first,
+/// Produce the ordered list of lane names: Ideas, Plan, Spec first,
 /// then any additional lanes sorted alphabetically.
 fn ordered_lane_names(
     state: &SpecState,
     cards_by_lane: &BTreeMap<&str, Vec<&Card>>,
 ) -> Vec<String> {
-    let default_lanes = ["Ideas", "Plan", "Done"];
+    let default_lanes = ["Ideas", "Plan", "Spec"];
     let mut lanes: Vec<String> = Vec::new();
 
     // Add default lanes that either are in state.lanes or have cards
@@ -183,7 +183,7 @@ mod tests {
             pending_question: None,
             undo_stack: Vec::new(),
             last_event_id: 0,
-            lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Done".to_string()],
+            lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
         }
     }
 
@@ -222,30 +222,30 @@ mod tests {
 
         let card_ideas = make_card("idea", "Brainstorm", "Ideas", 1.0, "human");
         let card_plan = make_card("plan", "Roadmap", "Plan", 1.0, "human");
-        let card_done = make_card("task", "Shipped", "Done", 1.0, "human");
+        let card_spec = make_card("task", "Shipped", "Spec", 1.0, "human");
 
         state.cards.insert(card_ideas.card_id, card_ideas);
         state.cards.insert(card_plan.card_id, card_plan);
-        state.cards.insert(card_done.card_id, card_done);
+        state.cards.insert(card_spec.card_id, card_spec);
 
         let md = export_markdown(&state);
 
         // Verify lane sections exist
         assert!(md.contains("## Ideas"));
         assert!(md.contains("## Plan"));
-        assert!(md.contains("## Done"));
+        assert!(md.contains("## Spec"));
 
         // Verify cards are under the correct lane by checking ordering in the output
         let ideas_pos = md.find("## Ideas").unwrap();
         let plan_pos = md.find("## Plan").unwrap();
-        let done_pos = md.find("## Done").unwrap();
+        let spec_pos = md.find("## Spec").unwrap();
         let brainstorm_pos = md.find("### Brainstorm (idea)").unwrap();
         let roadmap_pos = md.find("### Roadmap (plan)").unwrap();
         let shipped_pos = md.find("### Shipped (task)").unwrap();
 
         assert!(brainstorm_pos > ideas_pos && brainstorm_pos < plan_pos);
-        assert!(roadmap_pos > plan_pos && roadmap_pos < done_pos);
-        assert!(shipped_pos > done_pos);
+        assert!(roadmap_pos > plan_pos && roadmap_pos < spec_pos);
+        assert!(shipped_pos > spec_pos);
     }
 
     #[test]
@@ -341,15 +341,15 @@ mod tests {
 
         let ideas_pos = md.find("## Ideas").unwrap();
         let plan_pos = md.find("## Plan").unwrap();
-        let done_pos = md.find("## Done").unwrap();
+        let spec_pos = md.find("## Spec").unwrap();
         let alpha_pos = md.find("## Alpha").unwrap();
         let zulu_pos = md.find("## Zulu").unwrap();
 
         // Default lanes first in order
         assert!(ideas_pos < plan_pos);
-        assert!(plan_pos < done_pos);
+        assert!(plan_pos < spec_pos);
         // Extra lanes alphabetically after defaults
-        assert!(done_pos < alpha_pos);
+        assert!(spec_pos < alpha_pos);
         assert!(alpha_pos < zulu_pos);
     }
 

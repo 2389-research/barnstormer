@@ -54,7 +54,7 @@ struct YamlSpec {
 /// Export the spec state as structured YAML matching the spec.yaml format.
 ///
 /// Uses the same deterministic ordering as the Markdown exporter: Ideas, Plan,
-/// Done first, then extra lanes alphabetically. Cards within lanes sorted by
+/// Spec first, then extra lanes alphabetically. Cards within lanes sorted by
 /// order then card_id.
 pub fn export_yaml(state: &SpecState) -> Result<String, serde_yaml::Error> {
     let core = state
@@ -126,13 +126,13 @@ fn group_cards_by_lane(state: &SpecState) -> BTreeMap<&str, Vec<&Card>> {
     by_lane
 }
 
-/// Produce the ordered list of lane names: Ideas, Plan, Done first,
+/// Produce the ordered list of lane names: Ideas, Plan, Spec first,
 /// then any additional lanes sorted alphabetically.
 fn ordered_lane_names(
     state: &SpecState,
     cards_by_lane: &BTreeMap<&str, Vec<&Card>>,
 ) -> Vec<String> {
-    let default_lanes = ["Ideas", "Plan", "Done"];
+    let default_lanes = ["Ideas", "Plan", "Spec"];
     let mut lanes: Vec<String> = Vec::new();
 
     for dl in &default_lanes {
@@ -184,7 +184,7 @@ mod tests {
             pending_question: None,
             undo_stack: Vec::new(),
             last_event_id: 0,
-            lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Done".to_string()],
+            lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
         }
     }
 
@@ -313,7 +313,7 @@ mod tests {
 
         let card_a = make_card("idea", "Card A", "Ideas", 1.0, "human");
         let card_b = make_card("plan", "Card B", "Plan", 1.0, "human");
-        let card_c = make_card("task", "Card C", "Done", 1.0, "human");
+        let card_c = make_card("task", "Card C", "Spec", 1.0, "human");
 
         state.cards.insert(card_a.card_id, card_a);
         state.cards.insert(card_b.card_id, card_b);
