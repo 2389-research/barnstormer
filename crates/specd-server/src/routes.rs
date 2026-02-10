@@ -86,9 +86,15 @@ mod tests {
     use tower::ServiceExt;
 
     fn test_state() -> SharedState {
+        let provider_status = ProviderStatus {
+            default_provider: "anthropic".to_string(),
+            default_model: None,
+            providers: vec![],
+            any_available: false,
+        };
         Arc::new(AppState::new(
             std::env::temp_dir().join("specd-test"),
-            ProviderStatus::detect(),
+            provider_status,
         ))
     }
 

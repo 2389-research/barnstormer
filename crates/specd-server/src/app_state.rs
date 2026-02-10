@@ -12,11 +12,18 @@ use ulid::Ulid;
 
 use crate::providers::ProviderStatus;
 
+/// Bundles a SwarmOrchestrator with its background task handle so
+/// the agent loop can be cancelled on cleanup.
+pub struct SwarmHandle {
+    pub swarm: Arc<Mutex<SwarmOrchestrator>>,
+    pub task: tokio::task::JoinHandle<()>,
+}
+
 /// Shared application state accessible by all Axum handlers.
 /// Stores a map of spec actors keyed by their ULID and the SPECD_HOME directory.
 pub struct AppState {
     pub actors: Arc<RwLock<HashMap<Ulid, SpecActorHandle>>>,
-    pub swarms: Arc<RwLock<HashMap<Ulid, Arc<Mutex<SwarmOrchestrator>>>>>,
+    pub swarms: Arc<RwLock<HashMap<Ulid, SwarmHandle>>>,
     pub specd_home: PathBuf,
     pub provider_status: ProviderStatus,
 }

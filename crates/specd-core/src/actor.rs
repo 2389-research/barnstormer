@@ -45,6 +45,7 @@ type CommandMessage = (Command, oneshot::Sender<Result<Vec<Event>, ActorError>>)
 
 /// Public handle for interacting with a SpecActor. Supports sending commands,
 /// subscribing to events, and reading the current state.
+#[derive(Clone)]
 pub struct SpecActorHandle {
     cmd_tx: mpsc::Sender<CommandMessage>,
     event_tx: broadcast::Sender<Event>,

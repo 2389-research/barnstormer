@@ -175,7 +175,13 @@ mod tests {
 
     fn test_state() -> SharedState {
         let dir = tempfile::TempDir::new().unwrap();
-        Arc::new(AppState::new(dir.keep(), ProviderStatus::detect()))
+        let provider_status = ProviderStatus {
+            default_provider: "anthropic".to_string(),
+            default_model: None,
+            providers: vec![],
+            any_available: false,
+        };
+        Arc::new(AppState::new(dir.keep(), provider_status))
     }
 
     /// Helper: create a spec and return (state, spec_id).

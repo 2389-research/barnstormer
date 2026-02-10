@@ -903,6 +903,9 @@ pub async fn answer_question(
     .into_response()
 }
 
+/// Maximum allowed length for a chat message (in characters).
+const CHAT_MAX_LENGTH: usize = 10_000;
+
 /// POST /web/specs/{id}/chat - Send a free-text message as the human.
 pub async fn chat(
     State(state): State<SharedState>,
@@ -913,6 +916,26 @@ pub async fn chat(
         Ok(id) => id,
         Err(resp) => return *resp,
     };
+
+    // Validate message: trim whitespace, reject empty, cap length
+    let message = form.message.trim().to_string();
+    if message.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html("<p class=\"error-msg\">Message cannot be empty.</p>".to_string()),
+        )
+            .into_response();
+    }
+    if message.len() > CHAT_MAX_LENGTH {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html(format!(
+                "<p class=\"error-msg\">Message too long (max {} characters).</p>",
+                CHAT_MAX_LENGTH
+            )),
+        )
+            .into_response();
+    }
 
     let actors = state.actors.read().await;
     let handle = match actors.get(&spec_id) {
@@ -928,7 +951,7 @@ pub async fn chat(
 
     let cmd = Command::AppendTranscript {
         sender: "human".to_string(),
-        content: form.message,
+        content: message,
     };
 
     let events = match handle.send_command(cmd).await {
@@ -1097,8 +1120,8 @@ pub async fn start_agents(
     // Check if swarm already exists
     {
         let swarms = state.swarms.read().await;
-        if let Some(swarm_mutex) = swarms.get(&spec_id) {
-            let swarm = swarm_mutex.lock().await;
+        if let Some(swarm_handle) = swarms.get(&spec_id) {
+            let swarm = swarm_handle.swarm.lock().await;
             return AgentStatusTemplate {
                 spec_id: id,
                 running: !swarm.is_paused(),
@@ -1122,18 +1145,11 @@ pub async fn start_agents(
         }
     };
 
-    // Subscribe to events before creating the swarm (needed for refresh_context)
+    // Clone the existing actor handle so the swarm uses the same actor,
+    // ensuring events flow through the server's main event bus.
     let event_rx = actor_handle.subscribe();
-
-    // Create the SpecActorHandle for the swarm -- we need a separate handle
-    // since SwarmOrchestrator::with_defaults takes ownership.
-    // Re-spawn an actor view using the current state.
-    let current_state_guard = actor_handle.read_state().await;
-    let current_state = current_state_guard.clone();
-    drop(current_state_guard);
+    let swarm_actor_handle = actor_handle.clone();
     drop(actors);
-
-    let swarm_actor_handle = specd_core::spawn(spec_id, current_state);
 
     // Create swarm
     let swarm = match SwarmOrchestrator::with_defaults(spec_id, swarm_actor_handle) {
@@ -1155,74 +1171,14 @@ pub async fn start_agents(
         s.agents.len()
     };
 
-    // Spawn agent loop task
-    let swarm_clone = Arc::clone(&swarm);
-    tokio::spawn(async move {
-        let mut event_rx = event_rx;
-        loop {
-            // Check if paused without holding the lock long
-            let is_paused = {
-                let s = swarm_clone.lock().await;
-                s.is_paused()
-            };
+    // Spawn agent loop task and store the handle for cancellation
+    let task = spawn_agent_loop(Arc::clone(&swarm), event_rx);
 
-            if is_paused {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                continue;
-            }
-
-            let agent_count = {
-                let s = swarm_clone.lock().await;
-                s.agents.len()
-            };
-
-            for i in 0..agent_count {
-                // Check pause again before each agent step
-                let is_paused = {
-                    let s = swarm_clone.lock().await;
-                    s.is_paused()
-                };
-                if is_paused {
-                    break;
-                }
-
-                // Refresh context and run step under lock.
-                // Clone Arc fields before taking &mut agents to satisfy borrow checker.
-                let should_continue = {
-                    let mut s = swarm_clone.lock().await;
-                    let actor_ref = Arc::clone(&s.actor);
-                    let question_pending = Arc::clone(&s.question_pending);
-
-                    SwarmOrchestrator::refresh_context_with_flag(
-                        &mut s.agents[i],
-                        &actor_ref,
-                        &mut event_rx,
-                        Some(&question_pending),
-                    )
-                    .await;
-
-                    SwarmOrchestrator::run_single_step(
-                        &mut s.agents[i],
-                        &actor_ref,
-                        &question_pending,
-                    )
-                    .await
-                };
-
-                if should_continue {
-                    // Agent did work, small delay before next
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                } else {
-                    // Agent is done/idle, longer delay
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        }
-    });
-
-    // Store swarm
-    state.swarms.write().await.insert(spec_id, swarm);
+    // Store swarm with its task handle
+    state.swarms.write().await.insert(
+        spec_id,
+        crate::app_state::SwarmHandle { swarm, task },
+    );
 
     AgentStatusTemplate {
         spec_id: id,
@@ -1245,8 +1201,8 @@ pub async fn pause_agents(
 
     let swarms = state.swarms.read().await;
     match swarms.get(&spec_id) {
-        Some(swarm_mutex) => {
-            let swarm = swarm_mutex.lock().await;
+        Some(swarm_handle) => {
+            let swarm = swarm_handle.swarm.lock().await;
             swarm.pause();
             AgentStatusTemplate {
                 spec_id: id,
@@ -1278,8 +1234,8 @@ pub async fn resume_agents(
 
     let swarms = state.swarms.read().await;
     match swarms.get(&spec_id) {
-        Some(swarm_mutex) => {
-            let swarm = swarm_mutex.lock().await;
+        Some(swarm_handle) => {
+            let swarm = swarm_handle.swarm.lock().await;
             swarm.resume();
             AgentStatusTemplate {
                 spec_id: id,
@@ -1311,8 +1267,8 @@ pub async fn agent_status(
 
     let swarms = state.swarms.read().await;
     match swarms.get(&spec_id) {
-        Some(swarm_mutex) => {
-            let swarm = swarm_mutex.lock().await;
+        Some(swarm_handle) => {
+            let swarm = swarm_handle.swarm.lock().await;
             AgentStatusTemplate {
                 spec_id: id,
                 running: !swarm.is_paused(),
@@ -1331,51 +1287,18 @@ pub async fn agent_status(
     }
 }
 
-/// Helper to start the agent swarm for a spec, if a provider is available.
-/// Returns silently if no provider is configured, if the swarm already exists,
-/// or if swarm creation fails. Used by both web and API create_spec handlers.
-pub(crate) async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_handle: &specd_core::SpecActorHandle) {
-    if !state.provider_status.any_available {
-        tracing::info!("no LLM provider configured, skipping agent start for spec {}", spec_id);
-        return;
-    }
-
-    // Check if swarm already exists
-    {
-        let swarms = state.swarms.read().await;
-        if swarms.contains_key(&spec_id) {
-            return;
-        }
-    }
-
-    // Subscribe to events before creating the swarm (needed for refresh_context)
-    let event_rx = actor_handle.subscribe();
-
-    // Create a separate SpecActorHandle for the swarm since with_defaults takes ownership
-    let current_state = actor_handle.read_state().await.clone();
-    let swarm_actor_handle = specd_core::spawn(spec_id, current_state);
-
-    // Create swarm
-    let swarm = match SwarmOrchestrator::with_defaults(spec_id, swarm_actor_handle) {
-        Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
-        Err(e) => {
-            tracing::warn!("failed to auto-start agents for spec {}: {}", spec_id, e);
-            return;
-        }
-    };
-
-    let agent_count = {
-        let s = swarm.lock().await;
-        s.agents.len()
-    };
-
-    // Spawn background agent loop (same pattern as start_agents handler)
-    let swarm_clone = Arc::clone(&swarm);
+/// Spawn the background agent loop that drives all agents in the swarm.
+/// Returns the JoinHandle so the caller can track and cancel the task.
+fn spawn_agent_loop(
+    swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>,
+    event_rx: tokio::sync::broadcast::Receiver<specd_core::Event>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut event_rx = event_rx;
         loop {
+            // Check if paused without holding the lock long
             let is_paused = {
-                let s = swarm_clone.lock().await;
+                let s = swarm.lock().await;
                 s.is_paused()
             };
 
@@ -1385,21 +1308,24 @@ pub(crate) async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_h
             }
 
             let agent_count = {
-                let s = swarm_clone.lock().await;
+                let s = swarm.lock().await;
                 s.agents.len()
             };
 
             for i in 0..agent_count {
+                // Check pause again before each agent step
                 let is_paused = {
-                    let s = swarm_clone.lock().await;
+                    let s = swarm.lock().await;
                     s.is_paused()
                 };
                 if is_paused {
                     break;
                 }
 
+                // Refresh context and run step under lock.
+                // Clone Arc fields before taking &mut agents to satisfy borrow checker.
                 let should_continue = {
-                    let mut s = swarm_clone.lock().await;
+                    let mut s = swarm.lock().await;
                     let actor_ref = Arc::clone(&s.actor);
                     let question_pending = Arc::clone(&s.question_pending);
 
@@ -1420,16 +1346,61 @@ pub(crate) async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_h
                 };
 
                 if should_continue {
+                    // Agent did work, small delay before next
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 } else {
+                    // Agent is done/idle, longer delay
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
             }
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
-    });
+    })
+}
 
-    state.swarms.write().await.insert(spec_id, swarm);
+/// Helper to start the agent swarm for a spec, if a provider is available.
+/// Returns silently if no provider is configured, if the swarm already exists,
+/// or if swarm creation fails. Used by both web and API create_spec handlers.
+pub(crate) async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_handle: &specd_core::SpecActorHandle) {
+    if !state.provider_status.any_available {
+        tracing::info!("no LLM provider configured, skipping agent start for spec {}", spec_id);
+        return;
+    }
+
+    // Check if swarm already exists
+    {
+        let swarms = state.swarms.read().await;
+        if swarms.contains_key(&spec_id) {
+            return;
+        }
+    }
+
+    // Clone the existing actor handle so the swarm uses the same actor,
+    // ensuring events flow through the server's main event bus.
+    let event_rx = actor_handle.subscribe();
+    let swarm_actor_handle = actor_handle.clone();
+
+    // Create swarm
+    let swarm = match SwarmOrchestrator::with_defaults(spec_id, swarm_actor_handle) {
+        Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
+        Err(e) => {
+            tracing::warn!("failed to auto-start agents for spec {}: {}", spec_id, e);
+            return;
+        }
+    };
+
+    let agent_count = {
+        let s = swarm.lock().await;
+        s.agents.len()
+    };
+
+    // Spawn background agent loop and store the handle for cancellation
+    let task = spawn_agent_loop(Arc::clone(&swarm), event_rx);
+
+    state.swarms.write().await.insert(
+        spec_id,
+        crate::app_state::SwarmHandle { swarm, task },
+    );
     tracing::info!("auto-started {} agents for spec {}", agent_count, spec_id);
 }
 
@@ -1441,11 +1412,16 @@ fn persist_events(state: &SharedState, spec_id: Ulid, events: &[specd_core::Even
         .join(spec_id.to_string())
         .join("events.jsonl");
 
-    if let Ok(mut log) = JsonlLog::open(&log_path) {
-        for event in events {
-            if let Err(e) = log.append(event) {
-                tracing::error!("failed to persist event: {}", e);
+    match JsonlLog::open(&log_path) {
+        Ok(mut log) => {
+            for event in events {
+                if let Err(e) = log.append(event) {
+                    tracing::error!("failed to persist event: {}", e);
+                }
             }
+        }
+        Err(e) => {
+            tracing::error!("failed to open JSONL log at {}: {}", log_path.display(), e);
         }
     }
 }
@@ -1463,7 +1439,13 @@ mod tests {
 
     fn test_state() -> SharedState {
         let dir = tempfile::TempDir::new().unwrap();
-        Arc::new(AppState::new(dir.keep(), ProviderStatus::detect()))
+        let provider_status = ProviderStatus {
+            default_provider: "anthropic".to_string(),
+            default_model: None,
+            providers: vec![],
+            any_available: false,
+        };
+        Arc::new(AppState::new(dir.keep(), provider_status))
     }
 
     #[test]
