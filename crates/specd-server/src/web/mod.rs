@@ -133,6 +133,14 @@ pub async fn create_spec(
 
     state.actors.write().await.insert(spec_id, handle);
 
+    // Auto-start agents if a provider is available
+    {
+        let actors = state.actors.read().await;
+        if let Some(handle_ref) = actors.get(&spec_id) {
+            try_start_agents(&state, spec_id, handle_ref).await;
+        }
+    }
+
     // Return the updated spec list
     let actors = state.actors.read().await;
     let mut specs = Vec::new();
@@ -1321,6 +1329,108 @@ pub async fn agent_status(
         }
         .into_response(),
     }
+}
+
+/// Helper to start the agent swarm for a spec, if a provider is available.
+/// Returns silently if no provider is configured, if the swarm already exists,
+/// or if swarm creation fails. Used by both web and API create_spec handlers.
+pub(crate) async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_handle: &specd_core::SpecActorHandle) {
+    if !state.provider_status.any_available {
+        tracing::info!("no LLM provider configured, skipping agent start for spec {}", spec_id);
+        return;
+    }
+
+    // Check if swarm already exists
+    {
+        let swarms = state.swarms.read().await;
+        if swarms.contains_key(&spec_id) {
+            return;
+        }
+    }
+
+    // Subscribe to events before creating the swarm (needed for refresh_context)
+    let event_rx = actor_handle.subscribe();
+
+    // Create a separate SpecActorHandle for the swarm since with_defaults takes ownership
+    let current_state = actor_handle.read_state().await.clone();
+    let swarm_actor_handle = specd_core::spawn(spec_id, current_state);
+
+    // Create swarm
+    let swarm = match SwarmOrchestrator::with_defaults(spec_id, swarm_actor_handle) {
+        Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
+        Err(e) => {
+            tracing::warn!("failed to auto-start agents for spec {}: {}", spec_id, e);
+            return;
+        }
+    };
+
+    let agent_count = {
+        let s = swarm.lock().await;
+        s.agents.len()
+    };
+
+    // Spawn background agent loop (same pattern as start_agents handler)
+    let swarm_clone = Arc::clone(&swarm);
+    tokio::spawn(async move {
+        let mut event_rx = event_rx;
+        loop {
+            let is_paused = {
+                let s = swarm_clone.lock().await;
+                s.is_paused()
+            };
+
+            if is_paused {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                continue;
+            }
+
+            let agent_count = {
+                let s = swarm_clone.lock().await;
+                s.agents.len()
+            };
+
+            for i in 0..agent_count {
+                let is_paused = {
+                    let s = swarm_clone.lock().await;
+                    s.is_paused()
+                };
+                if is_paused {
+                    break;
+                }
+
+                let should_continue = {
+                    let mut s = swarm_clone.lock().await;
+                    let actor_ref = Arc::clone(&s.actor);
+                    let question_pending = Arc::clone(&s.question_pending);
+
+                    SwarmOrchestrator::refresh_context_with_flag(
+                        &mut s.agents[i],
+                        &actor_ref,
+                        &mut event_rx,
+                        Some(&question_pending),
+                    )
+                    .await;
+
+                    SwarmOrchestrator::run_single_step(
+                        &mut s.agents[i],
+                        &actor_ref,
+                        &question_pending,
+                    )
+                    .await
+                };
+
+                if should_continue {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                } else {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    });
+
+    state.swarms.write().await.insert(spec_id, swarm);
+    tracing::info!("auto-started {} agents for spec {}", agent_count, spec_id);
 }
 
 /// Helper to persist events to the JSONL log.

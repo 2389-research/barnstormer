@@ -118,6 +118,14 @@ pub async fn create_spec(
     // Store actor handle
     state.actors.write().await.insert(spec_id, handle);
 
+    // Auto-start agents if a provider is available
+    {
+        let actors = state.actors.read().await;
+        if let Some(handle_ref) = actors.get(&spec_id) {
+            crate::web::try_start_agents(&state, spec_id, handle_ref).await;
+        }
+    }
+
     (
         StatusCode::CREATED,
         Json(serde_json::json!({ "spec_id": spec_id.to_string() })),
