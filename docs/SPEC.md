@@ -1,4 +1,4 @@
-# specd — Agentic Spec Builder (v1)
+# barnstormer — Agentic Spec Builder (v1)
 
 Date: 2026-02-10  
 Status: Draft v1 implementation spec
@@ -121,11 +121,11 @@ The system maintains:
 
 ### 5.1 Storage layout
 
-Base dir: `${SPECD_HOME}` default `~/.specd/`
+Base dir: `${BARNSTORMER_HOME}` default `~/.barnstormer/`
 
 For each spec:
 ```
-~/.specd/specs/<spec_id>/
+~/.barnstormer/specs/<spec_id>/
   events.jsonl                 # append-only source of truth
   snapshots/
     state_<n>.json             # periodic snapshots (state + undo + agent context)
@@ -168,7 +168,7 @@ On startup:
 
 ### 6.1 Process model
 
-- One local daemon: `specd`
+- One local daemon: `barnstormer`
 - Clients (web) connect via HTTP + streaming (SSE or WebSocket).
 - Headless mode: daemon runs without opening a browser.
 - Default bind: `127.0.0.1:<port>`; remote bind must be explicitly enabled.
@@ -188,25 +188,25 @@ Agents run concurrently, but their write commands funnel through the spec actor.
 
 ### 6.3 Module breakdown
 
-- `specd-core`
+- `barnstormer-core`
   - state model (Spec, Card, Transcript)
   - event types + apply/reduce
   - command types + validation
   - exporters (md/yaml/dot)
   - snapshot load/save
-- `specd-store`
+- `barnstormer-store`
   - jsonl append/replay + truncation repair
   - sqlite indexer + rebuild
-- `specd-agent`
+- `barnstormer-agent`
   - agent runtime trait + adapters
   - swarm orchestrator (per spec)
   - manager + subagent coordination
   - question queue enforcement
   - context snapshotting + size caps
-- `specd-server`
+- `barnstormer-server`
   - HTTP API + streaming
   - static web UI hosting
-- `specd-web`
+- `barnstormer-web`
   - Rust web UI (cards board, doc view, activity panel)
 
 ## 7. Public API (daemon)
@@ -315,22 +315,22 @@ Same data as Markdown but structured.
 
 ## 10. CLI
 
-- `specd start`:
+- `barnstormer start`:
   - start daemon (or connect to existing)
   - initialize store
   - open browser to web UI (unless `--no-open`)
-- `specd status`
-- `specd stop` (optional; can be best-effort)
-- `specd export <spec_id>` (optional; mostly redundant since auto-export)
+- `barnstormer status`
+- `barnstormer stop` (optional; can be best-effort)
+- `barnstormer export <spec_id>` (optional; mostly redundant since auto-export)
 
 ## 11. Configuration (.env)
 
 Examples:
-- `SPECD_HOME=~/.specd`
-- `SPECD_BIND=127.0.0.1:7331`
-- `SPECD_PUBLIC_BASE_URL=http://localhost:7331`
-- `SPECD_ALLOW_REMOTE=false`
-- `SPECD_AUTH_TOKEN=...` (required if remote bind enabled)
+- `BARNSTORMER_HOME=~/.barnstormer`
+- `BARNSTORMER_BIND=127.0.0.1:7331`
+- `BARNSTORMER_PUBLIC_BASE_URL=http://localhost:7331`
+- `BARNSTORMER_ALLOW_REMOTE=false`
+- `BARNSTORMER_AUTH_TOKEN=...` (required if remote bind enabled)
 
 LLM providers (examples):
 - `OPENAI_API_KEY=...`
@@ -339,8 +339,8 @@ LLM providers (examples):
 - `ANTHROPIC_BASE_URL=...`
 - `GEMINI_API_KEY=...`
 - `GEMINI_BASE_URL=...`
-- `SPECD_DEFAULT_PROVIDER=openai|anthropic|gemini`
-- `SPECD_DEFAULT_MODEL=...`
+- `BARNSTORMER_DEFAULT_PROVIDER=openai|anthropic|gemini`
+- `BARNSTORMER_DEFAULT_MODEL=...`
 
 ## 12. Error handling & resilience
 

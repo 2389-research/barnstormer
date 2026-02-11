@@ -32,24 +32,24 @@ reqwest = { version = "0.12", features = ["json"] }
 anyhow = "1"
 mux = { path = "../mux-rs" }
 
-specd-core = { path = "crates/specd-core" }
-specd-store = { path = "crates/specd-store" }
-specd-server = { path = "crates/specd-server" }
-specd-agent = { path = "crates/specd-agent" }
+barnstormer-core = { path = "crates/barnstormer-core" }
+barnstormer-store = { path = "crates/barnstormer-store" }
+barnstormer-server = { path = "crates/barnstormer-server" }
+barnstormer-agent = { path = "crates/barnstormer-agent" }
 
 [package]
-name = "specd"
+name = "barnstormer"
 edition.workspace = true
 version.workspace = true
 
 [[bin]]
-name = "specd"
+name = "barnstormer"
 path = "src/main.rs"
 
 [dependencies]
-specd-core.workspace = true
-specd-store.workspace = true
-specd-server.workspace = true
+barnstormer-core.workspace = true
+barnstormer-store.workspace = true
+barnstormer-server.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

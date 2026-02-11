@@ -1,4 +1,4 @@
-// ABOUTME: Entry point for the specd binary.
+// ABOUTME: Entry point for the barnstormer binary.
 // ABOUTME: Parses CLI arguments with clap, recovers specs, spawns actors, and starts the Axum HTTP server.
 
 use std::net::SocketAddr;
@@ -6,19 +6,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Parser;
-use specd_server::{AppState, ProviderStatus, create_router};
-use specd_store::StorageManager;
+use barnstormer_server::{AppState, ProviderStatus, create_router};
+use barnstormer_store::StorageManager;
 
 #[derive(Parser)]
-#[command(name = "specd", about = "Agentic spec builder")]
+#[command(name = "barnstormer", about = "Agentic spec builder")]
 enum Cli {
-    /// Start the specd server
+    /// Start the barnstormer server
     Start {
         /// Do not open the browser on startup
         #[arg(long, default_value = "false")]
         no_open: bool,
     },
-    /// Check if specd is running
+    /// Check if barnstormer is running
     Status,
 }
 
@@ -30,7 +30,7 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "specd=debug,tower_http=debug".parse().unwrap()),
+                .unwrap_or_else(|_| "barnstormer=debug,tower_http=debug".parse().unwrap()),
         )
         .init();
 
@@ -38,14 +38,14 @@ async fn main() {
 
     match cli {
         Cli::Start { no_open } => {
-            let specd_home = std::env::var("SPECD_HOME")
+            let barnstormer_home = std::env::var("BARNSTORMER_HOME")
                 .map(PathBuf::from)
-                .unwrap_or_else(|_| dirs_or_default().join(".specd"));
+                .unwrap_or_else(|_| dirs_or_default().join(".barnstormer"));
 
-            tracing::info!("SPECD_HOME: {}", specd_home.display());
+            tracing::info!("BARNSTORMER_HOME: {}", barnstormer_home.display());
 
             // Initialize StorageManager
-            let storage = StorageManager::new(specd_home.clone())
+            let storage = StorageManager::new(barnstormer_home.clone())
                 .expect("failed to initialize storage manager");
 
             // Recover all existing specs
@@ -56,16 +56,16 @@ async fn main() {
             tracing::info!("recovered {} specs", recovered_specs.len());
 
             // Create AppState and spawn actors for recovered specs
-            let state = Arc::new(AppState::new(specd_home.clone(), ProviderStatus::detect()));
+            let state = Arc::new(AppState::new(barnstormer_home.clone(), ProviderStatus::detect()));
             {
                 let mut actors = state.actors.write().await;
                 let mut persisters = state.event_persisters.write().await;
                 for (spec_id, spec_state) in recovered_specs {
-                    let handle = specd_core::spawn(spec_id, spec_state);
+                    let handle = barnstormer_core::spawn(spec_id, spec_state);
                     // Subscribe a background persister so all future events
                     // (including agent-produced ones) are written to JSONL.
-                    let persister = specd_server::web::spawn_event_persister(
-                        &handle, spec_id, &specd_home,
+                    let persister = barnstormer_server::web::spawn_event_persister(
+                        &handle, spec_id, &barnstormer_home,
                     );
                     persisters.insert(spec_id, persister);
                     actors.insert(spec_id, handle);
@@ -77,19 +77,19 @@ async fn main() {
             // via the web UI "Start agents" button.
             tracing::info!("agents paused on startup — enable per-spec via the web UI");
 
-            let auth_token = std::env::var("SPECD_AUTH_TOKEN")
+            let auth_token = std::env::var("BARNSTORMER_AUTH_TOKEN")
                 .ok()
                 .filter(|t| !t.is_empty());
 
             let app = create_router(state, auth_token);
 
-            let bind_addr: SocketAddr = std::env::var("SPECD_BIND")
+            let bind_addr: SocketAddr = std::env::var("BARNSTORMER_BIND")
                 .unwrap_or_else(|_| "127.0.0.1:7331".to_string())
                 .parse()
-                .expect("SPECD_BIND must be a valid socket address");
+                .expect("BARNSTORMER_BIND must be a valid socket address");
 
             let url = format!("http://{}", bind_addr);
-            tracing::info!("specd listening on {}", url);
+            tracing::info!("barnstormer listening on {}", url);
 
             // Open browser unless --no-open was specified
             if !no_open {
@@ -111,13 +111,13 @@ async fn main() {
         }
         Cli::Status => {
             let bind_addr =
-                std::env::var("SPECD_BIND").unwrap_or_else(|_| "127.0.0.1:7331".to_string());
+                std::env::var("BARNSTORMER_BIND").unwrap_or_else(|_| "127.0.0.1:7331".to_string());
 
-            println!("specd status: checking {}...", bind_addr);
+            println!("barnstormer status: checking {}...", bind_addr);
 
             match std::net::TcpStream::connect(&bind_addr) {
-                Ok(_) => println!("specd is running on {}", bind_addr),
-                Err(_) => println!("specd is not running on {}", bind_addr),
+                Ok(_) => println!("barnstormer is running on {}", bind_addr),
+                Err(_) => println!("barnstormer is not running on {}", bind_addr),
             }
         }
     }

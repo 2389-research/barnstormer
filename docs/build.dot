@@ -1,6 +1,6 @@
-digraph specd_build {
+digraph barnstormer_build {
     graph [
-        goal="Build specd: local-first agentic spec builder (web-only)",
+        goal="Build barnstormer: local-first agentic spec builder (web-only)",
         retry_target="implement",
         default_max_retry=2,
         rankdir=LR
@@ -11,7 +11,7 @@ digraph specd_build {
 
     plan [
         shape=box,
-        prompt="Write/validate the design spec for specd. Produce SPEC.md and confirm core requirements. Run commands in the run working directory from context key run.working_dir."
+        prompt="Write/validate the design spec for barnstormer. Produce SPEC.md and confirm core requirements. Run commands in the run working directory from context key run.working_dir."
     ]
 
     setup [
@@ -23,7 +23,7 @@ digraph specd_build {
         shape=box,
         goal_gate=true,
         max_retries=3,
-        prompt="Implement specd per SPEC.md: event store JSONL+snapshots, spec actor, HTTP API + streaming, web UI board/doc/activity, exporters (md/yaml/dot), agent adapters (OpenAI/Anthropic/Gemini). Run commands in the run working directory from context key run.working_dir."
+        prompt="Implement barnstormer per SPEC.md: event store JSONL+snapshots, spec actor, HTTP API + streaming, web UI board/doc/activity, exporters (md/yaml/dot), agent adapters (OpenAI/Anthropic/Gemini). Run commands in the run working directory from context key run.working_dir."
     ]
 
     verify [

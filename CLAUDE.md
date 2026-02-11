@@ -1,4 +1,4 @@
-# specd
+# barnstormer
 
 Agentic spec builder -- an event-sourced specification management tool with a web UI.
 
@@ -33,10 +33,10 @@ cargo run -- status
 
 Four crates in a Cargo workspace:
 
-- **specd-core** (`crates/specd-core/`) -- Domain types, event/command definitions, state reducer, actor, and exporters (Markdown, YAML, DOT)
-- **specd-store** (`crates/specd-store/`) -- Persistence layer: JSONL event log, snapshots, SQLite index, crash recovery, storage manager
-- **specd-server** (`crates/specd-server/`) -- Axum HTTP API, SSE streaming, Askama+HTMX web UI, auth middleware, config
-- **specd-agent** (`crates/specd-agent/`) -- Agent runtime, LLM provider adapters (Anthropic, OpenAI, Gemini), swarm orchestrator
+- **barnstormer-core** (`crates/barnstormer-core/`) -- Domain types, event/command definitions, state reducer, actor, and exporters (Markdown, YAML, DOT)
+- **barnstormer-store** (`crates/barnstormer-store/`) -- Persistence layer: JSONL event log, snapshots, SQLite index, crash recovery, storage manager
+- **barnstormer-server** (`crates/barnstormer-server/`) -- Axum HTTP API, SSE streaming, Askama+HTMX web UI, auth middleware, config
+- **barnstormer-agent** (`crates/barnstormer-agent/`) -- Agent runtime, LLM provider adapters (Anthropic, OpenAI, Gemini), swarm orchestrator
 
 Binary entrypoint: `src/main.rs`
 
@@ -69,7 +69,7 @@ Command -> SpecActor -> Event -> SpecState (in-memory)
 
 See `.env.example` for all environment variables. Key ones:
 
-- `SPECD_HOME` -- data directory (default: `~/.specd`)
-- `SPECD_BIND` -- listen address (default: `127.0.0.1:7331`)
-- `SPECD_AUTH_TOKEN` -- bearer token for API auth (optional)
-- `SPECD_ALLOW_REMOTE` -- allow non-loopback connections (requires auth token)
+- `BARNSTORMER_HOME` -- data directory (default: `~/.barnstormer`)
+- `BARNSTORMER_BIND` -- listen address (default: `127.0.0.1:7331`)
+- `BARNSTORMER_AUTH_TOKEN` -- bearer token for API auth (optional)
+- `BARNSTORMER_ALLOW_REMOTE` -- allow non-loopback connections (requires auth token)

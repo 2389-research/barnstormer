@@ -1,4 +1,4 @@
-name: specd
+name: barnstormer
 version: 0.1
 date: 2026-02-10
 status: draft
@@ -74,9 +74,9 @@ agents:
 
 cli:
   commands:
-    - specd start
-    - specd status
-    - specd export_optional
+    - barnstormer start
+    - barnstormer status
+    - barnstormer export_optional
 
 config:
   file: .env

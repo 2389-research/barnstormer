@@ -1,12 +1,12 @@
-// ABOUTME: End-to-end smoke test for the full specd lifecycle.
+// ABOUTME: End-to-end smoke test for the full barnstormer lifecycle.
 // ABOUTME: Tests spec creation, card CRUD, undo, state verification, and export generation.
 
 use std::sync::Arc;
 
 use axum::body::Body;
 use http::Request;
-use specd_server::{AppState, ProviderStatus, create_router};
-use specd_store::StorageManager;
+use barnstormer_server::{AppState, ProviderStatus, create_router};
+use barnstormer_store::StorageManager;
 use tower::ServiceExt;
 
 /// Helper to create a test AppState with a temp directory.
@@ -179,5 +179,5 @@ async fn smoke_test_full_lifecycle() {
         html.contains("<!DOCTYPE html>"),
         "index should return valid HTML"
     );
-    assert!(html.contains("specd"), "index should contain specd");
+    assert!(html.contains("barnstormer"), "index should contain barnstormer");
 }

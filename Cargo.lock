@@ -244,6 +244,102 @@ dependencies = [
 ]
 
 [[package]]
+name = "barnstormer"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "barnstormer-core",
+ "barnstormer-server",
+ "barnstormer-store",
+ "clap",
+ "dotenvy",
+ "http",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+]
+
+[[package]]
+name = "barnstormer-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "barnstormer-core",
+ "chrono",
+ "futures",
+ "mux",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
+name = "barnstormer-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
+name = "barnstormer-server"
+version = "0.1.0"
+dependencies = [
+ "askama",
+ "askama-derive-axum",
+ "axum",
+ "axum-core",
+ "barnstormer-agent",
+ "barnstormer-core",
+ "barnstormer-store",
+ "chrono",
+ "futures",
+ "http",
+ "http-body-util",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tower",
+ "tower-http",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
+name = "barnstormer-store"
+version = "0.1.0"
+dependencies = [
+ "barnstormer-core",
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1575,102 +1671,6 @@ checksum = "86f4aa3ad99f2088c990dfa82d367e19cb29268ed67c574d10d0a4bfe71f07e0"
 dependencies = [
  "libc",
  "windows-sys 0.60.2",
-]
-
-[[package]]
-name = "specd"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clap",
- "dotenvy",
- "http",
- "serde_json",
- "specd-core",
- "specd-server",
- "specd-store",
- "tempfile",
- "tokio",
- "tower",
- "tracing",
- "tracing-subscriber",
- "ulid",
-]
-
-[[package]]
-name = "specd-agent"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "futures",
- "mux",
- "serde",
- "serde_json",
- "specd-core",
- "tokio",
- "tracing",
- "ulid",
-]
-
-[[package]]
-name = "specd-core"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "serde_yaml",
- "thiserror",
- "tokio",
- "tracing",
- "ulid",
-]
-
-[[package]]
-name = "specd-server"
-version = "0.1.0"
-dependencies = [
- "askama",
- "askama-derive-axum",
- "axum",
- "axum-core",
- "chrono",
- "futures",
- "http",
- "http-body-util",
- "pulldown-cmark",
- "serde",
- "serde_json",
- "specd-agent",
- "specd-core",
- "specd-store",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-stream",
- "tower",
- "tower-http",
- "tracing",
- "ulid",
-]
-
-[[package]]
-name = "specd-store"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "rusqlite",
- "serde",
- "serde_json",
- "serde_yaml",
- "specd-core",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
- "ulid",
 ]
 
 [[package]]

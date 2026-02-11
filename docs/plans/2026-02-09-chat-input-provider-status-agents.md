@@ -6,7 +6,7 @@
 
 **Architecture:** Three independent features layered on existing infrastructure. Chat input uses existing `AppendTranscript` command. Provider status reads env vars at startup. Agent kickoff stores `SwarmOrchestrator` handles in `AppState` alongside actor handles, auto-starting agents when a spec is created and a provider is available.
 
-**Tech Stack:** Axum + Askama + HTMX (existing), specd-agent SwarmOrchestrator, specd-core Command::AppendTranscript
+**Tech Stack:** Axum + Askama + HTMX (existing), barnstormer-agent SwarmOrchestrator, barnstormer-core Command::AppendTranscript
 
 ---
 
@@ -81,8 +81,8 @@ Add to `static/style.css`:
 ### Task 2: Add chat route handler
 
 **Files:**
-- Modify: `crates/specd-server/src/web/mod.rs`
-- Modify: `crates/specd-server/src/routes.rs`
+- Modify: `crates/barnstormer-server/src/web/mod.rs`
+- Modify: `crates/barnstormer-server/src/routes.rs`
 
 **Step 1: Add ChatForm struct and handler in web/mod.rs**
 
@@ -116,7 +116,7 @@ Add: `.route("/web/specs/{id}/chat", post(web::chat))`
 ### Task 3: Tests for chat functionality
 
 **Files:**
-- Modify: `crates/specd-server/src/web/mod.rs` (tests module)
+- Modify: `crates/barnstormer-server/src/web/mod.rs` (tests module)
 
 Write tests:
 1. `chat_form_submits_transcript` - POST to /web/specs/{id}/chat returns 200 with refreshed activity
@@ -130,7 +130,7 @@ Write tests:
 ### Task 4: Add ProviderStatus detection
 
 **Files:**
-- Create: `crates/specd-server/src/providers.rs`
+- Create: `crates/barnstormer-server/src/providers.rs`
 
 Create a `ProviderStatus` struct that detects available LLM providers from environment:
 
@@ -160,9 +160,9 @@ Add `detect()` method that reads env vars:
 ### Task 5: Add provider status to AppState and routes
 
 **Files:**
-- Modify: `crates/specd-server/src/app_state.rs`
-- Modify: `crates/specd-server/src/routes.rs`
-- Modify: `crates/specd-server/src/lib.rs`
+- Modify: `crates/barnstormer-server/src/app_state.rs`
+- Modify: `crates/barnstormer-server/src/routes.rs`
+- Modify: `crates/barnstormer-server/src/lib.rs`
 
 Add `provider_status: ProviderStatus` field to AppState. Computed once at startup (env vars don't change at runtime).
 
@@ -202,7 +202,7 @@ Tests:
 ### Task 8: Add swarm handles to AppState
 
 **Files:**
-- Modify: `crates/specd-server/src/app_state.rs`
+- Modify: `crates/barnstormer-server/src/app_state.rs`
 
 Add a field for swarm orchestrator handles per spec:
 ```rust
@@ -214,8 +214,8 @@ Update `AppState::new()` to initialize the empty map.
 ### Task 9: Add agent start/pause/resume routes
 
 **Files:**
-- Modify: `crates/specd-server/src/web/mod.rs`
-- Modify: `crates/specd-server/src/routes.rs`
+- Modify: `crates/barnstormer-server/src/web/mod.rs`
+- Modify: `crates/barnstormer-server/src/routes.rs`
 
 Add handlers:
 - `POST /web/specs/{id}/agents/start` → Create SwarmOrchestrator, store in state, spawn agent loop tasks
@@ -238,7 +238,7 @@ Add a "Start Agents" button in the tab bar or agent-controls area. When agents a
 ### Task 11: Auto-start agents on spec creation (optional)
 
 **Files:**
-- Modify: `crates/specd-server/src/web/mod.rs` (create_spec handler)
+- Modify: `crates/barnstormer-server/src/web/mod.rs` (create_spec handler)
 
 After creating a spec, if `provider_status.any_available` is true, auto-create the swarm and start agents. The brainstormer agent will ask the first question, which shows up in the activity panel via SSE.
 

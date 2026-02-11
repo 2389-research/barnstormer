@@ -1,0 +1,163 @@
+// ABOUTME: Configuration loading and validation for the barnstormer server.
+// ABOUTME: Reads environment variables per spec Section 11 and enforces security constraints.
+
+use std::net::SocketAddr;
+use std::path::PathBuf;
+
+use thiserror::Error;
+
+/// Errors that can occur during configuration loading.
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("BARNSTORMER_BIND is not a valid socket address: {0}")]
+    InvalidBind(String),
+
+    #[error(
+        "BARNSTORMER_ALLOW_REMOTE is true but BARNSTORMER_AUTH_TOKEN is not set; refusing to start without authentication"
+    )]
+    RemoteWithoutToken,
+}
+
+/// Server configuration loaded from environment variables.
+#[derive(Debug, Clone)]
+pub struct BarnstormerConfig {
+    pub home: PathBuf,
+    pub bind: SocketAddr,
+    pub allow_remote: bool,
+    pub auth_token: Option<String>,
+    pub default_provider: String,
+    pub default_model: Option<String>,
+    pub public_base_url: String,
+}
+
+impl BarnstormerConfig {
+    /// Load configuration from environment variables with sensible defaults.
+    ///
+    /// Environment variables:
+    /// - BARNSTORMER_HOME: data directory (default: ~/.barnstormer)
+    /// - BARNSTORMER_BIND: socket address to bind (default: 127.0.0.1:7331)
+    /// - BARNSTORMER_ALLOW_REMOTE: allow non-loopback connections (default: false)
+    /// - BARNSTORMER_AUTH_TOKEN: bearer token for API auth (optional)
+    /// - BARNSTORMER_DEFAULT_PROVIDER: LLM provider (default: anthropic)
+    /// - BARNSTORMER_DEFAULT_MODEL: LLM model name (optional)
+    /// - BARNSTORMER_PUBLIC_BASE_URL: public URL for the server (default: http://localhost:7331)
+    pub fn from_env() -> Result<Self, ConfigError> {
+        let home = std::env::var("BARNSTORMER_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::env::var("HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| PathBuf::from("/tmp"))
+                    .join(".barnstormer")
+            });
+
+        let bind_str = std::env::var("BARNSTORMER_BIND").unwrap_or_else(|_| "127.0.0.1:7331".to_string());
+        let bind: SocketAddr = bind_str
+            .parse()
+            .map_err(|_| ConfigError::InvalidBind(bind_str))?;
+
+        let allow_remote = std::env::var("BARNSTORMER_ALLOW_REMOTE")
+            .map(|v| v == "true" || v == "1" || v == "yes")
+            .unwrap_or(false);
+
+        let auth_token = std::env::var("BARNSTORMER_AUTH_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty());
+
+        let default_provider =
+            std::env::var("BARNSTORMER_DEFAULT_PROVIDER").unwrap_or_else(|_| "anthropic".to_string());
+
+        let default_model = std::env::var("BARNSTORMER_DEFAULT_MODEL")
+            .ok()
+            .filter(|m| !m.is_empty());
+
+        let public_base_url =
+            std::env::var("BARNSTORMER_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{}", bind));
+
+        // Security validation: if allowing remote access, require auth token
+        if allow_remote && auth_token.is_none() {
+            return Err(ConfigError::RemoteWithoutToken);
+        }
+
+        Ok(Self {
+            home,
+            bind,
+            allow_remote,
+            auth_token,
+            default_provider,
+            default_model,
+            public_base_url,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// Mutex to serialize config tests that manipulate process-wide env vars.
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    /// Clear all BARNSTORMER_* env vars so tests start from a clean slate.
+    ///
+    /// SAFETY: Only call while holding ENV_MUTEX to prevent concurrent env var access.
+    unsafe fn clear_barnstormer_env() {
+        // SAFETY: caller holds ENV_MUTEX, ensuring no concurrent env var access
+        unsafe {
+            std::env::remove_var("BARNSTORMER_HOME");
+            std::env::remove_var("BARNSTORMER_BIND");
+            std::env::remove_var("BARNSTORMER_ALLOW_REMOTE");
+            std::env::remove_var("BARNSTORMER_AUTH_TOKEN");
+            std::env::remove_var("BARNSTORMER_DEFAULT_PROVIDER");
+            std::env::remove_var("BARNSTORMER_DEFAULT_MODEL");
+            std::env::remove_var("BARNSTORMER_PUBLIC_BASE_URL");
+        }
+    }
+
+    #[test]
+    fn config_loads_defaults() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+
+        // SAFETY: holding ENV_MUTEX, no concurrent env var access
+        unsafe {
+            clear_barnstormer_env();
+        }
+
+        let config = BarnstormerConfig::from_env().unwrap();
+
+        assert_eq!(config.bind, "127.0.0.1:7331".parse::<SocketAddr>().unwrap());
+        assert!(!config.allow_remote);
+        assert!(config.auth_token.is_none());
+        assert_eq!(config.default_provider, "anthropic");
+        assert!(config.default_model.is_none());
+        assert!(config.home.to_string_lossy().contains(".barnstormer"));
+    }
+
+    #[test]
+    fn config_rejects_remote_without_token() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+
+        // SAFETY: holding ENV_MUTEX, no concurrent env var access
+        unsafe {
+            clear_barnstormer_env();
+            std::env::set_var("BARNSTORMER_ALLOW_REMOTE", "true");
+        }
+
+        let result = BarnstormerConfig::from_env();
+
+        // Clean up before asserting
+        // SAFETY: holding ENV_MUTEX, no concurrent env var access
+        unsafe {
+            std::env::remove_var("BARNSTORMER_ALLOW_REMOTE");
+        }
+
+        assert!(result.is_err(), "should reject remote without token");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("BARNSTORMER_AUTH_TOKEN"),
+            "error should mention auth token: {}",
+            err
+        );
+    }
+}
