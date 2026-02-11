@@ -1,4 +1,4 @@
-# specd
+# Barnstormer
 
 **Agentic spec builder** — an event-sourced specification management tool with an AI agent swarm and a real-time web UI.
 
