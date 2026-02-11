@@ -4,10 +4,10 @@
 {% for spec in specs %}
 <a class="spec-list-item"
    hx-get="/web/specs/{{ spec.spec_id }}"
-   hx-target="#main-content"
+   hx-target="#workspace"
    hx-swap="innerHTML"
    hx-push-url="/web/specs/{{ spec.spec_id }}">
-    <h3>{{ spec.title }}</h3>
+    <span class="spec-title">{{ spec.title }}</span>
     <span class="one-liner">{{ spec.one_liner }}</span>
 </a>
 {% endfor %}

@@ -75,7 +75,7 @@ initBoard();
 
 // Re-initialize after HTMX swaps that contain board content
 document.addEventListener('htmx:afterSwap', function (event) {
-    if (event.detail.target.id === 'spec-content') {
+    if (event.detail.target.id === 'canvas') {
         initBoard();
     }
 });

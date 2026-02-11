@@ -1,0 +1,18 @@
+{# ABOUTME: Agent status LED indicators for the command bar. #}
+{# ABOUTME: Shows colored dots indicating agent swarm state: active, paused, or stopped. #}
+
+<div class="agent-leds">
+    {% if running %}
+    <span class="led led-manager led-active" title="Manager"></span>
+    <span class="led led-brainstormer led-active" title="Brainstormer"></span>
+    <span class="led led-planner led-active" title="Planner"></span>
+    {% else if started %}
+    <span class="led led-paused" title="Paused"></span>
+    <span class="led led-paused" title="Paused"></span>
+    <span class="led led-paused" title="Paused"></span>
+    {% else %}
+    <span class="led led-off" title="Stopped"></span>
+    <span class="led led-off" title="Stopped"></span>
+    <span class="led led-off" title="Stopped"></span>
+    {% endif %}
+</div>

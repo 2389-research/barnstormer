@@ -56,6 +56,8 @@ pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
         .route("/web/specs/{id}/agents/pause", post(web::pause_agents))
         .route("/web/specs/{id}/agents/resume", post(web::resume_agents))
         .route("/web/specs/{id}/agents/status", get(web::agent_status))
+        .route("/web/specs/{id}/ticker", get(web::ticker))
+        .route("/web/specs/{id}/agents/leds", get(web::agent_leds))
         .route("/web/specs/{id}/cards/new", get(web::create_card_form))
         .route("/web/specs/{id}/cards", post(web::create_card))
         .route(

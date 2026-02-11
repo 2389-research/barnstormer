@@ -17,7 +17,7 @@
 
 <script>
     (function() {
-        var dot = {{ dot_content|json }};
+        var dot = {{ dot_content|json|safe }};
         if (!dot || dot.trim() === '') return;
 
         var container = document.getElementById('diagram-render');

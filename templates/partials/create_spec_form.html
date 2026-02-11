@@ -6,7 +6,7 @@
     <p style="color: var(--text-secondary); margin-bottom: var(--spacing-md); font-size: 0.85rem;">
         Describe your idea in your own words. Our agents will break it down into a structured spec.
     </p>
-    <form hx-post="/web/specs" hx-target="#main-content" hx-swap="innerHTML" hx-push-url="true">
+    <form hx-post="/web/specs" hx-target="#workspace" hx-swap="innerHTML" hx-push-url="true">
         <div class="form-group">
             <textarea id="description" name="description" required rows="6"
                 placeholder="e.g. I want to build a mobile app that helps dog owners find nearby pet-friendly restaurants. It should have user reviews, real-time availability, and a map view..."></textarea>

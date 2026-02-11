@@ -13,6 +13,8 @@ use specd_store::{JsonlLog, SnapshotData, save_snapshot};
 use chrono::Utc;
 use ulid::Ulid;
 
+use pulldown_cmark::{Event, Options, Parser, html};
+
 use crate::api::specs::SpecSummary;
 use crate::app_state::SharedState;
 
@@ -350,7 +352,7 @@ pub struct SpecViewTemplate {
     pub lanes: Vec<LaneData>,
 }
 
-/// GET /web/specs/{id} - Render the full spec view (board + right rail).
+/// GET /web/specs/{id} - Render the spec compositor (command bar + canvas + chat rail).
 pub async fn spec_view(
     State(state): State<SharedState>,
     Path(id): Path<String>,
@@ -787,24 +789,58 @@ pub async fn document(
 pub struct TranscriptEntry {
     pub sender: String,
     pub sender_label: String,
+    pub initial: String,
     pub is_human: bool,
     pub is_step: bool,
+    pub is_continuation: bool,
     pub role_class: String,
     pub content: String,
+    /// Pre-rendered markdown→HTML for template use with `|safe`.
+    pub content_html: String,
     pub timestamp: String,
+}
+
+/// Render markdown content to HTML, stripping raw HTML tags from input
+/// to prevent XSS. Handles paragraphs, bold, italic, lists, code blocks,
+/// and links.
+fn render_markdown(content: &str) -> String {
+    let options = Options::empty();
+    let parser = Parser::new_ext(content, options).filter(|event| {
+        !matches!(event, Event::Html(_) | Event::InlineHtml(_))
+    });
+    let mut html_output = String::new();
+    html::push_html(&mut html_output, parser);
+    html_output
 }
 
 /// Convert a TranscriptMessage to a TranscriptEntry for template rendering.
 fn to_transcript_entry(m: &specd_core::TranscriptMessage) -> TranscriptEntry {
     let (sender_label, is_human, role_class) = sender_display(&m.sender);
+    let initial = sender_label.chars().next().unwrap_or('?').to_string();
+    let content_html = render_markdown(&m.content);
     TranscriptEntry {
         sender: m.sender.clone(),
         sender_label,
+        initial,
         is_human,
         is_step: m.kind.is_step(),
+        is_continuation: false,
         role_class,
         content: m.content.clone(),
+        content_html,
         timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+    }
+}
+
+/// Mark consecutive entries from the same sender as continuations.
+/// The first entry in a run keeps `is_continuation = false`; subsequent
+/// entries from the same sender get `is_continuation = true` so the
+/// template can skip the avatar/name row.
+fn mark_continuations(entries: &mut [TranscriptEntry]) {
+    for i in 1..entries.len() {
+        if entries[i].sender == entries[i - 1].sender && !entries[i].is_step && !entries[i - 1].is_step {
+            entries[i].is_continuation = true;
+        }
     }
 }
 
@@ -824,23 +860,25 @@ fn sender_display(sender: &str) -> (String, bool, String) {
     // Agent IDs look like "manager-01JTEST..." or "brainstormer-01JTEST..."
     let role = sender.split('-').next().unwrap_or(sender);
     let label = match role {
-        "manager" => "Manager",
-        "brainstormer" => "Brainstormer",
-        "planner" => "Planner",
+        "manager" => "Orchestrator",
+        "brainstormer" => "Researcher",
+        "planner" => "Architect",
         "dot_generator" => "Dot Generator",
         "critic" => "Critic",
-        _ => role,
-    };
-    let mut capitalized = String::new();
-    for (i, ch) in label.chars().enumerate() {
-        if i == 0 {
-            capitalized.extend(ch.to_uppercase());
-        } else {
-            capitalized.push(ch);
+        _ => {
+            let mut capitalized = String::new();
+            for (i, ch) in role.chars().enumerate() {
+                if i == 0 {
+                    capitalized.extend(ch.to_uppercase());
+                } else {
+                    capitalized.push(ch);
+                }
+            }
+            return (capitalized, false, normalize_css_class(role));
         }
-    }
+    };
     let role_class = normalize_css_class(role);
-    (capitalized, false, role_class)
+    (label.to_string(), false, role_class)
 }
 
 /// Normalize a string into a valid CSS class name: lowercase, replacing
@@ -916,12 +954,12 @@ pub struct TranscriptQuery {
 }
 
 /// Validate and sanitize a container_id value. Only known IDs are accepted;
-/// anything else falls back to "activity-transcript" to prevent XSS via
+/// anything else falls back to "chat-transcript" to prevent XSS via
 /// user-controlled values rendered into script tags and HTMX attributes.
 fn sanitize_container_id(raw: &str) -> String {
     match raw {
-        "activity-transcript" | "chat-transcript" => raw.to_string(),
-        _ => "activity-transcript".to_string(),
+        "activity-transcript" | "chat-transcript" | "mission-ticker" => raw.to_string(),
+        _ => "chat-transcript".to_string(),
     }
 }
 
@@ -938,7 +976,7 @@ pub struct ActivityTemplate {
 /// Activity transcript partial template (transcript entries + question widget only).
 /// Used by the SSE refresh target so that chat input is not wiped on updates.
 /// The `container_id` field controls the DOM IDs so the same template can serve
-/// both the right-rail activity panel and the full-width chat tab.
+/// both the mission ticker and the full-width chat tab.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/activity_transcript.html")]
 pub struct ActivityTranscriptTemplate {
@@ -1023,12 +1061,13 @@ pub async fn activity_transcript(
 
     let is_chat = container_id == "chat-transcript";
 
-    let transcript: Vec<TranscriptEntry> = spec_state
+    let mut transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
         .filter(|m| !is_chat || is_chat_participant(&m.sender))
         .map(to_transcript_entry)
         .collect();
+    mark_continuations(&mut transcript);
 
     if is_chat {
         ChatTranscriptTemplate {
@@ -1094,12 +1133,13 @@ pub async fn chat_panel(
 
     let spec_state = handle.read_state().await;
 
-    let transcript: Vec<TranscriptEntry> = spec_state
+    let mut transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
         .filter(|m| is_chat_participant(&m.sender))
         .map(to_transcript_entry)
         .collect();
+    mark_continuations(&mut transcript);
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
@@ -1394,15 +1434,35 @@ pub async fn answer_question(
     let spec_state = handle.read_state().await;
 
     let is_chat = container_id == "chat-transcript";
+    let is_ticker = container_id == "mission-ticker";
 
-    let transcript: Vec<TranscriptEntry> = spec_state
+    let mut transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
         .filter(|m| !is_chat || is_chat_participant(&m.sender))
         .map(to_transcript_entry)
         .collect();
+    mark_continuations(&mut transcript);
 
-    if is_chat {
+    if is_ticker {
+        // For mission ticker, show only last 10 entries
+        let ticker_entries: Vec<TranscriptEntry> = spec_state
+            .transcript
+            .iter()
+            .rev()
+            .take(10)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(to_transcript_entry)
+            .collect();
+        MissionTickerTemplate {
+            spec_id: id,
+            ticker_entries,
+            pending_question: None,
+        }
+        .into_response()
+    } else if is_chat {
         ChatTranscriptTemplate {
             spec_id: id,
             container_id,
@@ -1528,17 +1588,37 @@ pub async fn chat(
     let spec_state = handle.read_state().await;
 
     let is_chat = container_id == "chat-transcript";
+    let is_ticker = container_id == "mission-ticker";
 
-    let transcript: Vec<TranscriptEntry> = spec_state
+    let mut transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
         .filter(|m| !is_chat || is_chat_participant(&m.sender))
         .map(to_transcript_entry)
         .collect();
+    mark_continuations(&mut transcript);
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
-    if is_chat {
+    if is_ticker {
+        // For mission ticker, show only last 10 entries
+        let ticker_entries: Vec<TranscriptEntry> = spec_state
+            .transcript
+            .iter()
+            .rev()
+            .take(10)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(to_transcript_entry)
+            .collect();
+        MissionTickerTemplate {
+            spec_id: id,
+            ticker_entries,
+            pending_question,
+        }
+        .into_response()
+    } else if is_chat {
         ChatTranscriptTemplate {
             spec_id: id,
             container_id,
@@ -1631,6 +1711,24 @@ pub async fn provider_status(State(state): State<SharedState>) -> ProviderStatus
     }
 }
 
+/// Mission ticker template — compact activity list for the mission strip.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/mission_ticker.html")]
+pub struct MissionTickerTemplate {
+    pub spec_id: String,
+    pub ticker_entries: Vec<TranscriptEntry>,
+    pub pending_question: Option<QuestionData>,
+}
+
+/// Agent LED indicators template for the command bar.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/agent_leds.html")]
+pub struct AgentLedsTemplate {
+    pub spec_id: String,
+    pub running: bool,
+    pub started: bool,
+}
+
 /// Agent status partial template.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/agent_status.html")]
@@ -1639,6 +1737,82 @@ pub struct AgentStatusTemplate {
     pub running: bool,
     pub started: bool,
     pub agent_count: usize,
+}
+
+/// GET /web/specs/{id}/ticker - Render the mission strip ticker content.
+pub async fn ticker(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    let spec_state = handle.read_state().await;
+
+    // Show last 10 transcript entries
+    let ticker_entries: Vec<TranscriptEntry> = spec_state
+        .transcript
+        .iter()
+        .rev()
+        .take(10)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(to_transcript_entry)
+        .collect();
+
+    let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
+
+    MissionTickerTemplate {
+        spec_id: id,
+        ticker_entries,
+        pending_question,
+    }
+    .into_response()
+}
+
+/// GET /web/specs/{id}/agents/leds - Render agent LED indicators.
+pub async fn agent_leds(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let swarms = state.swarms.read().await;
+    match swarms.get(&spec_id) {
+        Some(swarm_handle) => {
+            let swarm = swarm_handle.swarm.lock().await;
+            AgentLedsTemplate {
+                spec_id: id,
+                running: !swarm.is_paused(),
+                started: true,
+            }
+            .into_response()
+        }
+        None => AgentLedsTemplate {
+            spec_id: id,
+            running: false,
+            started: false,
+        }
+        .into_response(),
+    }
 }
 
 /// POST /web/specs/{id}/agents/start - Start agents for a spec.
@@ -2225,10 +2399,13 @@ mod tests {
             transcript: vec![TranscriptEntry {
                 sender: "agent-1".to_string(),
                 sender_label: "Agent-1".to_string(),
+                initial: "A".to_string(),
                 is_human: false,
                 is_step: false,
+                is_continuation: false,
                 role_class: "agent".to_string(),
                 content: "Started analysis".to_string(),
+                content_html: "<p>Started analysis</p>\n".to_string(),
                 timestamp: "12:34:56".to_string(),
             }],
             pending_question: None,
@@ -2379,10 +2556,13 @@ mod tests {
             transcript: vec![TranscriptEntry {
                 sender: "agent-1".to_string(),
                 sender_label: "Agent-1".to_string(),
+                initial: "A".to_string(),
                 is_human: false,
                 is_step: false,
+                is_continuation: false,
                 role_class: "agent".to_string(),
                 content: "Started analysis".to_string(),
+                content_html: "<p>Started analysis</p>\n".to_string(),
                 timestamp: "12:34:56".to_string(),
             }],
             pending_question: None,
@@ -2401,10 +2581,13 @@ mod tests {
             transcript: vec![TranscriptEntry {
                 sender: "human".to_string(),
                 sender_label: "You".to_string(),
+                initial: "Y".to_string(),
                 is_human: true,
                 is_step: false,
+                is_continuation: false,
                 role_class: "human".to_string(),
                 content: "Hello chat".to_string(),
+                content_html: "<p>Hello chat</p>\n".to_string(),
                 timestamp: "12:00:00".to_string(),
             }],
             pending_question: None,
@@ -2446,7 +2629,7 @@ mod tests {
     }
 
     #[test]
-    fn spec_view_template_contains_all_five_tabs() {
+    fn spec_view_template_contains_mission_control_layout() {
         let tmpl = SpecViewTemplate {
             spec_id: "01HTEST".to_string(),
             title: "Test Spec".to_string(),
@@ -2455,22 +2638,122 @@ mod tests {
             lanes: vec![],
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("Board"), "should contain Board tab");
-        assert!(rendered.contains("Document"), "should contain Document tab");
-        assert!(rendered.contains("Chat"), "should contain Chat tab");
-        assert!(rendered.contains("Diagram"), "should contain Diagram tab");
-        assert!(rendered.contains("Artifacts"), "should contain Artifacts tab");
-        assert!(rendered.contains("data-tab=\"chat\""), "Chat tab should have data-tab attribute");
-        assert!(rendered.contains("data-tab=\"board\""), "Board tab should have data-tab attribute");
-        assert!(rendered.contains("data-tab=\"document\""), "Document tab should have data-tab attribute");
-        assert!(rendered.contains("data-tab=\"diagram\""), "Diagram tab should have data-tab attribute");
-        assert!(rendered.contains("data-tab=\"artifacts\""), "Artifacts tab should have data-tab attribute");
-        // Chat should be the first/active tab
-        let chat_pos = rendered.find("data-tab=\"chat\"").unwrap();
-        let board_pos = rendered.find("data-tab=\"board\"").unwrap();
-        assert!(chat_pos < board_pos, "Chat tab should appear before Board tab");
-        // No "+ Card" button
-        assert!(!rendered.contains("+ Card"), "should not contain + Card button");
+        // Command bar with title and subtitle
+        assert!(rendered.contains("command-bar"), "should contain command-bar");
+        assert!(rendered.contains("Test Spec"), "should contain spec title");
+        assert!(rendered.contains("A test spec"), "should contain one-liner");
+        // Capsule view toggles for document, board, diagram
+        assert!(rendered.contains("view-toggles-capsule"), "should contain capsule view toggles");
+        assert!(rendered.contains("data-view=\"document\""), "should contain document toggle");
+        assert!(rendered.contains("data-view=\"board\""), "should contain board toggle");
+        assert!(rendered.contains("data-view=\"diagram\""), "should contain diagram toggle");
+        assert!(rendered.contains("view-toggle active"), "document toggle should be active");
+        // Canvas and chat rail
+        assert!(rendered.contains("id=\"canvas\""), "should contain canvas element");
+        assert!(rendered.contains("spec-body"), "should contain spec-body row");
+        assert!(rendered.contains("chat-rail"), "should contain chat-rail");
+        assert!(rendered.contains("chat-panel"), "should load chat panel");
+        // Agent controls in command bar
+        assert!(rendered.contains("agent-controls"), "should contain agent-controls");
+        // SSE on spec-compositor
+        assert!(rendered.contains("sse-connect"), "should have SSE connection");
+        // Old layout elements should NOT be present
+        assert!(!rendered.contains("mission-strip"), "should not contain mission-strip");
+        assert!(!rendered.contains("mission-ticker"), "should not contain mission-ticker");
+        assert!(!rendered.contains("tab-bar"), "should not contain old tab-bar");
+        assert!(!rendered.contains("right-rail"), "should not contain right-rail references");
+    }
+
+    #[test]
+    fn mission_ticker_template_renders_empty() {
+        let tmpl = MissionTickerTemplate {
+            spec_id: "01HTEST".to_string(),
+            ticker_entries: vec![],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Awaiting activity"), "should show empty state");
+        assert!(rendered.contains("mission-ticker-feed"), "should contain ticker feed id");
+    }
+
+    #[test]
+    fn mission_ticker_template_renders_with_entries() {
+        let tmpl = MissionTickerTemplate {
+            spec_id: "01HTEST".to_string(),
+            ticker_entries: vec![TranscriptEntry {
+                sender: "manager-01JTEST".to_string(),
+                sender_label: "Manager".to_string(),
+                initial: "M".to_string(),
+                is_human: false,
+                is_step: false,
+                is_continuation: false,
+                role_class: "manager".to_string(),
+                content: "Analyzing requirements".to_string(),
+                content_html: "<p>Analyzing requirements</p>\n".to_string(),
+                timestamp: "12:34:56".to_string(),
+            }],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Manager"), "should contain sender label");
+        assert!(rendered.contains("Analyzing requirements"), "should contain message content");
+        assert!(rendered.contains("ticker-entry"), "should contain ticker entry class");
+    }
+
+    #[test]
+    fn mission_ticker_template_renders_with_question() {
+        let tmpl = MissionTickerTemplate {
+            spec_id: "01HTEST".to_string(),
+            ticker_entries: vec![],
+            pending_question: Some(QuestionData::Boolean {
+                question_id: "01HQID".to_string(),
+                question: "Should we proceed?".to_string(),
+                default: None,
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Should we proceed?"), "should contain question text");
+        assert!(rendered.contains("Yes"), "should contain Yes button");
+        assert!(rendered.contains("No"), "should contain No button");
+    }
+
+    #[test]
+    fn agent_leds_template_renders_running() {
+        let tmpl = AgentLedsTemplate {
+            spec_id: "01HTEST".to_string(),
+            running: true,
+            started: true,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("led-active"), "should contain active LED class");
+        assert!(rendered.contains("led-manager"), "should contain manager LED");
+        assert!(rendered.contains("led-brainstormer"), "should contain brainstormer LED");
+        assert!(rendered.contains("led-planner"), "should contain planner LED");
+    }
+
+    #[test]
+    fn agent_leds_template_renders_paused() {
+        let tmpl = AgentLedsTemplate {
+            spec_id: "01HTEST".to_string(),
+            running: false,
+            started: true,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("led-paused"), "should contain paused LED class");
+        assert!(!rendered.contains("led-active"), "should not contain active LED class");
+    }
+
+    #[test]
+    fn agent_leds_template_renders_stopped() {
+        let tmpl = AgentLedsTemplate {
+            spec_id: "01HTEST".to_string(),
+            running: false,
+            started: false,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("led-off"), "should contain off LED class");
+        assert!(!rendered.contains("led-active"), "should not contain active LED class");
+        assert!(!rendered.contains("led-paused"), "should not contain paused LED class");
     }
 
     #[tokio::test]
@@ -2552,8 +2835,8 @@ mod tests {
         };
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("agent-status"), "should contain agent-status id");
-        assert!(rendered.contains("Agents stopped"), "should show stopped state");
-        assert!(rendered.contains("Start Agents"), "should show start button");
+        assert!(rendered.contains("agent-pill-stopped"), "should have stopped pill class");
+        assert!(rendered.contains("Start agents"), "should show start agents text");
         assert!(rendered.contains("/agents/start"), "should have start action URL");
     }
 
@@ -2566,8 +2849,8 @@ mod tests {
             agent_count: 4,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("Agents running (4)"), "should show running state with count");
-        assert!(rendered.contains("Pause"), "should show pause button");
+        assert!(rendered.contains("agent-pill-running"), "should have running pill class");
+        assert!(rendered.contains("Agents active"), "should show active state");
         assert!(rendered.contains("/agents/pause"), "should have pause action URL");
     }
 
@@ -2580,8 +2863,8 @@ mod tests {
             agent_count: 4,
         };
         let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("agent-pill-paused"), "should have paused pill class");
         assert!(rendered.contains("Agents paused"), "should show paused state");
-        assert!(rendered.contains("Resume"), "should show resume button");
         assert!(rendered.contains("/agents/resume"), "should have resume action URL");
     }
 
@@ -2623,7 +2906,7 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("Agents stopped"), "should show stopped when no swarm: {}", html);
+        assert!(html.contains("Start agents"), "should show stopped pill when no swarm: {}", html);
     }
 
     #[tokio::test]
@@ -2664,7 +2947,7 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("Agents stopped"), "pause with no swarm should show stopped: {}", html);
+        assert!(html.contains("Start agents"), "pause with no swarm should show stopped pill: {}", html);
     }
 
     #[tokio::test]
@@ -2705,7 +2988,7 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("Agents stopped"), "resume with no swarm should show stopped: {}", html);
+        assert!(html.contains("Start agents"), "resume with no swarm should show stopped pill: {}", html);
     }
 
     #[tokio::test]
@@ -2728,7 +3011,7 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("Agents stopped"), "nonexistent spec should show stopped: {}", html);
+        assert!(html.contains("Start agents"), "nonexistent spec should show stopped pill: {}", html);
     }
 
     #[test]
@@ -2857,19 +3140,25 @@ mod tests {
                 TranscriptEntry {
                     sender: "human".to_string(),
                     sender_label: "You".to_string(),
+                    initial: "Y".to_string(),
                     is_human: true,
                     is_step: false,
+                    is_continuation: false,
                     role_class: "human".to_string(),
                     content: "Hello from human".to_string(),
+                    content_html: "<p>Hello from human</p>\n".to_string(),
                     timestamp: "12:34:56".to_string(),
                 },
                 TranscriptEntry {
                     sender: "manager-01HAGENT".to_string(),
                     sender_label: "Manager".to_string(),
+                    initial: "M".to_string(),
                     is_human: false,
                     is_step: false,
+                    is_continuation: false,
                     role_class: "manager".to_string(),
                     content: "Agent response here".to_string(),
+                    content_html: "<p>Agent response here</p>\n".to_string(),
                     timestamp: "12:35:00".to_string(),
                 },
             ],
@@ -2878,9 +3167,9 @@ mod tests {
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("Hello from human"), "should contain human message content");
         assert!(rendered.contains("Agent response here"), "should contain agent message content");
-        assert!(rendered.contains("chat-row-human"), "should have human chat row class");
-        assert!(rendered.contains("chat-row-agent"), "should have agent chat row class");
-        assert!(rendered.contains("Manager"), "should show agent sender label");
+        assert!(rendered.contains("chat-message"), "should have chat-message class");
+        assert!(rendered.contains("chat-avatar"), "should have avatar element");
+        assert!(rendered.contains("chat-sender"), "should have sender label element");
         assert!(!rendered.contains("No messages yet"), "should not show empty state when entries exist");
     }
 
@@ -2911,11 +3200,11 @@ mod tests {
         assert!(rendered.contains("chat-input-row"), "should contain chat-input-row div");
         assert!(rendered.contains(r#"hx-post="/web/specs/01HTEST/chat""#), "should post to chat endpoint");
         assert!(rendered.contains(r##"hx-target="#chat-transcript""##), "chat form should target chat-transcript");
-        assert!(rendered.contains("Send a message..."), "should have placeholder text");
+        assert!(rendered.contains("Ask the agents anything"), "should have placeholder text");
     }
 
     #[test]
-    fn chat_panel_contains_sse_connection() {
+    fn chat_panel_contains_header_and_transcript() {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
@@ -2923,9 +3212,8 @@ mod tests {
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("sse-connect"), "should contain sse-connect attribute");
-        assert!(rendered.contains(r#"sse-connect="/api/specs/01HTEST/events/stream""#), "should connect to correct SSE endpoint");
-        assert!(rendered.contains(r#"hx-ext="sse""#), "should have hx-ext sse");
+        assert!(rendered.contains("chat-panel-header"), "should contain chat panel header");
+        assert!(rendered.contains("Chat"), "should contain Chat title");
         assert!(rendered.contains("sse:transcript_appended"), "should listen for transcript_appended event");
     }
 
@@ -3448,9 +3736,10 @@ mod tests {
     fn sanitize_container_id_rejects_unknown_values() {
         assert_eq!(sanitize_container_id("activity-transcript"), "activity-transcript");
         assert_eq!(sanitize_container_id("chat-transcript"), "chat-transcript");
-        assert_eq!(sanitize_container_id("'); alert('xss'); //"), "activity-transcript");
-        assert_eq!(sanitize_container_id("malicious-id"), "activity-transcript");
-        assert_eq!(sanitize_container_id(""), "activity-transcript");
+        assert_eq!(sanitize_container_id("mission-ticker"), "mission-ticker");
+        assert_eq!(sanitize_container_id("'); alert('xss'); //"), "chat-transcript");
+        assert_eq!(sanitize_container_id("malicious-id"), "chat-transcript");
+        assert_eq!(sanitize_container_id(""), "chat-transcript");
     }
 
     // ---- sender_display tests ----
@@ -3466,7 +3755,7 @@ mod tests {
     #[test]
     fn sender_display_manager_role() {
         let (label, is_human, role_class) = sender_display("manager-01JTESTID123");
-        assert_eq!(label, "Manager");
+        assert_eq!(label, "Orchestrator");
         assert!(!is_human, "agent should not be flagged as human");
         assert_eq!(role_class, "manager");
     }
@@ -3474,7 +3763,7 @@ mod tests {
     #[test]
     fn sender_display_brainstormer_role() {
         let (label, is_human, role_class) = sender_display("brainstormer-01JTESTID456");
-        assert_eq!(label, "Brainstormer");
+        assert_eq!(label, "Researcher");
         assert!(!is_human);
         assert_eq!(role_class, "brainstormer");
     }
@@ -3664,5 +3953,50 @@ mod tests {
             "response should target chat-transcript container: {}",
             html
         );
+    }
+
+    // ---- render_markdown tests ----
+
+    #[test]
+    fn render_markdown_paragraphs() {
+        let result = render_markdown("Hello world");
+        assert_eq!(result, "<p>Hello world</p>\n");
+    }
+
+    #[test]
+    fn render_markdown_bold_and_italic() {
+        let result = render_markdown("This is **bold** and *italic*");
+        assert!(result.contains("<strong>bold</strong>"));
+        assert!(result.contains("<em>italic</em>"));
+    }
+
+    #[test]
+    fn render_markdown_multiline_paragraphs() {
+        let result = render_markdown("First paragraph\n\nSecond paragraph");
+        assert!(result.contains("<p>First paragraph</p>"));
+        assert!(result.contains("<p>Second paragraph</p>"));
+    }
+
+    #[test]
+    fn render_markdown_list() {
+        let result = render_markdown("- item one\n- item two\n- item three");
+        assert!(result.contains("<ul>"));
+        assert!(result.contains("<li>item one</li>"));
+        assert!(result.contains("<li>item three</li>"));
+    }
+
+    #[test]
+    fn render_markdown_strips_raw_html() {
+        let result = render_markdown("Hello <script>alert('xss')</script> world");
+        assert!(!result.contains("<script>"), "raw HTML should be stripped");
+        assert!(result.contains("Hello"));
+        assert!(result.contains("world"));
+    }
+
+    #[test]
+    fn render_markdown_code_block() {
+        let result = render_markdown("```\nlet x = 1;\n```");
+        assert!(result.contains("<code>"));
+        assert!(result.contains("let x = 1;"));
     }
 }
