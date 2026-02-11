@@ -70,7 +70,17 @@ pub fn export_dot(state: &SpecState) -> String {
                 );
                 // Add prompt attribute from card body for DOT Runner compatibility
                 if let Some(ref body) = card.body {
-                    let truncated = if body.len() > 200 { &body[..200] } else { body };
+                    let truncated = if body.len() > 200 {
+                        let end = body
+                            .char_indices()
+                            .take_while(|&(i, _)| i < 200)
+                            .last()
+                            .map(|(i, c)| i + c.len_utf8())
+                            .unwrap_or(0);
+                        &body[..end]
+                    } else {
+                        body
+                    };
                     write!(attrs, " prompt=\"{}\"", escape_dot_string(truncated)).unwrap();
                 }
                 // Add type attribute for wait.human types
@@ -249,7 +259,10 @@ fn to_snake_case(s: &str) -> String {
 
 /// Escape a string for use within DOT quoted attributes.
 fn escape_dot_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 /// Group cards by lane name, sorting each group by (order, card_id).

@@ -1399,8 +1399,12 @@ pub async fn regenerate(
         .unwrap_or_else(|e| format!("# YAML export error: {}", e));
     let dot_content = specd_core::export::export_dot(&spec_state);
 
-    // Write to $SPECD_HOME/<spec_id>/exports/
-    let exports_dir = state.specd_home.join(spec_id.to_string()).join("exports");
+    // Write to $SPECD_HOME/specs/<spec_id>/exports/
+    let exports_dir = state
+        .specd_home
+        .join("specs")
+        .join(spec_id.to_string())
+        .join("exports");
     if let Err(e) = std::fs::create_dir_all(&exports_dir) {
         tracing::error!("failed to create exports directory: {}", e);
     } else {
@@ -1409,7 +1413,17 @@ pub async fn regenerate(
             .as_ref()
             .map(|c| c.title.clone())
             .unwrap_or_else(|| "spec".to_string());
-        let slug = spec_title.to_lowercase().replace(' ', "-");
+        let slug: String = spec_title
+            .to_lowercase()
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
 
         if let Err(e) = std::fs::write(exports_dir.join(format!("{}.md", slug)), &markdown_content) {
             tracing::error!("failed to write markdown export: {}", e);
@@ -1427,11 +1441,8 @@ pub async fn regenerate(
         );
     }
 
-    Html(format!(
-        "<span class=\"regen-confirm\">Regenerated &amp; saved to {}</span>",
-        exports_dir.display()
-    ))
-    .into_response()
+    Html("<span class=\"regen-confirm\">Exports saved successfully.</span>".to_string())
+        .into_response()
 }
 
 /// Form data for sending a chat message.

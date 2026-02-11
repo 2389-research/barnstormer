@@ -81,10 +81,10 @@
                 refreshTimer = setTimeout(function() {
                     var canvas = document.getElementById('canvas');
                     if (!canvas) return;
-                    // Find the active view toggle and re-trigger it
+                    // Find the active view toggle and re-trigger its HTMX request
                     var activeBtn = document.querySelector('.view-toggle.active');
                     if (activeBtn) {
-                        htmx.trigger(activeBtn, 'click');
+                        activeBtn.click();
                     }
                 }, 800);
             });
