@@ -314,6 +314,8 @@ pub struct CardData {
     pub card_type: String,
     pub title: String,
     pub body: Option<String>,
+    /// Pre-rendered markdown→HTML body for template use with `|safe`.
+    pub body_html: Option<String>,
     pub lane: String,
     pub order: f64,
     pub created_by: String,
@@ -322,11 +324,13 @@ pub struct CardData {
 
 impl CardData {
     fn from_card(card: &specd_core::Card) -> Self {
+        let body_html = card.body.as_ref().map(|b| render_markdown(b));
         Self {
             card_id: card.card_id.to_string(),
             card_type: card.card_type.clone(),
             title: card.title.clone(),
             body: card.body.clone(),
+            body_html,
             lane: card.lane.clone(),
             order: card.order,
             created_by: card.created_by.clone(),
@@ -726,11 +730,17 @@ pub struct DocumentTemplate {
     pub title: String,
     pub one_liner: String,
     pub goal: String,
+    pub goal_html: String,
     pub description: Option<String>,
+    pub description_html: Option<String>,
     pub constraints: Option<String>,
+    pub constraints_html: Option<String>,
     pub success_criteria: Option<String>,
+    pub success_criteria_html: Option<String>,
     pub risks: Option<String>,
+    pub risks_html: Option<String>,
     pub notes: Option<String>,
+    pub notes_html: Option<String>,
     pub lanes: Vec<LaneData>,
 }
 
@@ -775,11 +785,17 @@ pub async fn document(
         title: core.title.clone(),
         one_liner: core.one_liner.clone(),
         goal: core.goal.clone(),
+        goal_html: render_markdown(&core.goal),
         description: core.description.clone(),
+        description_html: core.description.as_ref().map(|d| render_markdown(d)),
         constraints: core.constraints.clone(),
+        constraints_html: core.constraints.as_ref().map(|c| render_markdown(c)),
         success_criteria: core.success_criteria.clone(),
+        success_criteria_html: core.success_criteria.as_ref().map(|s| render_markdown(s)),
         risks: core.risks.clone(),
+        risks_html: core.risks.as_ref().map(|r| render_markdown(r)),
         notes: core.notes.clone(),
+        notes_html: core.notes.as_ref().map(|n| render_markdown(n)),
         lanes,
     }
     .into_response()
@@ -1349,6 +1365,73 @@ pub async fn export_dot(
         .body(axum::body::Body::from(content))
         .unwrap()
         .into_response()
+}
+
+/// POST /web/specs/{id}/regenerate - Regenerate exports and save to disk.
+/// Writes markdown, YAML, and DOT files to $SPECD_HOME/<spec_id>/exports/.
+/// Returns an HTML snippet confirming the export.
+pub async fn regenerate(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    let spec_state = handle.read_state().await;
+
+    // Export all formats
+    let markdown_content = specd_core::export::export_markdown(&spec_state);
+    let yaml_content = specd_core::export::export_yaml(&spec_state)
+        .unwrap_or_else(|e| format!("# YAML export error: {}", e));
+    let dot_content = specd_core::export::export_dot(&spec_state);
+
+    // Write to $SPECD_HOME/<spec_id>/exports/
+    let exports_dir = state.specd_home.join(spec_id.to_string()).join("exports");
+    if let Err(e) = std::fs::create_dir_all(&exports_dir) {
+        tracing::error!("failed to create exports directory: {}", e);
+    } else {
+        let spec_title = spec_state
+            .core
+            .as_ref()
+            .map(|c| c.title.clone())
+            .unwrap_or_else(|| "spec".to_string());
+        let slug = spec_title.to_lowercase().replace(' ', "-");
+
+        if let Err(e) = std::fs::write(exports_dir.join(format!("{}.md", slug)), &markdown_content) {
+            tracing::error!("failed to write markdown export: {}", e);
+        }
+        if let Err(e) = std::fs::write(exports_dir.join(format!("{}.yaml", slug)), &yaml_content) {
+            tracing::error!("failed to write YAML export: {}", e);
+        }
+        if let Err(e) = std::fs::write(exports_dir.join(format!("{}.dot", slug)), &dot_content) {
+            tracing::error!("failed to write DOT export: {}", e);
+        }
+        tracing::info!(
+            "regenerated exports for spec {} at {}",
+            spec_id,
+            exports_dir.display()
+        );
+    }
+
+    Html(format!(
+        "<span class=\"regen-confirm\">Regenerated &amp; saved to {}</span>",
+        exports_dir.display()
+    ))
+    .into_response()
 }
 
 /// Form data for sending a chat message.
@@ -2313,6 +2396,7 @@ mod tests {
                     card_type: "idea".to_string(),
                     title: "My Idea".to_string(),
                     body: Some("An interesting idea".to_string()),
+                    body_html: Some("<p>An interesting idea</p>\n".to_string()),
                     lane: "Ideas".to_string(),
                     order: 1.0,
                     created_by: "human".to_string(),
@@ -2361,11 +2445,17 @@ mod tests {
             title: "Test Doc".to_string(),
             one_liner: "A test document".to_string(),
             goal: "Verify rendering".to_string(),
+            goal_html: "<p>Verify rendering</p>\n".to_string(),
             description: Some("A detailed description".to_string()),
+            description_html: Some("<p>A detailed description</p>\n".to_string()),
             constraints: None,
+            constraints_html: None,
             success_criteria: None,
+            success_criteria_html: None,
             risks: None,
+            risks_html: None,
             notes: None,
+            notes_html: None,
             lanes: vec![],
         };
         let rendered = tmpl.render().unwrap();

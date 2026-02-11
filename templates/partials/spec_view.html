@@ -66,4 +66,28 @@
             document.body.dispatchEvent(new CustomEvent('refreshAgents'));
         }
     });
+
+    // Proactive canvas refresh on card changes via SSE.
+    // Debounce to avoid hammering the server when multiple card events fire rapidly.
+    (function() {
+        var refreshTimer = null;
+        var sseEvents = ['card_created', 'card_updated', 'card_moved', 'card_deleted', 'spec_core_updated'];
+        var compositor = document.querySelector('.spec-compositor');
+        if (!compositor) return;
+
+        sseEvents.forEach(function(eventName) {
+            compositor.addEventListener('sse:' + eventName, function() {
+                if (refreshTimer) clearTimeout(refreshTimer);
+                refreshTimer = setTimeout(function() {
+                    var canvas = document.getElementById('canvas');
+                    if (!canvas) return;
+                    // Find the active view toggle and re-trigger it
+                    var activeBtn = document.querySelector('.view-toggle.active');
+                    if (activeBtn) {
+                        htmx.trigger(activeBtn, 'click');
+                    }
+                }, 800);
+            });
+        });
+    })();
 </script>

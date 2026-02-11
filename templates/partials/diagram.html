@@ -3,8 +3,21 @@
 
 <div class="diagram-panel">
     <div class="diagram-toolbar">
+        <button class="btn btn-sm btn-regen"
+                hx-get="/web/specs/{{ spec_id }}/diagram"
+                hx-target="#canvas" hx-swap="innerHTML"
+                title="Regenerate diagram from current spec data">
+            Regenerate
+        </button>
         <button class="btn btn-sm btn-copy" id="diagram-copy-dot" title="Copy DOT source">Copy DOT</button>
         <a href="/web/specs/{{ spec_id }}/export/dot" download="spec.dot" class="btn btn-sm btn-download">Download DOT</a>
+        <button class="btn btn-sm btn-export"
+                hx-post="/web/specs/{{ spec_id }}/regenerate"
+                hx-target=".regen-status" hx-swap="innerHTML"
+                title="Save exports to disk">
+            Export to Disk
+        </button>
+        <span class="regen-status"></span>
     </div>
     <div class="diagram-container" id="diagram-render">
         {% if dot_content.is_empty() %}

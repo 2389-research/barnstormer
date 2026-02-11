@@ -51,6 +51,7 @@ pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
         .route("/web/specs/{id}/export/yaml", get(web::export_yaml))
         .route("/web/specs/{id}/export/dot", get(web::export_dot))
         .route("/web/specs/{id}/undo", post(web::undo))
+        .route("/web/specs/{id}/regenerate", post(web::regenerate))
         .route("/web/provider-status", get(web::provider_status))
         .route("/web/specs/{id}/agents/start", post(web::start_agents))
         .route("/web/specs/{id}/agents/pause", post(web::pause_agents))

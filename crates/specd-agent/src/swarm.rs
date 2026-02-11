@@ -65,11 +65,14 @@ const DOT_GENERATOR_SYSTEM_PROMPT: &str = "You are the diagram analyst. Your job
     3. Suggest structural improvements: missing connections, orphaned cards, unclear dependencies.\n\
     4. Note decision points (diamond gates) and human review gates (assumptions, open questions).\n\
     5. Summarize the pipeline health: is there a clear path from start to done?\n\n\
-    The diagram view renders the spec's DOT graph automatically using these conventions:\n\
-    - Mdiamond: start sentinel, Msquare: done sentinel\n\
-    - box: ideas/plans/tasks, diamond: decisions, hexagon: assumptions/open questions\n\
-    - parallelogram: inspirations/vibes\n\
-    - Flow: start -> Ideas -> Plan -> Spec -> done\n\n\
+    The diagram is auto-generated from cards and conforms to the DOT Runner constrained DSL:\n\
+    - digraph with snake_case graph ID and graph [goal=... rankdir=LR]\n\
+    - start [shape=Mdiamond] and done [shape=Msquare] sentinels\n\
+    - Node shapes: box (ideas/plans/tasks), diamond (decisions), hexagon + type=\"wait.human\" \
+      (assumptions/open questions), parallelogram (inspirations/vibes)\n\
+    - Edges: start -> Ideas -> Plan -> Spec -> done with condition attributes\n\
+    - Nodes include prompt= from card body and goal_gate=true for Spec-lane tasks\n\
+    - All attribute syntax uses key=value only (never key: value)\n\n\
     Your narration helps the user understand the diagram and improve the spec structure.";
 
 /// System prompt for the Critic agent role.

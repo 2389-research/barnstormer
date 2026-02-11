@@ -8,11 +8,19 @@ use crate::card::Card;
 use crate::state::SpecState;
 
 /// Export the spec state as a DOT graph conforming to the DOT Runner
-/// constrained runtime DSL (spec Section 9.3).
+/// constrained runtime DSL.
 ///
-/// Lane flow: Cards in "Ideas" get edges from start. Cards in "Spec" get
-/// edges to done. Cards in "Plan" connect between Ideas cards and Spec cards.
-/// Other lanes are placed between Plan and Spec in alphabetical order.
+/// Hard requirements from the DOT Runner authoring pack:
+/// 1. `digraph <graph_id> { ... }` with snake_case graph ID
+/// 2. `key=value` attribute syntax only (never `key: value`)
+/// 3. Graph-level settings inside `graph [ ... ]` only
+/// 4. `rankdir=LR` inside `graph [ ... ]` only
+/// 5. Exactly one `start [shape=Mdiamond]` and one `done [shape=Msquare]`
+/// 6. Outcome conditions: `condition="outcome=SUCCESS"` / `condition="outcome=FAIL"`
+/// 7. Node IDs in snake_case
+/// 8. Shapes: box, diamond, hexagon, parallelogram, Mdiamond, Msquare
+///
+/// Lane flow: Ideas → Plan → Spec with start/done sentinels.
 pub fn export_dot(state: &SpecState) -> String {
     let mut out = String::new();
 
@@ -60,9 +68,18 @@ pub fn export_dot(state: &SpecState) -> String {
                     shape,
                     escape_dot_string(&card.title)
                 );
+                // Add prompt attribute from card body for DOT Runner compatibility
+                if let Some(ref body) = card.body {
+                    let truncated = if body.len() > 200 { &body[..200] } else { body };
+                    write!(attrs, " prompt=\"{}\"", escape_dot_string(truncated)).unwrap();
+                }
                 // Add type attribute for wait.human types
                 if matches!(card.card_type.as_str(), "assumption" | "open_question") {
                     attrs.push_str(" type=\"wait.human\"");
+                }
+                // Task cards in the Spec lane act as goal gates
+                if card.card_type == "task" && card.lane == "Spec" {
+                    attrs.push_str(" goal_gate=true");
                 }
                 writeln!(out, "    {} [{}]", node_id, attrs).unwrap();
             }
@@ -96,7 +113,7 @@ pub fn export_dot(state: &SpecState) -> String {
     if !ideas_cards.is_empty() && !plan_cards.is_empty() {
         for idea_id in &ideas_cards {
             for plan_id in &plan_cards {
-                writeln!(out, "    {} -> {}", idea_id, plan_id).unwrap();
+                writeln!(out, "    {} -> {} [label=\"Plan\"]", idea_id, plan_id).unwrap();
             }
         }
     }
@@ -105,7 +122,7 @@ pub fn export_dot(state: &SpecState) -> String {
     if !plan_cards.is_empty() && !spec_cards.is_empty() {
         for plan_id in &plan_cards {
             for spec_id in &spec_cards {
-                writeln!(out, "    {} -> {}", plan_id, spec_id).unwrap();
+                writeln!(out, "    {} -> {} [label=\"Spec\"]", plan_id, spec_id).unwrap();
             }
         }
     }
@@ -121,7 +138,7 @@ pub fn export_dot(state: &SpecState) -> String {
 
     // Spec cards -> done sentinel
     for node_id in &spec_cards {
-        writeln!(out, "    {} -> done", node_id).unwrap();
+        writeln!(out, "    {} -> done [label=\"Done\" condition=\"outcome=SUCCESS\"]", node_id).unwrap();
     }
 
     // Handle cards in custom lanes (non-default): connect between Plan and Spec

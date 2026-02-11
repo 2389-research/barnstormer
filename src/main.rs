@@ -73,20 +73,9 @@ async fn main() {
                 }
             }
 
-            // Auto-start agents for recovered specs if a provider is available.
-            // Collect spec IDs and cloned handles first, then release the read
-            // lock before awaiting try_start_agents to avoid holding the lock
-            // across an await point.
-            let recovered_handles: Vec<(ulid::Ulid, specd_core::SpecActorHandle)> = {
-                let actors = state.actors.read().await;
-                actors
-                    .iter()
-                    .map(|(id, handle)| (*id, handle.clone()))
-                    .collect()
-            };
-            for (spec_id, handle) in &recovered_handles {
-                specd_server::web::try_start_agents(&state, *spec_id, handle).await;
-            }
+            // Agents start paused until the user explicitly enables them per-spec
+            // via the web UI "Start agents" button.
+            tracing::info!("agents paused on startup — enable per-spec via the web UI");
 
             let auth_token = std::env::var("SPECD_AUTH_TOKEN")
                 .ok()

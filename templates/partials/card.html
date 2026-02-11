@@ -1,8 +1,8 @@
 <div class="card" data-card-id="{{ card.card_id }}" data-lane="{{ card.lane }}" data-order="{{ card.order }}">
     <span class="card-type badge-{{ card.card_type }}">{{ card.card_type }}</span>
     <h4>{{ card.title }}</h4>
-    {% if let Some(body) = card.body %}
-    <p>{{ body }}</p>
+    {% if let Some(html) = card.body_html %}
+    <div class="card-body">{{ html|safe }}</div>
     {% endif %}
     <div class="card-meta">by {{ card.created_by }}</div>
     <div class="card-actions">

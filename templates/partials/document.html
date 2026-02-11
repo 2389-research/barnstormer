@@ -2,36 +2,49 @@
     <div class="document-notice">
         <span class="notice-icon">&#9432;</span>
         Auto-generated from spec data. Edit cards on the Board to update this document.
+        <button class="btn btn-sm btn-regen"
+                hx-get="/web/specs/{{ spec_id }}/document"
+                hx-target="#canvas" hx-swap="innerHTML"
+                title="Refresh document from current spec data">
+            Regenerate
+        </button>
+        <button class="btn btn-sm btn-export"
+                hx-post="/web/specs/{{ spec_id }}/regenerate"
+                hx-target=".regen-status" hx-swap="innerHTML"
+                title="Save exports to disk">
+            Export to Disk
+        </button>
+        <span class="regen-status"></span>
     </div>
     <h1>{{ title }}</h1>
     <blockquote>{{ one_liner }}</blockquote>
 
     <h2>Goal</h2>
-    <p>{{ goal }}</p>
+    <div class="doc-content">{{ goal_html|safe }}</div>
 
-    {% if let Some( desc) = description %}
+    {% if let Some( html) = description_html %}
     <h2>Description</h2>
-    <p>{{ desc }}</p>
+    <div class="doc-content">{{ html|safe }}</div>
     {% endif %}
 
-    {% if let Some( c) = constraints %}
+    {% if let Some( html) = constraints_html %}
     <h2>Constraints</h2>
-    <p>{{ c }}</p>
+    <div class="doc-content">{{ html|safe }}</div>
     {% endif %}
 
-    {% if let Some( sc) = success_criteria %}
+    {% if let Some( html) = success_criteria_html %}
     <h2>Success Criteria</h2>
-    <p>{{ sc }}</p>
+    <div class="doc-content">{{ html|safe }}</div>
     {% endif %}
 
-    {% if let Some( r) = risks %}
+    {% if let Some( html) = risks_html %}
     <h2>Risks</h2>
-    <p>{{ r }}</p>
+    <div class="doc-content">{{ html|safe }}</div>
     {% endif %}
 
-    {% if let Some( n) = notes %}
+    {% if let Some( html) = notes_html %}
     <h2>Notes</h2>
-    <p>{{ n }}</p>
+    <div class="doc-content">{{ html|safe }}</div>
     {% endif %}
 
     {% if !lanes.is_empty() %}
@@ -43,8 +56,8 @@
     {% else %}
     {% for card in lane.cards %}
     <h3>{{ card.title }} <span class="card-type badge-{{ card.card_type }}">{{ card.card_type }}</span></h3>
-    {% if let Some( body) = card.body %}
-    <p>{{ body }}</p>
+    {% if let Some( html) = card.body_html %}
+    <div class="doc-content">{{ html|safe }}</div>
     {% endif %}
     <p class="card-meta">by {{ card.created_by }}</p>
     {% endfor %}
