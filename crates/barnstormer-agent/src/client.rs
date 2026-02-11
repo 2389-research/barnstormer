@@ -27,16 +27,16 @@ pub fn create_llm_client(
 ) -> Result<(Arc<dyn LlmClient>, String), anyhow::Error> {
     match provider {
         "anthropic" => {
-            // NOTE: mux's AnthropicClient does not support base URL customization.
-            // The old providers/anthropic.rs read ANTHROPIC_BASE_URL. If proxy support
-            // is needed, AnthropicClient in mux-rs will need a with_base_url method.
             let api_key = env::var("ANTHROPIC_API_KEY")
                 .map_err(|_| anyhow::anyhow!("ANTHROPIC_API_KEY environment variable not set"))?;
             let resolved_model = model
                 .map(String::from)
                 .or_else(|| non_empty_env("ANTHROPIC_MODEL"))
                 .unwrap_or_else(|| "claude-sonnet-4-5-20250929".to_string());
-            let client = AnthropicClient::new(api_key);
+            let mut client = AnthropicClient::new(api_key);
+            if let Some(base_url) = non_empty_env("ANTHROPIC_BASE_URL") {
+                client = client.with_base_url(base_url);
+            }
             Ok((Arc::new(client), resolved_model))
         }
         "openai" => {
@@ -81,6 +81,7 @@ mod tests {
     const ENV_VARS: &[&str] = &[
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_MODEL",
+        "ANTHROPIC_BASE_URL",
         "OPENAI_API_KEY",
         "OPENAI_MODEL",
         "OPENAI_BASE_URL",
