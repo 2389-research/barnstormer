@@ -1,0 +1,1280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>barnstormer — Agentic Spec Builder</title>
+  <meta name="description" content="Build software specifications collaboratively with an AI agent swarm. Event-sourced, real-time, and built with Rust.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <style>
+    /* ================================================================
+       VIBE: Tactical Drafthouse
+       PALETTE: Graphite & Acid
+       COLLISION: Military ops center + skateboard graphics
+       on an architect's drafting table
+       ================================================================ */
+
+    *,
+    *::before,
+    *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      /* Graphite & Acid */
+      --black: #0F0E0C;
+      --charcoal: #1A1814;
+      --graphite: #2A2722;
+      --slate: #3D3A35;
+      --parchment: #F7F3EB;
+      --parchment-dim: #EDE8DB;
+      --acid: #C8FF00;
+      --acid-dim: #9BBF00;
+      --acid-glow: rgba(200, 255, 0, 0.15);
+      --blueprint: #3B82F6;
+      --blueprint-dim: rgba(59, 130, 246, 0.15);
+      --text-light: #F7F3EB;
+      --text-dim: #9B9689;
+      --text-dark: #1A1814;
+
+      /* Agent role colors */
+      --role-manager: #F59E0B;
+      --role-brainstormer: #14B8A6;
+      --role-planner: #A855F7;
+      --role-diagram: #3B82F6;
+      --role-critic: #EF4444;
+
+      /* Spacing */
+      --space-xs: 0.5rem;
+      --space-sm: 1rem;
+      --space-md: 1.5rem;
+      --space-lg: 3rem;
+      --space-xl: 5rem;
+      --space-2xl: 8rem;
+
+      /* Type scale */
+      --font-display: 'Syne', sans-serif;
+      --font-body: 'Plus Jakarta Sans', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: var(--font-body);
+      color: var(--text-dark);
+      background: var(--parchment);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* ── Grid overlay (drafting paper) ───────────────────────────── */
+    .grid-bg {
+      position: relative;
+    }
+    .grid-bg::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(200, 255, 0, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(200, 255, 0, 0.04) 1px, transparent 1px);
+      background-size: 60px 60px;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .grid-bg > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    /* Light variant of grid */
+    .grid-bg-light::before {
+      background-image:
+        linear-gradient(rgba(26, 24, 20, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(26, 24, 20, 0.04) 1px, transparent 1px);
+      background-size: 60px 60px;
+    }
+
+    /* ── Navigation ──────────────────────────────────────────────── */
+    .nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(15, 14, 12, 0.9);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(200, 255, 0, 0.1);
+    }
+
+    .nav-logo {
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: 1.5rem;
+      color: var(--text-light);
+      text-decoration: none;
+      letter-spacing: -0.02em;
+    }
+
+    .nav-logo span {
+      color: var(--acid);
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+      list-style: none;
+    }
+
+    .nav-links a {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-dim);
+      text-decoration: none;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover {
+      color: var(--acid);
+    }
+
+    .nav-cta {
+      font-family: var(--font-mono) !important;
+      font-size: 0.8rem !important;
+      padding: 0.5rem 1.25rem;
+      background: var(--acid);
+      color: var(--black) !important;
+      border-radius: 2px;
+      font-weight: 500 !important;
+      transition: background 0.2s, transform 0.15s;
+    }
+
+    .nav-cta:hover {
+      background: #d4ff33;
+      transform: translateY(-1px);
+    }
+
+    /* ── Hero ────────────────────────────────────────────────────── */
+    .hero {
+      min-height: 100vh;
+      background: var(--black);
+      color: var(--text-light);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: var(--space-2xl) 2rem var(--space-xl);
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Diagonal accent stripe (skate influence) */
+    .hero::after {
+      content: '';
+      position: absolute;
+      top: -50%;
+      right: -10%;
+      width: 200px;
+      height: 200%;
+      background: repeating-linear-gradient(
+        -45deg,
+        transparent,
+        transparent 8px,
+        rgba(200, 255, 0, 0.03) 8px,
+        rgba(200, 255, 0, 0.03) 16px
+      );
+      pointer-events: none;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--acid);
+      border: 1px solid rgba(200, 255, 0, 0.3);
+      padding: 0.4rem 1rem;
+      margin-bottom: var(--space-lg);
+      position: relative;
+    }
+
+    .hero-badge::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      background: var(--acid);
+      border-radius: 50%;
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .hero h1 {
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: clamp(3rem, 8vw, 6.5rem);
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+      margin-bottom: var(--space-md);
+      max-width: 900px;
+    }
+
+    .hero h1 em {
+      font-style: normal;
+      color: var(--acid);
+    }
+
+    .hero-sub {
+      font-size: clamp(1rem, 2vw, 1.25rem);
+      color: var(--text-dim);
+      max-width: 620px;
+      line-height: 1.7;
+      margin-bottom: var(--space-lg);
+      font-weight: 300;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-bottom: var(--space-xl);
+    }
+
+    .btn {
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      font-weight: 500;
+      text-decoration: none;
+      padding: 0.85rem 2rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: all 0.2s;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .btn-primary {
+      background: var(--acid);
+      color: var(--black);
+      border: 2px solid var(--acid);
+    }
+
+    .btn-primary:hover {
+      background: #d4ff33;
+      border-color: #d4ff33;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 24px rgba(200, 255, 0, 0.25);
+    }
+
+    .btn-outline {
+      background: transparent;
+      color: var(--text-light);
+      border: 2px solid var(--slate);
+    }
+
+    .btn-outline:hover {
+      border-color: var(--text-dim);
+      transform: translateY(-2px);
+    }
+
+    /* ── Agent Status Bar (hero visual) ──────────────────────────── */
+    .agent-bar {
+      display: flex;
+      gap: 2px;
+      background: var(--charcoal);
+      border: 1px solid var(--slate);
+      padding: 3px;
+      width: 100%;
+      max-width: 700px;
+    }
+
+    .agent-bar-cell {
+      flex: 1;
+      padding: 1rem 0.75rem;
+      background: var(--black);
+      text-align: center;
+      position: relative;
+    }
+
+    .agent-bar-cell::before {
+      content: '';
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: block;
+      margin: 0 auto 0.5rem;
+      animation: led-pulse 3s ease-in-out infinite;
+    }
+
+    .agent-bar-cell:nth-child(1)::before {
+      background: var(--role-manager);
+      box-shadow: 0 0 8px var(--role-manager);
+      animation-delay: 0s;
+    }
+    .agent-bar-cell:nth-child(2)::before {
+      background: var(--role-brainstormer);
+      box-shadow: 0 0 8px var(--role-brainstormer);
+      animation-delay: 0.6s;
+    }
+    .agent-bar-cell:nth-child(3)::before {
+      background: var(--role-planner);
+      box-shadow: 0 0 8px var(--role-planner);
+      animation-delay: 1.2s;
+    }
+    .agent-bar-cell:nth-child(4)::before {
+      background: var(--role-diagram);
+      box-shadow: 0 0 8px var(--role-diagram);
+      animation-delay: 1.8s;
+    }
+    .agent-bar-cell:nth-child(5)::before {
+      background: var(--role-critic);
+      box-shadow: 0 0 8px var(--role-critic);
+      animation-delay: 2.4s;
+    }
+
+    @keyframes led-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.85); }
+    }
+
+    .agent-bar-label {
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+    }
+
+    .agent-bar-role {
+      font-family: var(--font-mono);
+      font-size: 0.55rem;
+      color: var(--slate);
+      margin-top: 0.25rem;
+      letter-spacing: 0.06em;
+    }
+
+    /* ── Section base ────────────────────────────────────────────── */
+    section {
+      padding: var(--space-2xl) 2rem;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .section-tag {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--acid-dim);
+      margin-bottom: var(--space-sm);
+      display: block;
+    }
+
+    .section-tag-dark {
+      color: var(--text-dim);
+    }
+
+    .section-title {
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: clamp(2rem, 4vw, 3rem);
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+      margin-bottom: var(--space-md);
+    }
+
+    .section-subtitle {
+      font-size: 1.1rem;
+      color: var(--text-dim);
+      max-width: 600px;
+      line-height: 1.7;
+      margin-bottom: var(--space-xl);
+      font-weight: 300;
+    }
+
+    /* ── How It Works ────────────────────────────────────────────── */
+    .how-it-works {
+      background: var(--parchment);
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 2rem;
+    }
+
+    .step {
+      position: relative;
+    }
+
+    .step-number {
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: 3.5rem;
+      color: var(--parchment-dim);
+      line-height: 1;
+      margin-bottom: 0.75rem;
+      -webkit-text-stroke: 1px rgba(26, 24, 20, 0.1);
+    }
+
+    .step h3 {
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: 1.25rem;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.01em;
+    }
+
+    .step p {
+      font-size: 0.9rem;
+      color: var(--text-dim);
+      line-height: 1.6;
+    }
+
+    /* Connector line between steps */
+    .step:not(:last-child)::after {
+      content: '';
+      position: absolute;
+      top: 1.75rem;
+      right: -1rem;
+      width: calc(100% - 2rem);
+      height: 1px;
+      background: linear-gradient(90deg, rgba(26, 24, 20, 0.1), transparent);
+      pointer-events: none;
+      display: none; /* Hidden on mobile, shown on desktop */
+    }
+
+    /* ── Features (Bento Grid) ───────────────────────────────────── */
+    .features {
+      background: var(--black);
+      color: var(--text-light);
+    }
+
+    .bento {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 2px;
+    }
+
+    .bento-card {
+      background: var(--charcoal);
+      padding: 2rem;
+      position: relative;
+      overflow: hidden;
+      transition: background 0.3s;
+    }
+
+    .bento-card:hover {
+      background: var(--graphite);
+    }
+
+    .bento-card-icon {
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1.25rem;
+      font-size: 1.5rem;
+    }
+
+    .bento-card h3 {
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: 1.15rem;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.01em;
+    }
+
+    .bento-card p {
+      font-size: 0.9rem;
+      color: var(--text-dim);
+      line-height: 1.6;
+    }
+
+    /* Highlight card (spans 2 cols) */
+    .bento-card-wide {
+      grid-column: span 2;
+    }
+
+    .bento-card-tag {
+      font-family: var(--font-mono);
+      font-size: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--acid-dim);
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+    }
+
+    /* ── Agent Swarm ─────────────────────────────────────────────── */
+    .swarm {
+      background: var(--parchment);
+    }
+
+    .agent-cards {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 1rem;
+    }
+
+    .agent-card {
+      background: white;
+      border: 1px solid var(--parchment-dim);
+      padding: 1.75rem 1.25rem;
+      position: relative;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .agent-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 32px rgba(26, 24, 20, 0.08);
+    }
+
+    /* Tactical badge rotation (skate influence) */
+    .agent-card:nth-child(odd) {
+      transform: rotate(-0.5deg);
+    }
+    .agent-card:nth-child(even) {
+      transform: rotate(0.5deg);
+    }
+    .agent-card:nth-child(odd):hover {
+      transform: rotate(0deg) translateY(-4px);
+    }
+    .agent-card:nth-child(even):hover {
+      transform: rotate(0deg) translateY(-4px);
+    }
+
+    .agent-card-led {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-bottom: 1rem;
+    }
+
+    .agent-card:nth-child(1) .agent-card-led { background: var(--role-manager); box-shadow: 0 0 6px var(--role-manager); }
+    .agent-card:nth-child(2) .agent-card-led { background: var(--role-brainstormer); box-shadow: 0 0 6px var(--role-brainstormer); }
+    .agent-card:nth-child(3) .agent-card-led { background: var(--role-planner); box-shadow: 0 0 6px var(--role-planner); }
+    .agent-card:nth-child(4) .agent-card-led { background: var(--role-diagram); box-shadow: 0 0 6px var(--role-diagram); }
+    .agent-card:nth-child(5) .agent-card-led { background: var(--role-critic); box-shadow: 0 0 6px var(--role-critic); }
+
+    .agent-card h3 {
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: 1.1rem;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.01em;
+    }
+
+    .agent-card-role {
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+      margin-bottom: 0.75rem;
+      display: block;
+    }
+
+    .agent-card p {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      line-height: 1.6;
+    }
+
+    /* ── Architecture ────────────────────────────────────────────── */
+    .architecture {
+      background: var(--black);
+      color: var(--text-light);
+    }
+
+    .arch-flow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-bottom: var(--space-lg);
+      padding: 2rem;
+      background: var(--charcoal);
+      border: 1px solid var(--slate);
+    }
+
+    .arch-node {
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      font-weight: 500;
+      padding: 0.75rem 1.5rem;
+      border: 1px solid var(--slate);
+      background: var(--black);
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .arch-node-accent {
+      border-color: var(--acid);
+      color: var(--acid);
+    }
+
+    .arch-arrow {
+      font-family: var(--font-mono);
+      color: var(--text-dim);
+      font-size: 1.25rem;
+    }
+
+    .arch-outputs {
+      display: flex;
+      justify-content: center;
+      gap: 2rem;
+      flex-wrap: wrap;
+    }
+
+    .arch-output {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--text-dim);
+    }
+
+    .arch-output-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    /* ── Quick Start ─────────────────────────────────────────────── */
+    .quickstart {
+      background: var(--parchment);
+    }
+
+    .terminal {
+      background: var(--charcoal);
+      border: 1px solid var(--slate);
+      max-width: 700px;
+      overflow: hidden;
+    }
+
+    .terminal-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0.75rem 1rem;
+      background: var(--black);
+      border-bottom: 1px solid var(--slate);
+    }
+
+    .terminal-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--slate);
+    }
+
+    .terminal-dot:nth-child(1) { background: #EF4444; }
+    .terminal-dot:nth-child(2) { background: #F59E0B; }
+    .terminal-dot:nth-child(3) { background: #22C55E; }
+
+    .terminal-title {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      margin-left: 0.5rem;
+    }
+
+    .terminal-body {
+      padding: 1.5rem;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      line-height: 1.8;
+      color: var(--text-light);
+      overflow-x: auto;
+    }
+
+    .terminal-body .comment {
+      color: var(--text-dim);
+    }
+
+    .terminal-body .cmd {
+      color: var(--acid);
+    }
+
+    .terminal-body .flag {
+      color: var(--blueprint);
+    }
+
+    /* ── CTA Section ─────────────────────────────────────────────── */
+    .cta-section {
+      background: var(--black);
+      color: var(--text-light);
+      text-align: center;
+    }
+
+    .cta-section .section-title {
+      max-width: 700px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .cta-section .section-subtitle {
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .cta-actions {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    /* ── Footer ──────────────────────────────────────────────────── */
+    .footer {
+      background: var(--black);
+      color: var(--text-dim);
+      padding: 2rem;
+      border-top: 1px solid var(--slate);
+    }
+
+    .footer-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .footer-logo {
+      font-family: var(--font-display);
+      font-weight: 800;
+      font-size: 1.1rem;
+      color: var(--text-light);
+    }
+
+    .footer-logo span {
+      color: var(--acid);
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 2rem;
+      list-style: none;
+    }
+
+    .footer-links a {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      text-decoration: none;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      transition: color 0.2s;
+    }
+
+    .footer-links a:hover {
+      color: var(--acid);
+    }
+
+    .footer-built {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      letter-spacing: 0.04em;
+    }
+
+    /* ── Scroll animations ───────────────────────────────────────── */
+    .reveal {
+      opacity: 0;
+      transform: translateY(24px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* Stagger children */
+    .stagger > .reveal:nth-child(1) { transition-delay: 0s; }
+    .stagger > .reveal:nth-child(2) { transition-delay: 0.08s; }
+    .stagger > .reveal:nth-child(3) { transition-delay: 0.16s; }
+    .stagger > .reveal:nth-child(4) { transition-delay: 0.24s; }
+    .stagger > .reveal:nth-child(5) { transition-delay: 0.32s; }
+    .stagger > .reveal:nth-child(6) { transition-delay: 0.40s; }
+    .stagger > .reveal:nth-child(7) { transition-delay: 0.48s; }
+    .stagger > .reveal:nth-child(8) { transition-delay: 0.56s; }
+
+    /* ── Responsive ──────────────────────────────────────────────── */
+    @media (max-width: 1024px) {
+      .agent-cards {
+        grid-template-columns: repeat(3, 1fr);
+      }
+      .bento {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .bento-card-wide {
+        grid-column: span 2;
+      }
+    }
+
+    @media (max-width: 768px) {
+      section {
+        padding: var(--space-xl) 1.5rem;
+      }
+
+      .nav {
+        padding: 0.75rem 1rem;
+      }
+
+      .nav-links {
+        gap: 1rem;
+      }
+
+      .nav-links li:not(:last-child) {
+        display: none;
+      }
+
+      .steps {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .step:not(:last-child)::after {
+        display: none;
+      }
+
+      .agent-cards {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .agent-card:nth-child(odd),
+      .agent-card:nth-child(even) {
+        transform: none;
+      }
+
+      .bento {
+        grid-template-columns: 1fr;
+      }
+
+      .bento-card-wide {
+        grid-column: span 1;
+      }
+
+      .agent-bar {
+        flex-wrap: wrap;
+      }
+
+      .agent-bar-cell {
+        min-width: 120px;
+      }
+
+      .arch-flow {
+        flex-direction: column;
+      }
+
+      .arch-arrow {
+        transform: rotate(90deg);
+      }
+    }
+
+    @media (max-width: 480px) {
+      .steps {
+        grid-template-columns: 1fr;
+      }
+
+      .agent-cards {
+        grid-template-columns: 1fr;
+      }
+
+      .hero h1 {
+        font-size: 2.5rem;
+      }
+    }
+
+    /* Respect reduced motion */
+    @media (prefers-reduced-motion: reduce) {
+      .reveal {
+        opacity: 1;
+        transform: none;
+        transition: none;
+      }
+
+      .agent-bar-cell::before,
+      .hero-badge::before {
+        animation: none;
+      }
+
+      html {
+        scroll-behavior: auto;
+      }
+    }
+
+    /* ── Noise texture overlay (skate influence wildcard) ─────── */
+    .noise-overlay {
+      position: relative;
+    }
+    .noise-overlay::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      opacity: 0.03;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-size: 256px 256px;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .noise-overlay > * {
+      position: relative;
+      z-index: 1;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ═══════════════════ NAVIGATION ═══════════════════ -->
+  <nav class="nav">
+    <a href="#" class="nav-logo">barn<span>stormer</span></a>
+    <ul class="nav-links">
+      <li><a href="#how-it-works">Process</a></li>
+      <li><a href="#features">Features</a></li>
+      <li><a href="#agents">Agents</a></li>
+      <li><a href="#quickstart">Quick Start</a></li>
+      <li><a href="https://github.com" class="nav-cta">GitHub</a></li>
+    </ul>
+  </nav>
+
+  <!-- ═══════════════════ HERO ═══════════════════ -->
+  <section class="hero grid-bg noise-overlay">
+    <div class="hero-badge">
+      Agentic Spec Builder
+    </div>
+
+    <h1>Your spec.<br>Built by a <em>swarm</em>.</h1>
+
+    <p class="hero-sub">
+      Describe what you want to build. Five AI agents brainstorm, plan,
+      critique, and diagram your specification &mdash; all in real time.
+    </p>
+
+    <div class="hero-actions">
+      <a href="#quickstart" class="btn btn-primary">
+        Get Started
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h10m0 0L9 4m4 4L9 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
+      <a href="https://github.com" class="btn btn-outline">
+        View Source
+      </a>
+    </div>
+
+    <div class="agent-bar">
+      <div class="agent-bar-cell">
+        <span class="agent-bar-label">Manager</span>
+        <div class="agent-bar-role">Coordinator</div>
+      </div>
+      <div class="agent-bar-cell">
+        <span class="agent-bar-label">Brainstormer</span>
+        <div class="agent-bar-role">Researcher</div>
+      </div>
+      <div class="agent-bar-cell">
+        <span class="agent-bar-label">Planner</span>
+        <div class="agent-bar-role">Architect</div>
+      </div>
+      <div class="agent-bar-cell">
+        <span class="agent-bar-label">Diagram</span>
+        <div class="agent-bar-role">Analyst</div>
+      </div>
+      <div class="agent-bar-cell">
+        <span class="agent-bar-label">Critic</span>
+        <div class="agent-bar-role">Reviewer</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ HOW IT WORKS ═══════════════════ -->
+  <section class="how-it-works grid-bg-light" id="how-it-works">
+    <div class="container">
+      <span class="section-tag section-tag-dark">Process</span>
+      <h2 class="section-title reveal">From idea to spec<br>in four moves.</h2>
+      <p class="section-subtitle reveal">No templates. No blank pages. Just describe your vision and let the swarm take it from there.</p>
+
+      <div class="steps stagger">
+        <div class="step reveal">
+          <div class="step-number">01</div>
+          <h3>Describe</h3>
+          <p>Tell barnstormer what you want to build. A sentence, a paragraph, or a brain dump. The Manager agent parses it into structured fields.</p>
+        </div>
+        <div class="step reveal">
+          <div class="step-number">02</div>
+          <h3>Swarm</h3>
+          <p>Five agents activate. They brainstorm ideas, organize plans, identify risks, and map relationships &mdash; running concurrently in the background.</p>
+        </div>
+        <div class="step reveal">
+          <div class="step-number">03</div>
+          <h3>Refine</h3>
+          <p>Agents ask you questions when they need human judgment. Answer in the chat rail, and the swarm incorporates your guidance instantly.</p>
+        </div>
+        <div class="step reveal">
+          <div class="step-number">04</div>
+          <h3>Export</h3>
+          <p>Get your finished spec as Markdown, YAML, or DOT. Cards flow through lanes &mdash; Ideas, Plan, Spec &mdash; until everything is nailed down.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ FEATURES ═══════════════════ -->
+  <section class="features grid-bg noise-overlay" id="features">
+    <div class="container">
+      <span class="section-tag">Capabilities</span>
+      <h2 class="section-title reveal">Engineered for<br>serious specs.</h2>
+      <p class="section-subtitle reveal">Not another chatbot wrapper. barnstormer is an event-sourced system built with Rust, designed for durability and real-time collaboration.</p>
+
+      <div class="bento stagger">
+        <div class="bento-card bento-card-wide reveal">
+          <span class="bento-card-tag">Core</span>
+          <div class="bento-card-icon">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M4 8h24M4 16h24M4 24h24" stroke="var(--acid)" stroke-width="2" stroke-linecap="round"/><circle cx="10" cy="8" r="2" fill="var(--acid)"/><circle cx="22" cy="16" r="2" fill="var(--acid)"/><circle cx="16" cy="24" r="2" fill="var(--acid)"/></svg>
+          </div>
+          <h3>Event Sourcing</h3>
+          <p>Every mutation is a command that produces an event. State is materialized by replaying the event log. Full audit trail, time travel, and undo built in.</p>
+        </div>
+        <div class="bento-card reveal">
+          <span class="bento-card-tag">UI</span>
+          <div class="bento-card-icon">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><rect x="4" y="4" width="24" height="24" rx="2" stroke="var(--blueprint)" stroke-width="2"/><path d="M4 12h24M12 12v16" stroke="var(--blueprint)" stroke-width="2"/></svg>
+          </div>
+          <h3>Real-Time Web UI</h3>
+          <p>HTMX + SSE streaming. No page reloads. Board, document, and diagram views update live as agents work.</p>
+        </div>
+        <div class="bento-card reveal">
+          <span class="bento-card-tag">LLM</span>
+          <div class="bento-card-icon">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="10" stroke="var(--role-planner)" stroke-width="2"/><circle cx="16" cy="16" r="4" stroke="var(--role-planner)" stroke-width="2"/><path d="M16 2v4M16 26v4M2 16h4M26 16h4" stroke="var(--role-planner)" stroke-width="2" stroke-linecap="round"/></svg>
+          </div>
+          <h3>Multi-Provider</h3>
+          <p>Anthropic, OpenAI, or Gemini. Switch providers with an environment variable. Auto-detects available API keys.</p>
+        </div>
+        <div class="bento-card reveal">
+          <span class="bento-card-tag">Board</span>
+          <div class="bento-card-icon">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><rect x="4" y="6" width="7" height="9" rx="1" stroke="var(--role-brainstormer)" stroke-width="2"/><rect x="13" y="6" width="7" height="14" rx="1" stroke="var(--role-brainstormer)" stroke-width="2"/><rect x="22" y="6" width="7" height="11" rx="1" stroke="var(--role-brainstormer)" stroke-width="2"/></svg>
+          </div>
+          <h3>Kanban Board</h3>
+          <p>Drag-and-drop cards across lanes. Ideas flow to Plans, Plans become Spec. Agents and humans move cards together.</p>
+        </div>
+        <div class="bento-card reveal">
+          <span class="bento-card-tag">Viz</span>
+          <div class="bento-card-icon">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><circle cx="8" cy="8" r="3" stroke="var(--role-diagram)" stroke-width="2"/><circle cx="24" cy="8" r="3" stroke="var(--role-diagram)" stroke-width="2"/><circle cx="16" cy="24" r="3" stroke="var(--role-diagram)" stroke-width="2"/><path d="M11 9l5 12M21 9l-5 12" stroke="var(--role-diagram)" stroke-width="2"/></svg>
+          </div>
+          <h3>DOT Diagrams</h3>
+          <p>Architecture diagrams auto-generate from card relationships. Rendered with Viz.js. Copy or download the DOT source.</p>
+        </div>
+        <div class="bento-card bento-card-wide reveal">
+          <span class="bento-card-tag">Durability</span>
+          <div class="bento-card-icon">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M6 26V6l10 8 10-8v20l-10-6-10 6z" stroke="var(--role-manager)" stroke-width="2" stroke-linejoin="round"/></svg>
+          </div>
+          <h3>Crash Recovery</h3>
+          <p>JSONL event logs are the source of truth. SQLite provides a queryable cache. Snapshots are saved automatically, and full state recovers on restart.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ AGENT SWARM ═══════════════════ -->
+  <section class="swarm grid-bg-light" id="agents">
+    <div class="container">
+      <span class="section-tag section-tag-dark">The Swarm</span>
+      <h2 class="section-title reveal">Five agents.<br>One specification.</h2>
+      <p class="section-subtitle reveal">Each agent has a focused role, its own event receiver, and a set of tools for reading state, writing commands, and communicating with you.</p>
+
+      <div class="agent-cards stagger">
+        <div class="agent-card reveal">
+          <div class="agent-card-led"></div>
+          <span class="agent-card-role">Coordinator</span>
+          <h3>Manager</h3>
+          <p>Primary point of contact. Parses your description, creates initial cards, asks clarifying questions, and coordinates the swarm.</p>
+        </div>
+        <div class="agent-card reveal">
+          <div class="agent-card-led"></div>
+          <span class="agent-card-role">Researcher</span>
+          <h3>Brainstormer</h3>
+          <p>Generates creative ideas and explores possibilities. Creates idea cards with breadth-first exploration and narrates its thinking.</p>
+        </div>
+        <div class="agent-card reveal">
+          <div class="agent-card-led"></div>
+          <span class="agent-card-role">Architect</span>
+          <h3>Planner</h3>
+          <p>Organizes ideas into structured plans. Moves promising ideas forward, creates task cards, and defines constraints and success criteria.</p>
+        </div>
+        <div class="agent-card reveal">
+          <div class="agent-card-led"></div>
+          <span class="agent-card-role">Analyst</span>
+          <h3>Diagram</h3>
+          <p>Analyzes spec structure and card relationships. Identifies gaps, suggests improvements, and summarizes pipeline health.</p>
+        </div>
+        <div class="agent-card reveal">
+          <div class="agent-card-led"></div>
+          <span class="agent-card-role">Reviewer</span>
+          <h3>Critic</h3>
+          <p>Reviews for gaps, inconsistencies, and risks. Creates risk and constraint cards. Asks about ambiguities needing human judgment.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ ARCHITECTURE ═══════════════════ -->
+  <section class="architecture grid-bg noise-overlay" id="architecture">
+    <div class="container">
+      <span class="section-tag">System</span>
+      <h2 class="section-title reveal">Event-sourced<br>from the ground up.</h2>
+      <p class="section-subtitle reveal">Commands produce events. Events build state. State drives the UI. The JSONL log is the single source of truth.</p>
+
+      <div class="arch-flow reveal">
+        <div class="arch-node">Command</div>
+        <span class="arch-arrow">&rarr;</span>
+        <div class="arch-node">SpecActor</div>
+        <span class="arch-arrow">&rarr;</span>
+        <div class="arch-node arch-node-accent">Event</div>
+        <span class="arch-arrow">&rarr;</span>
+        <div class="arch-node">SpecState</div>
+      </div>
+
+      <div class="arch-outputs reveal">
+        <div class="arch-output">
+          <span class="arch-output-dot" style="background: var(--acid)"></span>
+          JSONL Log &mdash; durable
+        </div>
+        <div class="arch-output">
+          <span class="arch-output-dot" style="background: var(--blueprint)"></span>
+          SQLite Index &mdash; queryable
+        </div>
+        <div class="arch-output">
+          <span class="arch-output-dot" style="background: var(--role-planner)"></span>
+          SSE Broadcast &mdash; real-time
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ QUICK START ═══════════════════ -->
+  <section class="quickstart grid-bg-light" id="quickstart">
+    <div class="container">
+      <span class="section-tag section-tag-dark">Quick Start</span>
+      <h2 class="section-title reveal">Up and running<br>in sixty seconds.</h2>
+
+      <div class="terminal reveal">
+        <div class="terminal-header">
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-title">terminal</span>
+        </div>
+        <div class="terminal-body">
+          <span class="comment"># Clone and build</span><br>
+          <span class="cmd">git clone</span> https://github.com/your-org/barnstormer<br>
+          <span class="cmd">cd</span> barnstormer<br>
+          <span class="cmd">cargo build</span> <span class="flag">--all</span><br>
+          <br>
+          <span class="comment"># Configure an LLM provider</span><br>
+          <span class="cmd">cp</span> .env.example .env<br>
+          <span class="comment"># Edit .env &mdash; set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY</span><br>
+          <br>
+          <span class="comment"># Launch (opens browser at 127.0.0.1:7331)</span><br>
+          <span class="cmd">cargo run</span> <span class="flag">--</span> start<br>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ CTA ═══════════════════ -->
+  <section class="cta-section grid-bg noise-overlay">
+    <div class="container">
+      <span class="section-tag">Open Source</span>
+      <h2 class="section-title reveal">Built with Rust.<br>Built in the open.</h2>
+      <p class="section-subtitle reveal">293 tests. Four crates. Zero dependencies on proprietary services. barnstormer is open source, built by <a href="https://2389.ai" style="color: var(--acid); text-decoration: none;">2389 Research Inc</a>, and ready for your specs.</p>
+
+      <div class="cta-actions reveal">
+        <a href="https://github.com" class="btn btn-primary">
+          View on GitHub
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h10m0 0L9 4m4 4L9 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+        <a href="#quickstart" class="btn btn-outline">
+          Quick Start
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ FOOTER ═══════════════════ -->
+  <footer class="footer">
+    <div class="footer-inner">
+      <div class="footer-logo">barn<span>stormer</span></div>
+      <ul class="footer-links">
+        <li><a href="#quickstart">Quick Start</a></li>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#agents">Agents</a></li>
+        <li><a href="https://github.com">GitHub</a></li>
+      </ul>
+      <span class="footer-built">By <a href="https://2389.ai" style="color: var(--acid); text-decoration: none;">2389 Research Inc</a> &mdash; Built with Rust + Axum + HTMX</span>
+    </div>
+  </footer>
+
+  <!-- ═══════════════════ SCROLL REVEAL ═══════════════════ -->
+  <script>
+    (function() {
+      var els = document.querySelectorAll('.reveal');
+      if (!window.IntersectionObserver) {
+        els.forEach(function(el) { el.classList.add('visible'); });
+        return;
+      }
+      var observer = new IntersectionObserver(function(entries) {
+        entries.forEach(function(entry) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('visible');
+            observer.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+      els.forEach(function(el) { observer.observe(el); });
+    })();
+  </script>
+
+</body>
+</html>
