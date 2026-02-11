@@ -225,7 +225,7 @@ mod tests {
         assert!(yaml.contains("Export Spec"));
 
         let dot = fs::read_to_string(exports_dir.join("pipeline.dot")).unwrap();
-        assert!(dot.contains("digraph"));
-        assert!(dot.contains("export_card"));
+        assert!(dot.contains("digraph export_spec"));
+        assert!(dot.contains("Export Card"), "Card title should appear in synthesized prompt");
     }
 }
