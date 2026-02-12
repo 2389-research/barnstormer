@@ -67,8 +67,13 @@ pub fn export_dot(state: &SpecState) -> String {
         .and_then(|c| c.success_criteria.as_deref())
         .unwrap_or("");
 
-    // Collect cards by type
-    let cards: Vec<&Card> = state.cards.values().collect();
+    // Collect cards by type, excluding the Ideas lane (unrefined cards
+    // should not feed into the pipeline — only Plan/Spec/other lanes).
+    let cards: Vec<&Card> = state
+        .cards
+        .values()
+        .filter(|c| c.lane != "Ideas")
+        .collect();
     let ideas: Vec<&str> = cards
         .iter()
         .filter(|c| c.card_type == "idea" || c.card_type == "inspiration" || c.card_type == "vibes")
@@ -719,7 +724,7 @@ mod tests {
     fn scenario_test_prompt_aggregates_assumptions() {
         let mut state = make_state_with_core();
 
-        let assumption = make_card("assumption", "Fast Network", "Ideas", 1.0, "human");
+        let assumption = make_card("assumption", "Fast Network", "Spec", 1.0, "human");
         state.cards.insert(assumption.card_id, assumption);
 
         let dot = export_dot(&state);
@@ -835,7 +840,7 @@ mod tests {
     fn cards_aggregate_into_plan_prompt() {
         let mut state = make_state_with_core();
 
-        let idea = make_card("idea", "Fast DB", "Ideas", 1.0, "human");
+        let idea = make_card("idea", "Fast DB", "Plan", 1.0, "human");
         let constraint = make_card("constraint", "Must Use Rust", "Plan", 1.0, "human");
         state.cards.insert(idea.card_id, idea);
         state.cards.insert(constraint.card_id, constraint);
@@ -879,7 +884,7 @@ mod tests {
     fn cards_aggregate_into_polish_prompt() {
         let mut state = make_state_with_core();
 
-        let risk = make_card("risk", "Data Loss", "Ideas", 1.0, "human");
+        let risk = make_card("risk", "Data Loss", "Plan", 1.0, "human");
         state.cards.insert(risk.card_id, risk);
 
         let dot = export_dot(&state);
@@ -1033,7 +1038,7 @@ mod tests {
     fn escapes_newlines_in_card_titles_within_prompts() {
         let mut state = make_state_with_core();
 
-        let card = make_card("idea", "Line one\nLine two", "Ideas", 1.0, "human");
+        let card = make_card("idea", "Line one\nLine two", "Plan", 1.0, "human");
         state.cards.insert(card.card_id, card);
 
         let dot = export_dot(&state);
@@ -1115,13 +1120,13 @@ mod tests {
     fn all_card_types_contribute_to_their_phases() {
         let mut state = make_state_with_core();
 
-        let idea = make_card("idea", "Brainstorm", "Ideas", 1.0, "human");
+        let idea = make_card("idea", "Brainstorm", "Plan", 1.0, "human");
         let task = make_card("task", "Build API", "Spec", 1.0, "human");
         let plan = make_card("plan", "Roadmap", "Plan", 1.0, "human");
         let decision = make_card("decision", "Choose DB", "Plan", 2.0, "human");
         let constraint = make_card("constraint", "Budget Cap", "Plan", 3.0, "human");
-        let risk = make_card("risk", "Data Loss", "Ideas", 2.0, "human");
-        let assumption = make_card("assumption", "Fast Network", "Ideas", 3.0, "human");
+        let risk = make_card("risk", "Data Loss", "Plan", 2.0, "human");
+        let assumption = make_card("assumption", "Fast Network", "Spec", 3.0, "human");
         let open_q = make_card("open_question", "What Stack", "Plan", 4.0, "human");
 
         state.cards.insert(idea.card_id, idea);
@@ -1212,8 +1217,8 @@ mod tests {
     fn inspiration_and_vibes_cards_count_as_ideas() {
         let mut state = make_state_with_core();
 
-        let vibes = make_card("vibes", "Good Energy", "Ideas", 1.0, "human");
-        let inspiration = make_card("inspiration", "Cool Pattern", "Ideas", 2.0, "human");
+        let vibes = make_card("vibes", "Good Energy", "Plan", 1.0, "human");
+        let inspiration = make_card("inspiration", "Cool Pattern", "Plan", 2.0, "human");
         state.cards.insert(vibes.card_id, vibes);
         state.cards.insert(inspiration.card_id, inspiration);
 
@@ -1311,5 +1316,79 @@ mod tests {
     fn build_release_prompt_includes_goal() {
         let prompt = build_release_prompt("Ship the widget");
         assert_eq!(prompt, "Prepare release: Ship the widget");
+    }
+
+    #[test]
+    fn ideas_lane_cards_excluded_from_pipeline() {
+        let mut state = make_state_with_core();
+
+        // Card in Ideas lane — should NOT appear in DOT output
+        let idea_in_ideas = make_card("idea", "Raw Brainstorm", "Ideas", 1.0, "human");
+        // Same card type but in Plan lane — SHOULD appear
+        let idea_in_plan = make_card("idea", "Refined Concept", "Plan", 1.0, "human");
+
+        state.cards.insert(idea_in_ideas.card_id, idea_in_ideas);
+        state.cards.insert(idea_in_plan.card_id, idea_in_plan);
+
+        let dot = export_dot(&state);
+
+        assert!(
+            !dot.contains("Raw Brainstorm"),
+            "Ideas lane card should be excluded from pipeline:\n{}",
+            dot
+        );
+        assert!(
+            dot.contains("Refined Concept"),
+            "Plan lane card should be included in pipeline:\n{}",
+            dot
+        );
+    }
+
+    #[test]
+    fn all_card_types_in_ideas_lane_excluded() {
+        let mut state = make_state_with_core();
+
+        // Put every card type in the Ideas lane
+        let cards = vec![
+            make_card("task", "Idea Task", "Ideas", 1.0, "human"),
+            make_card("risk", "Idea Risk", "Ideas", 2.0, "human"),
+            make_card("constraint", "Idea Constraint", "Ideas", 3.0, "human"),
+            make_card("assumption", "Idea Assumption", "Ideas", 4.0, "human"),
+            make_card("decision", "Idea Decision", "Ideas", 5.0, "human"),
+            make_card("plan", "Idea Plan", "Ideas", 6.0, "human"),
+            make_card("open_question", "Idea Question", "Ideas", 7.0, "human"),
+        ];
+        for card in cards {
+            state.cards.insert(card.card_id, card);
+        }
+
+        let dot = export_dot(&state);
+
+        assert!(!dot.contains("Idea Task"), "Ideas lane task leaked into pipeline");
+        assert!(!dot.contains("Idea Risk"), "Ideas lane risk leaked into pipeline");
+        assert!(!dot.contains("Idea Constraint"), "Ideas lane constraint leaked into pipeline");
+        assert!(!dot.contains("Idea Assumption"), "Ideas lane assumption leaked into pipeline");
+        assert!(!dot.contains("Idea Decision"), "Ideas lane decision leaked into pipeline");
+        assert!(!dot.contains("Idea Plan"), "Ideas lane plan leaked into pipeline");
+        assert!(!dot.contains("Idea Question"), "Ideas lane question leaked into pipeline");
+    }
+
+    #[test]
+    fn spec_and_plan_lane_cards_included() {
+        let mut state = make_state_with_core();
+
+        let spec_task = make_card("task", "Spec Task", "Spec", 1.0, "human");
+        let plan_task = make_card("task", "Plan Task", "Plan", 1.0, "human");
+        let backlog_task = make_card("task", "Backlog Task", "Backlog", 1.0, "human");
+
+        state.cards.insert(spec_task.card_id, spec_task);
+        state.cards.insert(plan_task.card_id, plan_task);
+        state.cards.insert(backlog_task.card_id, backlog_task);
+
+        let dot = export_dot(&state);
+
+        assert!(dot.contains("Spec Task"), "Spec lane card should be included");
+        assert!(dot.contains("Plan Task"), "Plan lane card should be included");
+        assert!(dot.contains("Backlog Task"), "Non-Ideas lane card should be included");
     }
 }

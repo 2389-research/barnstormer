@@ -202,11 +202,13 @@ mod tests {
         fs::create_dir_all(&spec_dir).unwrap();
 
         let mut state = make_state_with_core();
-        let card = Card::new(
+        let mut card = Card::new(
             "idea".to_string(),
             "Export Card".to_string(),
             "human".to_string(),
         );
+        // Place in Plan lane so DOT exporter includes it (Ideas lane is excluded)
+        card.lane = "Plan".to_string();
         state.cards.insert(card.card_id, card);
 
         StorageManager::write_exports(&spec_dir, &state).unwrap();
