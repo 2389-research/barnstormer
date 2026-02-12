@@ -1,0 +1,25 @@
+{# ABOUTME: Form for importing a spec from arbitrary text via LLM extraction. #}
+{# ABOUTME: Accepts pasted content (DOT, YAML, PRDs, notes) and an optional format hint. #}
+
+<div class="create-spec-form" style="padding: var(--spacing-lg); max-width: 500px; margin: 0 auto;">
+    <h2>Import a spec</h2>
+    <p style="color: var(--text-secondary); margin-bottom: var(--spacing-md); font-size: 0.85rem;">
+        Paste any content &mdash; DOT files, YAML, PRDs, napkin notes &mdash; and our LLM will extract the structure.
+    </p>
+    <form hx-post="/web/specs/import" hx-target="#workspace" hx-swap="innerHTML" hx-push-url="true">
+        <div class="form-group">
+            <textarea id="content" name="content" required rows="10"
+                placeholder="Paste your spec content here...&#10;&#10;Examples:&#10;- A DOT graph&#10;- A YAML spec&#10;- A product requirements doc&#10;- A list of ideas on a napkin"></textarea>
+        </div>
+        <div class="form-group" style="margin-bottom: var(--spacing-md);">
+            <label for="source_format" style="font-size: 0.8rem; color: var(--text-secondary);">Format hint (optional)</label>
+            <select id="source_format" name="source_format" style="margin-top: 4px; width: 100%;">
+                <option value="auto">Auto-detect</option>
+                <option value="dot">DOT graph</option>
+                <option value="yaml">YAML</option>
+                <option value="markdown">Markdown</option>
+            </select>
+        </div>
+        <button type="submit" class="btn btn-primary">Import</button>
+    </form>
+</div>

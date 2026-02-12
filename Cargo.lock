@@ -247,7 +247,9 @@ dependencies = [
 name = "barnstormer"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
+ "barnstormer-agent",
  "barnstormer-core",
  "barnstormer-server",
  "barnstormer-store",

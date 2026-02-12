@@ -3,6 +3,7 @@
 
 pub mod client;
 pub mod context;
+pub mod import;
 pub mod mux_tools;
 pub mod swarm;
 pub mod testing;

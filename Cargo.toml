@@ -50,16 +50,18 @@ path = "src/main.rs"
 barnstormer-core.workspace = true
 barnstormer-store.workspace = true
 barnstormer-server.workspace = true
+barnstormer-agent.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 axum.workspace = true
 ulid.workspace = true
+anyhow.workspace = true
 clap = { version = "4", features = ["derive"] }
 dotenvy = "0.15"
+serde_json.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
-serde_json = { workspace = true }
 http = { workspace = true }
 tower = { workspace = true, features = ["util"] }

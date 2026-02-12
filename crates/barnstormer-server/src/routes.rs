@@ -33,10 +33,15 @@ pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
             get(api::stream::event_stream),
         )
         .route("/api/specs/{id}/undo", post(api::commands::undo))
+        .route("/api/specs/import", post(api::import::import_spec))
         // Web UI routes (HTML)
         .route("/", get(web::index))
         .route("/web/specs", get(web::spec_list).post(web::create_spec))
         .route("/web/specs/new", get(web::create_spec_form))
+        .route(
+            "/web/specs/import",
+            get(web::import_spec_form).post(web::import_spec),
+        )
         .route("/web/specs/{id}", get(web::spec_view))
         .route("/web/specs/{id}/board", get(web::board))
         .route("/web/specs/{id}/document", get(web::document))

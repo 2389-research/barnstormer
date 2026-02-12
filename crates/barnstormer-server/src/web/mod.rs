@@ -68,6 +68,203 @@ pub async fn create_spec_form() -> CreateSpecFormTemplate {
     CreateSpecFormTemplate {}
 }
 
+/// Partial: import spec form.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/import_spec_form.html")]
+pub struct ImportSpecFormTemplate {}
+
+/// GET /web/specs/import - Render the import spec form.
+pub async fn import_spec_form() -> ImportSpecFormTemplate {
+    ImportSpecFormTemplate {}
+}
+
+/// Form data for importing a spec from arbitrary content.
+#[derive(Deserialize)]
+pub struct ImportSpecForm {
+    pub content: String,
+    #[serde(default)]
+    pub source_format: Option<String>,
+}
+
+/// POST /web/specs/import - Import a spec from pasted content via LLM.
+pub async fn import_spec(
+    State(state): State<SharedState>,
+    Form(form): Form<ImportSpecForm>,
+) -> Response {
+    if form.content.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html("<p class=\"error-msg\">Content must not be empty.</p>".to_string()),
+        )
+            .into_response();
+    }
+
+    // Create LLM client
+    let provider = &state.provider_status.default_provider;
+    let (client, model) = match barnstormer_agent::client::create_llm_client(
+        provider,
+        state.provider_status.default_model.as_deref(),
+    ) {
+        Ok(pair) => pair,
+        Err(e) => {
+            tracing::error!("failed to create LLM client for import: {}", e);
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Html(format!(
+                    "<p class=\"error-msg\">LLM provider not available: {}</p>",
+                    e
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    // Parse via LLM
+    let source_hint = form
+        .source_format
+        .as_deref()
+        .filter(|s| *s != "auto");
+    let import_result = match barnstormer_agent::import::parse_with_llm(
+        &form.content,
+        source_hint,
+        &client,
+        &model,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::error!("LLM import failed: {}", e);
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Html(format!(
+                    "<p class=\"error-msg\">Failed to parse content: {}</p>",
+                    e
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    let commands = barnstormer_agent::import::to_commands(&import_result);
+
+    // Create spec directory and JSONL log
+    let spec_id = Ulid::new();
+    let spec_dir = state
+        .barnstormer_home
+        .join("specs")
+        .join(spec_id.to_string());
+    if let Err(e) = std::fs::create_dir_all(&spec_dir) {
+        tracing::error!("failed to create spec directory: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html("<p class=\"error-msg\">Failed to create spec directory.</p>".to_string()),
+        )
+            .into_response();
+    }
+    let log_path = spec_dir.join("events.jsonl");
+    let mut log = match JsonlLog::open(&log_path) {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!("failed to create JSONL log: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html("<p class=\"error-msg\">Failed to create spec storage.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    // Spawn actor and send all commands
+    let handle = spawn(spec_id, SpecState::new());
+    for cmd in commands {
+        match handle.send_command(cmd).await {
+            Ok(events) => {
+                for event in &events {
+                    if let Err(e) = log.append(event) {
+                        tracing::error!("failed to persist event: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("failed to send import command: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Html(format!(
+                        "<p class=\"error-msg\">Failed to create spec: {}</p>",
+                        e
+                    )),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    // Subscribe event persister
+    let persister_handle = spawn_event_persister(&handle, spec_id, &state.barnstormer_home);
+    state
+        .event_persisters
+        .write()
+        .await
+        .insert(spec_id, persister_handle);
+
+    state.actors.write().await.insert(spec_id, handle);
+
+    // Auto-start agents if a provider is available
+    {
+        let actors = state.actors.read().await;
+        if let Some(handle_ref) = actors.get(&spec_id) {
+            try_start_agents(&state, spec_id, handle_ref).await;
+        }
+    }
+
+    // Return the spec view so HTMX navigates into the imported spec
+    let spec_state = {
+        let actors = state.actors.read().await;
+        match actors.get(&spec_id) {
+            Some(h) => h.read_state().await.clone(),
+            None => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Html("<p class=\"error-msg\">Spec imported but not found.</p>".to_string()),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    let lanes = cards_by_lane(&spec_state);
+    let core = match spec_state.core.as_ref() {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(
+                    "<p class=\"error-msg\">Spec imported but core data is missing.</p>".to_string(),
+                ),
+            )
+                .into_response();
+        }
+    };
+    let spec_id_str = spec_id.to_string();
+
+    let mut response = SpecViewTemplate {
+        spec_id: spec_id_str.clone(),
+        title: core.title.clone(),
+        one_liner: core.one_liner.clone(),
+        goal: core.goal.clone(),
+        lanes,
+    }
+    .into_response();
+
+    response.headers_mut().insert(
+        axum::http::HeaderName::from_static("hx-push-url"),
+        axum::http::HeaderValue::from_str(&format!("/web/specs/{}", spec_id_str)).unwrap(),
+    );
+
+    response
+}
+
 /// Form data for creating a new spec.
 #[derive(Deserialize)]
 pub struct CreateSpecForm {
