@@ -1,7 +1,11 @@
 [package]
 name = "barnstormer-core"
+description = "Domain types, commands, events, state reducer, and exporters for barnstormer"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 serde.workspace = true

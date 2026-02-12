@@ -1,7 +1,11 @@
 [package]
 name = "barnstormer-store"
+description = "Persistence layer for barnstormer — JSONL event log, snapshots, SQLite index, crash recovery"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 barnstormer-core.workspace = true

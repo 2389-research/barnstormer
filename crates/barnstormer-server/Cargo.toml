@@ -1,7 +1,11 @@
 [package]
 name = "barnstormer-server"
+description = "HTTP API, SSE streaming, and Askama+HTMX web UI for barnstormer"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 barnstormer-core.workspace = true

@@ -5,6 +5,11 @@ resolver = "3"
 [workspace.package]
 edition = "2024"
 version = "0.1.0"
+authors = ["2389 Research, Inc. <hello@2389.ai>"]
+license = "MIT"
+repository = "https://github.com/2389-research/barnstormer"
+homepage = "https://github.com/2389-research/barnstormer"
+readme = "README.md"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -39,8 +44,16 @@ barnstormer-agent = { path = "crates/barnstormer-agent" }
 
 [package]
 name = "barnstormer"
+description = "Agentic spec builder — event-sourced specification management with an AI agent swarm and real-time web UI"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["ai", "agents", "specification", "event-sourcing", "llm"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "barnstormer"

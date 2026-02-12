@@ -1,7 +1,11 @@
 [package]
 name = "barnstormer-agent"
+description = "AI agent runtime, LLM provider adapters, and swarm orchestrator for barnstormer"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [features]
 live-test = []
