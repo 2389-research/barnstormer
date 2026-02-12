@@ -22,6 +22,12 @@ cargo run -- start --no-open
 
 # Check if barnstormer is running
 cargo run -- status
+
+# Import a spec from any file (DOT, YAML, markdown, plain text)
+cargo run -- import path/to/file.md
+cargo run -- import design.dot --format dot
+cargo run -- import --text "Build a CLI task manager"
+cat notes.txt | cargo run -- import -
 ```
 
 The server runs at [http://127.0.0.1:7331](http://127.0.0.1:7331) by default.
@@ -63,7 +69,9 @@ The `SwarmOrchestrator` runs a team of specialized AI agents that collaborate on
 | **Brainstormer** | Generates creative ideas and explores possibilities. Creates idea cards with breadth-first exploration and narrates its thought process. |
 | **Planner** | Organizes ideas into structured, actionable plans. Moves promising ideas to the Plan lane, creates task cards, and updates constraints and success criteria. |
 | **DotGenerator** | Analyzes spec structure and card relationships. Identifies gaps (ideas without plans, plans without tasks), suggests structural improvements, and summarizes pipeline health. Does not create cards. |
-| **Critic** | Reviews the spec for gaps, inconsistencies, and risks. Creates risk and constraint cards and asks users about ambiguities. |
+| **Critic** *(available, not in default swarm)* | Reviews the spec for gaps, inconsistencies, and risks. Creates risk and constraint cards and asks users about ambiguities. |
+
+The default swarm runs 4 agents (Manager, Brainstormer, Planner, DotGenerator). The Critic role is defined and available but not activated by default.
 
 Agents communicate through 7 tools:
 - **read_state** — Read current spec state summary
@@ -77,7 +85,7 @@ Agents communicate through 7 tools:
 The UI is built with Askama templates, HTMX, and SSE for real-time updates without full page reloads.
 
 **Layout:**
-- **Nav rail** (left) — Spec list, provider status, new spec button
+- **Nav rail** (left) — Spec list, provider status, new spec button, import button
 - **Command bar** (top) — Spec title, view toggles, agent controls (start/pause/resume), undo
 - **Canvas** (center) — Swappable views:
   - **Document** — Auto-generated markdown from spec data
@@ -96,14 +104,17 @@ Copy `.env.example` to `.env` and configure:
 |----------|---------|-------------|
 | `BARNSTORMER_HOME` | `~/.barnstormer` | Data directory for event logs, snapshots, and SQLite index |
 | `BARNSTORMER_BIND` | `127.0.0.1:7331` | Listen address |
-| `BARNSTORMER_PUBLIC_BASE_URL` | `http://localhost:7331` | Public base URL |
+| `BARNSTORMER_PUBLIC_BASE_URL` | derived from `BARNSTORMER_BIND` | Public base URL |
 | `BARNSTORMER_AUTH_TOKEN` | *(none)* | Bearer token for API auth (optional, enables auth middleware) |
 | `BARNSTORMER_ALLOW_REMOTE` | `false` | Allow non-loopback connections (requires auth token) |
 | `BARNSTORMER_DEFAULT_PROVIDER` | *(auto-detect)* | LLM provider: `anthropic`, `openai`, or `gemini` |
 | `BARNSTORMER_DEFAULT_MODEL` | *(provider default)* | Model override (e.g. `claude-sonnet-4-5-20250929`) |
 | `ANTHROPIC_API_KEY` | — | Anthropic API key |
+| `ANTHROPIC_BASE_URL` | — | Anthropic API proxy URL (optional) |
 | `OPENAI_API_KEY` | — | OpenAI API key |
+| `OPENAI_BASE_URL` | — | OpenAI API proxy URL (optional) |
 | `GEMINI_API_KEY` | — | Gemini API key |
+| `GEMINI_BASE_URL` | — | Gemini API proxy URL (optional) |
 
 ## Exports
 
@@ -127,6 +138,7 @@ Export via the web UI (`/web/specs/{id}/export/markdown|yaml|dot`) or the API.
 | `GET` | `/api/specs/{id}/state` | Get full spec state |
 | `POST` | `/api/specs/{id}/commands` | Submit commands |
 | `POST` | `/api/specs/{id}/undo` | Undo last command |
+| `POST` | `/api/specs/import` | Import spec from any text via LLM |
 | `GET` | `/api/specs/{id}/events/stream` | SSE event stream |
 
 When `BARNSTORMER_AUTH_TOKEN` is set, API routes require `Authorization: Bearer <token>`.
@@ -140,7 +152,7 @@ Subscribe to `/api/specs/{id}/events/stream` for real-time updates:
 ## Testing
 
 ```bash
-# Run all tests (293 tests across 34 files)
+# Run all tests
 cargo test --all
 
 # Run with clippy
@@ -161,7 +173,7 @@ barnstormer/
 │   │       ├── command.rs         # Command definitions (tagged enum)
 │   │       ├── event.rs           # Event definitions and payload types
 │   │       ├── state.rs           # SpecState reducer
-│   │       ├── card.rs            # Card model (idea, task, constraint, risk, note)
+│   │       ├── card.rs            # Card model (idea, task, plan, decision, constraint, risk)
 │   │       ├── transcript.rs      # Transcript entries
 │   │       └── export/            # Markdown, YAML, DOT exporters
 │   ├── barnstormer-store/         # Persistence layer
@@ -183,6 +195,7 @@ barnstormer/
 │           ├── swarm.rs           # SwarmOrchestrator (agent lifecycle, round-robin)
 │           ├── context.rs         # AgentRole enum, per-agent context
 │           ├── client.rs          # LLM provider adapters
+│           ├── import.rs          # LLM-powered spec import (any text → structured spec)
 │           └── mux_tools/         # 7 agent tools (read, write, narrate, ask)
 ├── static/                        # CSS, JS (board.js, style.css)
 ├── templates/                     # Askama HTML templates
