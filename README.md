@@ -4,30 +4,41 @@
 
 barnstormer helps you build software specifications collaboratively with AI. You describe what you want to build, and a swarm of specialized agents brainstorm ideas, organize plans, identify risks, and generate architecture diagrams — all in real time through an interactive web interface.
 
+## Install
+
+```bash
+# From GitHub (requires Rust toolchain)
+cargo install --git https://github.com/2389-research/barnstormer
+
+# Or clone and build
+git clone https://github.com/2389-research/barnstormer.git
+cd barnstormer
+cargo build --release
+```
+
+Prebuilt binaries for Linux, macOS (Intel + Apple Silicon), and Windows are available on the [Releases page](https://github.com/2389-research/barnstormer/releases).
+
 ## Quick Start
 
 ```bash
-# Build
-cargo build --all
-
 # Configure at least one LLM provider
 cp .env.example .env
 # Edit .env and set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY
 
 # Start the server (opens browser automatically)
-cargo run -- start
+barnstormer start
 
 # Or start without opening a browser
-cargo run -- start --no-open
+barnstormer start --no-open
 
 # Check if barnstormer is running
-cargo run -- status
+barnstormer status
 
 # Import a spec from any file (DOT, YAML, markdown, plain text)
-cargo run -- import path/to/file.md
-cargo run -- import design.dot --format dot
-cargo run -- import --text "Build a CLI task manager"
-cat notes.txt | cargo run -- import -
+barnstormer import path/to/file.md
+barnstormer import design.dot --format dot
+barnstormer import --text "Build a CLI task manager"
+cat notes.txt | barnstormer import -
 ```
 
 The server runs at [http://127.0.0.1:7331](http://127.0.0.1:7331) by default.
@@ -211,3 +222,9 @@ barnstormer/
 - Commands use `#[serde(tag = "type")]` — agents must produce `{"type": "CreateCard", ...}`
 - Broadcast channel (4096 capacity) for event distribution
 - Question handling uses CAS (compare-and-swap) to prevent concurrent agent questions
+
+---
+
+Built by [2389 Research, Inc.](https://2389.ai) · [GitHub](https://github.com/2389-research) · [Email](mailto:hello@2389.ai) · [Twitter](https://twitter.com/2389_research) · [LinkedIn](https://linkedin.com/company/2389-research) · [Bluesky](https://bsky.app/profile/2389.ai)
+
+&copy; 2026 2389 Research, Inc.
