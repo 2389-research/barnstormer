@@ -1,0 +1,35 @@
+{# ABOUTME: Spec tab that renders a synthesized specification document from cards grouped by type. #}
+{# ABOUTME: Replaces the diagram tab; displays markdown-rendered spec with copy/download toolbar. #}
+
+<div class="document spec-document">
+    <div class="document-notice">
+        <span>Synthesized from Plan &amp; Spec cards, grouped by type.</span>
+        <button class="btn btn-sm btn-regen"
+                hx-get="/web/specs/{{ spec_id }}/spec"
+                hx-target="#canvas" hx-swap="innerHTML"
+                title="Regenerate spec from current data">
+            Regenerate
+        </button>
+        <button class="btn btn-sm btn-copy" id="spec-copy-md" title="Copy Markdown source">Copy Markdown</button>
+        <a href="/web/specs/{{ spec_id }}/export/spec" download="spec.md" class="btn btn-sm btn-download">Download</a>
+    </div>
+
+    <div class="doc-content">
+        {{ spec_html|safe }}
+    </div>
+</div>
+
+<script>
+    (function() {
+        var md = {{ spec_markdown|json|safe }};
+        var copyBtn = document.getElementById('spec-copy-md');
+        if (copyBtn && md) {
+            copyBtn.addEventListener('click', function() {
+                navigator.clipboard.writeText(md).then(function() {
+                    copyBtn.textContent = 'Copied!';
+                    setTimeout(function() { copyBtn.textContent = 'Copy Markdown'; }, 2000);
+                });
+            });
+        }
+    })();
+</script>
