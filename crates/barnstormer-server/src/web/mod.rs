@@ -3963,6 +3963,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn export_spec_returns_200_with_correct_headers() {
+        let state = test_state();
+        let spec_id = create_test_spec(&state).await;
+
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::get(format!("/web/specs/{}/export/spec", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            content_type.contains("text/markdown"),
+            "content-type should be text/markdown, got: {}",
+            content_type
+        );
+
+        let disposition = resp
+            .headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            disposition.contains("spec.md"),
+            "should offer spec.md download, got: {}",
+            disposition
+        );
+    }
+
+    #[tokio::test]
+    async fn export_spec_for_nonexistent_spec_returns_404() {
+        let state = test_state();
+        let app = create_router(state, None);
+        let fake_id = ulid::Ulid::new();
+        let resp = app
+            .oneshot(
+                Request::get(format!("/web/specs/{}/export/spec", fake_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[tokio::test]
     async fn activity_transcript_handler_defaults_container_id() {
         let state = test_state();
 
