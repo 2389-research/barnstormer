@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use axum::extract::{Form, Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
 use barnstormer_agent::SwarmOrchestrator;
@@ -1414,16 +1414,17 @@ pub async fn artifacts(
     .into_response()
 }
 
-/// Diagram tab template showing a visual rendering of the DOT graph.
+/// Spec tab template showing a synthesized specification document.
 #[derive(Template, AskamaIntoResponse)]
-#[template(path = "partials/diagram.html")]
-pub struct DiagramTemplate {
+#[template(path = "partials/spec.html")]
+pub struct SpecTabTemplate {
     pub spec_id: String,
-    pub dot_content: String,
+    pub spec_html: String,
+    pub spec_markdown: String,
 }
 
-/// GET /web/specs/{id}/diagram - Render the Diagram tab with viz.js DOT visualization.
-pub async fn diagram(
+/// GET /web/specs/{id}/spec - Render the synthesized Spec tab.
+pub async fn spec(
     State(state): State<SharedState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
@@ -1445,11 +1446,13 @@ pub async fn diagram(
     };
 
     let spec_state = handle.read_state().await;
-    let dot_content = barnstormer_core::export::export_dot(&spec_state);
+    let spec_markdown = barnstormer_core::export::export_spec(&spec_state);
+    let spec_html = render_markdown(&spec_markdown);
 
-    DiagramTemplate {
+    SpecTabTemplate {
         spec_id: id,
-        dot_content,
+        spec_html,
+        spec_markdown,
     }
     .into_response()
 }
@@ -1561,6 +1564,45 @@ pub async fn export_dot(
         .header("content-disposition", "attachment; filename=\"spec.dot\"")
         .body(axum::body::Body::from(content))
         .unwrap()
+        .into_response()
+}
+
+/// GET /web/specs/{id}/export/spec - Download synthesized spec as Markdown file.
+pub async fn export_spec_download(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    let spec_state = handle.read_state().await;
+    let content = barnstormer_core::export::export_spec(&spec_state);
+
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"spec.md\"",
+            ),
+        ],
+        content,
+    )
         .into_response()
 }
 
@@ -3707,33 +3749,17 @@ mod tests {
         assert_eq!(resp.status(), 404);
     }
 
-    // ---- Diagram tab tests ----
+    // ---- Spec tab tests ----
 
     #[tokio::test]
-    async fn diagram_handler_returns_200() {
+    async fn spec_handler_returns_200() {
         let state = test_state();
+        let spec_id = create_test_spec(&state).await;
 
         let app = create_router(Arc::clone(&state), None);
         let resp = app
             .oneshot(
-                Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+diagram+testing+system"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), 200);
-
-        let spec_id = {
-            let actors = state.actors.read().await;
-            *actors.keys().next().expect("should have a spec")
-        };
-
-        let app2 = create_router(Arc::clone(&state), None);
-        let resp = app2
-            .oneshot(
-                Request::get(format!("/web/specs/{}/diagram", spec_id))
+                Request::get(format!("/web/specs/{}/spec", spec_id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -3746,20 +3772,20 @@ mod tests {
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(
-            html.contains("diagram-panel"),
-            "diagram response should contain diagram-panel: {}",
+            html.contains("spec-document"),
+            "spec response should contain spec-document class: {}",
             html
         );
     }
 
     #[tokio::test]
-    async fn diagram_for_nonexistent_spec_returns_404() {
+    async fn spec_for_nonexistent_spec_returns_404() {
         let state = test_state();
         let app = create_router(state, None);
         let fake_id = ulid::Ulid::new();
         let resp = app
             .oneshot(
-                Request::get(format!("/web/specs/{}/diagram", fake_id))
+                Request::get(format!("/web/specs/{}/spec", fake_id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -3769,25 +3795,26 @@ mod tests {
     }
 
     #[test]
-    fn diagram_template_renders_with_dot_content() {
-        let tmpl = DiagramTemplate {
+    fn spec_template_renders_with_content() {
+        let tmpl = SpecTabTemplate {
             spec_id: "01HTEST".to_string(),
-            dot_content: "digraph { A -> B }".to_string(),
+            spec_html: "<h1>Test</h1>".to_string(),
+            spec_markdown: "# Test".to_string(),
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("diagram-panel"), "should contain diagram-panel class");
-        assert!(rendered.contains("diagram-render"), "should contain diagram-render container");
-        assert!(rendered.contains("diagram-copy-dot"), "should contain copy DOT button");
+        assert!(rendered.contains("spec-document"), "should contain spec-document class");
+        assert!(rendered.contains("spec-copy-md"), "should contain copy markdown button");
     }
 
     #[test]
-    fn diagram_template_renders_empty_state() {
-        let tmpl = DiagramTemplate {
+    fn spec_template_renders_empty_state() {
+        let tmpl = SpecTabTemplate {
             spec_id: "01HTEST".to_string(),
-            dot_content: String::new(),
+            spec_html: String::new(),
+            spec_markdown: String::new(),
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("diagram-empty"), "should show empty state when no DOT content");
+        assert!(rendered.contains("spec-document"));
     }
 
     // ---- Export download tests ----
