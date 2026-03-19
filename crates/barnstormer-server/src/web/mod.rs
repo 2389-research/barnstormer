@@ -2982,11 +2982,11 @@ mod tests {
         assert!(rendered.contains("command-bar"), "should contain command-bar");
         assert!(rendered.contains("Test Spec"), "should contain spec title");
         assert!(rendered.contains("A test spec"), "should contain one-liner");
-        // Capsule view toggles for document, board, diagram
+        // Capsule view toggles for document, board, spec
         assert!(rendered.contains("view-toggles-capsule"), "should contain capsule view toggles");
         assert!(rendered.contains("data-view=\"document\""), "should contain document toggle");
         assert!(rendered.contains("data-view=\"board\""), "should contain board toggle");
-        assert!(rendered.contains("data-view=\"diagram\""), "should contain diagram toggle");
+        assert!(rendered.contains("data-view=\"spec\""), "should contain spec toggle");
         assert!(rendered.contains("view-toggle active"), "document toggle should be active");
         // Canvas and chat rail
         assert!(rendered.contains("id=\"canvas\""), "should contain canvas element");
