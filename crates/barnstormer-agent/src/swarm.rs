@@ -83,6 +83,28 @@ const CRITIC_SYSTEM_PROMPT: &str = "You are the critic agent. Your job is to rev
     card_type 'risk' or 'constraint' for issues you find. Narrate your analysis and provide \
     constructive feedback. Ask the user questions when you identify ambiguities that need human input.";
 
+/// System prompt for the Manager agent during the brainstorming phase.
+const MANAGER_BRAINSTORMING_PROMPT: &str = r#"You are the Manager agent in brainstorming mode. Your job is to understand the user's idea through structured Q&A before building a spec.
+
+## Rules
+1. Ask ONE question at a time — never multiple questions in one message
+2. Prefer multiple choice questions — easier for the user, faster iteration
+3. Use Boolean (yes/no) questions for binary decisions
+4. Use Freeform questions only when the answer can't be anticipated
+5. Understand the idea before creating cards — don't rush to populate the board
+6. Capture decisions as cards only when something is clearly decided
+7. Read existing cards for context — especially after "Resume brainstorming"
+8. Use show_canvas when a visual would help the user decide
+9. Call propose_transition when you have enough context to build a full spec
+
+## Flow
+- Start by understanding the core idea
+- Explore key decisions: architecture, scope, constraints, users
+- Capture firm decisions as cards along the way
+- When you have enough context, propose transitioning to active mode
+
+IMPORTANT: You are the primary point of contact for the human user. When you see messages from 'human' in the recent transcript, treat them as top priority — acknowledge them with narration, take action based on their input, and route their requests to the appropriate workflow. The human is actively engaged, so always respond to their messages before doing other work."#;
+
 /// Tool usage and workflow guidance appended to all agent system prompts at runtime.
 /// Includes the agent's own ID so it can use it in commands.
 fn tool_usage_guide(agent_id: &str) -> String {
@@ -116,8 +138,13 @@ pub fn system_prompt_for_role(role: &AgentRole) -> &'static str {
 
 /// Build the full system prompt for an agent, including the tool usage guide
 /// with the agent's ID substituted in.
-fn full_system_prompt(role: &AgentRole, agent_id: &str) -> String {
-    format!("{}{}", system_prompt_for_role(role), tool_usage_guide(agent_id))
+fn full_system_prompt(role: &AgentRole, agent_id: &str, phase: &SpecPhase) -> String {
+    let base = if *role == AgentRole::Manager && *phase == SpecPhase::Brainstorming {
+        MANAGER_BRAINSTORMING_PROMPT
+    } else {
+        system_prompt_for_role(role)
+    };
+    format!("{}{}", base, tool_usage_guide(agent_id))
 }
 
 /// Wraps a single agent's role and mutable context.
@@ -339,6 +366,7 @@ impl SwarmOrchestrator {
         pending_transition_question: &Arc<Mutex<Option<Ulid>>>,
         client: &Arc<dyn LlmClient>,
         model: &str,
+        phase: &SpecPhase,
     ) -> bool {
         // Start agent step
         let start_cmd = Command::StartAgentStep {
@@ -365,7 +393,7 @@ impl SwarmOrchestrator {
         // Create agent definition with role-specific system prompt + tool guide
         let definition = AgentDefinition::new(
             runner.role.label(),
-            full_system_prompt(&runner.role, &runner.agent_id),
+            full_system_prompt(&runner.role, &runner.agent_id, phase),
         )
         .model(model)
         .max_iterations(10);
@@ -510,6 +538,8 @@ async fn run_agent_by_index(
     )
     .await;
 
+    let phase = actor_ref.read_state().await.phase.clone();
+
     let did_work = SwarmOrchestrator::run_agent_step(
         &mut runner,
         &actor_ref,
@@ -517,6 +547,7 @@ async fn run_agent_by_index(
         &pending_transition_question,
         &client,
         &model,
+        &phase,
     )
     .await;
 
@@ -821,6 +852,7 @@ mod tests {
             &pending_transition,
             &client,
             "stub-model",
+            &SpecPhase::Active,
         )
         .await;
 
@@ -1366,5 +1398,26 @@ mod tests {
     fn should_not_transition_when_no_pending() {
         let pending = Mutex::new(None);
         assert!(!should_transition_on_answer(&pending, Ulid::new(), "yes"));
+    }
+
+    #[test]
+    fn manager_gets_brainstorming_prompt_in_brainstorming() {
+        let prompt = full_system_prompt(&AgentRole::Manager, "agent-123", &SpecPhase::Brainstorming);
+        assert!(prompt.contains("ONE question at a time"));
+        assert!(prompt.contains("brainstorming mode"));
+    }
+
+    #[test]
+    fn manager_gets_standard_prompt_in_active() {
+        let prompt = full_system_prompt(&AgentRole::Manager, "agent-123", &SpecPhase::Active);
+        assert!(!prompt.contains("ONE question at a time"));
+        assert!(prompt.contains("manager agent for a product specification"));
+    }
+
+    #[test]
+    fn non_manager_gets_same_prompt_regardless_of_phase() {
+        let active = full_system_prompt(&AgentRole::Brainstormer, "agent-123", &SpecPhase::Active);
+        let brainstorming = full_system_prompt(&AgentRole::Brainstormer, "agent-123", &SpecPhase::Brainstorming);
+        assert_eq!(active, brainstorming);
     }
 }
