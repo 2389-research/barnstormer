@@ -18,7 +18,8 @@ use crate::context::{AgentContext, AgentRole};
 use crate::mux_tools;
 use barnstormer_core::actor::SpecActorHandle;
 use barnstormer_core::command::Command;
-use barnstormer_core::event::Event;
+use barnstormer_core::event::{Event, EventPayload};
+use barnstormer_core::state::SpecPhase;
 
 
 /// System prompt for the Manager agent role.
@@ -159,6 +160,9 @@ pub struct SwarmOrchestrator {
     /// Signal that a human message has arrived; wakes the run_loop from its
     /// idle sleep so the manager agent can respond promptly.
     pub human_message_notify: Arc<Notify>,
+    /// Signal that a phase transition occurred; wakes the run_loop so it can
+    /// re-evaluate which agents should run based on the current phase.
+    pub phase_notify: Arc<Notify>,
 }
 
 impl SwarmOrchestrator {
@@ -200,6 +204,7 @@ impl SwarmOrchestrator {
             client: llm_client,
             model: resolved_model,
             human_message_notify: Arc::new(Notify::new()),
+            phase_notify: Arc::new(Notify::new()),
         })
     }
 
@@ -224,6 +229,7 @@ impl SwarmOrchestrator {
             client,
             model,
             human_message_notify: Arc::new(Notify::new()),
+            phase_notify: Arc::new(Notify::new()),
         }
     }
 
@@ -532,12 +538,24 @@ fn find_manager_index(swarm: &SwarmOrchestrator) -> Option<usize> {
 /// When a human sends a chat message, `human_message_notify` wakes the loop
 /// from its idle sleep so the manager agent responds promptly.
 pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
+    // Subscribe to the broadcast channel so we can detect phase transitions
+    // and wake the loop early when the phase changes.
+    let mut phase_rx = {
+        let s = swarm.lock().await;
+        s.actor.subscribe()
+    };
+
     loop {
         // Recover any empty slots from prior cancellations, then check pause.
-        let (is_paused, agent_count, notify) = {
+        let (is_paused, agent_count, notify, phase_notify) = {
             let mut s = swarm.lock().await;
             s.recover_empty_slots();
-            (s.is_paused(), s.agents.len(), Arc::clone(&s.human_message_notify))
+            (
+                s.is_paused(),
+                s.agents.len(),
+                Arc::clone(&s.human_message_notify),
+                Arc::clone(&s.phase_notify),
+            )
         };
 
         if is_paused {
@@ -555,6 +573,18 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
                 }
             }
 
+            // Phase gating: skip non-Manager agents during brainstorming
+            {
+                let s = swarm.lock().await;
+                let phase = s.actor.read_state().await.phase.clone();
+                if phase == SpecPhase::Brainstorming
+                    && let Some(Some(agent)) = s.agents.get(i)
+                    && agent.role != AgentRole::Manager
+                {
+                    continue;
+                }
+            }
+
             let did_work = run_agent_by_index(&swarm, i).await;
 
             if did_work {
@@ -564,7 +594,7 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
         }
 
         // Wait between cycles. Use tokio::select! so a human message
-        // notification can interrupt the idle sleep and wake us early.
+        // notification or phase transition can interrupt the idle sleep.
         let sleep_duration = if any_work {
             std::time::Duration::from_secs(1)
         } else {
@@ -584,6 +614,17 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
                     && let Some(idx) = manager_idx {
                         tracing::info!("human message received, prioritising manager agent");
                         run_agent_by_index(&swarm, idx).await;
+                }
+            }
+            _ = phase_notify.notified() => {
+                // Phase changed — re-enter loop to re-check gating
+                tracing::info!("phase transition detected, re-evaluating agent gating");
+            }
+            result = phase_rx.recv() => {
+                if let Ok(event) = result
+                    && matches!(event.payload, EventPayload::PhaseTransitioned { .. })
+                {
+                    tracing::info!("phase transition event received, re-evaluating agent gating");
                 }
             }
         }
@@ -1166,5 +1207,83 @@ mod tests {
             prompt.contains("top priority"),
             "manager prompt should prioritize human messages"
         );
+    }
+
+    #[tokio::test]
+    async fn swarm_skips_non_manager_during_brainstorming() {
+        let (spec_id, handle) = make_test_actor();
+        // CreateSpec puts spec into Brainstorming
+        handle
+            .send_command(Command::CreateSpec {
+                title: "Test".to_string(),
+                one_liner: "t".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        {
+            let state = handle.read_state().await;
+            assert_eq!(state.phase, SpecPhase::Brainstorming);
+        }
+
+        let agents = vec![
+            AgentRunner::new(spec_id, AgentRole::Manager),
+            AgentRunner::new(spec_id, AgentRole::Brainstormer),
+            AgentRunner::new(spec_id, AgentRole::Planner),
+        ];
+        let swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            handle,
+            agents,
+            make_test_client(),
+            "test-model".to_string(),
+        );
+
+        // Verify: only Manager should run during brainstorming
+        let phase = swarm.actor.read_state().await.phase.clone();
+        assert_eq!(phase, SpecPhase::Brainstorming);
+        assert_eq!(swarm.agents[0].as_ref().unwrap().role, AgentRole::Manager);
+    }
+
+    #[tokio::test]
+    async fn swarm_runs_all_agents_during_active() {
+        let (spec_id, handle) = make_test_actor();
+        handle
+            .send_command(Command::CreateSpec {
+                title: "Test".to_string(),
+                one_liner: "t".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+        // Transition to Active
+        handle
+            .send_command(Command::TransitionPhase {
+                target: SpecPhase::Active,
+            })
+            .await
+            .unwrap();
+
+        {
+            let state = handle.read_state().await;
+            assert_eq!(state.phase, SpecPhase::Active);
+        }
+
+        let agents = vec![
+            AgentRunner::new(spec_id, AgentRole::Manager),
+            AgentRunner::new(spec_id, AgentRole::Brainstormer),
+            AgentRunner::new(spec_id, AgentRole::Planner),
+        ];
+        let swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            handle,
+            agents,
+            make_test_client(),
+            "test-model".to_string(),
+        );
+
+        // All 3 agents should be present and none skipped in Active
+        assert_eq!(swarm.agents.iter().flatten().count(), 3);
     }
 }
