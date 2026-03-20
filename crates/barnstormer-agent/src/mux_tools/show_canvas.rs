@@ -1,15 +1,21 @@
 // ABOUTME: Tool that lets the Manager push HTML content to the canvas panel during brainstorming.
 // ABOUTME: Validates phase, sanitizes HTML, and sends UpdateCanvas command to actor.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use async_trait::async_trait;
 use mux::tool::{Tool, ToolResult};
+use regex::Regex;
 use serde_json::json;
 
 use barnstormer_core::actor::SpecActorHandle;
 use barnstormer_core::command::Command;
 use barnstormer_core::state::SpecPhase;
+
+static RE_SCRIPT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap());
+static RE_ON_EVENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)"#).unwrap());
 
 #[derive(Clone)]
 pub struct ShowCanvasTool {
@@ -18,10 +24,8 @@ pub struct ShowCanvasTool {
 
 /// Strip <script> tags and on* event attributes from HTML content.
 fn sanitize_html(input: &str) -> String {
-    let re_script = regex::Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap();
-    let without_scripts = re_script.replace_all(input, "");
-    let re_on = regex::Regex::new(r#"(?i)\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)"#).unwrap();
-    re_on.replace_all(&without_scripts, "").to_string()
+    let without_scripts = RE_SCRIPT.replace_all(input, "");
+    RE_ON_EVENT.replace_all(&without_scripts, "").to_string()
 }
 
 #[async_trait]

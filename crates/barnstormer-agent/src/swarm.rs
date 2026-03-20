@@ -578,11 +578,11 @@ fn should_transition_on_answer(
     question_id: Ulid,
     answer: &str,
 ) -> bool {
-    let stored = { *pending.lock().unwrap() };
-    if let Some(pending_id) = stored
+    let mut guard = pending.lock().unwrap();
+    if let Some(pending_id) = *guard
         && question_id == pending_id
     {
-        *pending.lock().unwrap() = None;
+        *guard = None;
         return answer.to_lowercase().starts_with('y') || answer == "true";
     }
     false
