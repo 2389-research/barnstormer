@@ -252,6 +252,8 @@ pub async fn import_spec(
         SpecPhase::Active => "active".to_string(),
     };
 
+    let canvas_content = spec_state.canvas_content.clone();
+
     let mut response = SpecViewTemplate {
         spec_id: spec_id_str.clone(),
         title: core.title.clone(),
@@ -259,6 +261,7 @@ pub async fn import_spec(
         goal: core.goal.clone(),
         phase,
         lanes,
+        canvas_content,
     }
     .into_response();
 
@@ -428,6 +431,8 @@ pub async fn create_spec(
         SpecPhase::Active => "active".to_string(),
     };
 
+    let canvas_content = spec_state.canvas_content.clone();
+
     let mut response = SpecViewTemplate {
         spec_id: spec_id_str.clone(),
         title: core.title.clone(),
@@ -435,6 +440,7 @@ pub async fn create_spec(
         goal: core.goal.clone(),
         phase,
         lanes,
+        canvas_content,
     }
     .into_response();
 
@@ -562,6 +568,7 @@ pub struct SpecViewTemplate {
     pub goal: String,
     pub phase: String,
     pub lanes: Vec<LaneData>,
+    pub canvas_content: Option<String>,
 }
 
 /// GET /web/specs/{id} - Render the spec compositor (command bar + canvas + chat rail).
@@ -604,6 +611,8 @@ pub async fn spec_view(
         SpecPhase::Active => "active".to_string(),
     };
 
+    let canvas_content = spec_state.canvas_content.clone();
+
     SpecViewTemplate {
         spec_id: id,
         title: core.title.clone(),
@@ -611,6 +620,7 @@ pub async fn spec_view(
         goal: core.goal.clone(),
         phase,
         lanes,
+        canvas_content,
     }
     .into_response()
 }
@@ -3071,6 +3081,7 @@ mod tests {
             goal: "Test goal".to_string(),
             phase: "active".to_string(),
             lanes: vec![],
+            canvas_content: None,
         };
         let rendered = tmpl.render().unwrap();
         // Command bar with title and subtitle
@@ -4911,5 +4922,99 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn spec_view_brainstorming_contains_canvas_listener() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("description=Canvas+listener+test"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains("sse:canvas_updated"),
+            "should contain canvas_updated SSE listener"
+        );
+        assert!(
+            html.contains("agent-canvas"),
+            "should contain agent-canvas element"
+        );
+    }
+
+    #[tokio::test]
+    async fn spec_view_prepopulates_canvas_content() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("description=Canvas+prepopulate+test"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        // Send UpdateCanvas command to set canvas content
+        {
+            let actors = state.actors.read().await;
+            let handle = actors.get(&spec_id).unwrap();
+            handle
+                .send_command(Command::UpdateCanvas {
+                    content: "<p>Canvas pre-populated content</p>".to_string(),
+                })
+                .await
+                .unwrap();
+        }
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains("<p>Canvas pre-populated content</p>"),
+            "should contain pre-populated canvas content"
+        );
+        assert!(
+            html.contains("display:block"),
+            "canvas should be visible when content is present"
+        );
     }
 }

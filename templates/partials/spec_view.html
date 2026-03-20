@@ -31,7 +31,12 @@
           hx-get="/web/specs/{{ spec_id }}/chat-panel"
           hx-trigger="load" hx-swap="innerHTML">
     </main>
+    {% match canvas_content %}
+    {% when Some with (content) %}
+    <div id="agent-canvas" style="display:block;">{{ content|safe }}</div>
+    {% when None %}
     <div id="agent-canvas" style="display:none;"></div>
+    {% endmatch %}
 </div>
 
 </div>
@@ -57,6 +62,19 @@
         if (compositor) {
             compositor.addEventListener('sse:phase_transitioned', function() {
                 htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
+            });
+
+            compositor.addEventListener('sse:canvas_updated', function(evt) {
+                var data = JSON.parse(evt.detail.data);
+                var canvas = document.getElementById('agent-canvas');
+                var content = data.payload && data.payload.content;
+                if (content && content.trim() !== '') {
+                    canvas.innerHTML = content;
+                    canvas.style.display = 'block';
+                } else {
+                    canvas.innerHTML = '';
+                    canvas.style.display = 'none';
+                }
             });
         }
     })();
