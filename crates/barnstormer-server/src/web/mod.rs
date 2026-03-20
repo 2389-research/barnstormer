@@ -5017,4 +5017,52 @@ mod tests {
             "canvas should be visible when content is present"
         );
     }
+
+    #[tokio::test]
+    async fn state_api_includes_canvas_content() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("description=Canvas+state+test"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        {
+            let actors = state.actors.read().await;
+            let handle = actors.get(&spec_id).unwrap();
+            handle
+                .send_command(Command::UpdateCanvas {
+                    content: "<p>Check</p>".to_string(),
+                })
+                .await
+                .unwrap();
+        }
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/api/specs/{}/state", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json.get("canvas_content").and_then(|v| v.as_str()),
+            Some("<p>Check</p>")
+        );
+    }
 }
