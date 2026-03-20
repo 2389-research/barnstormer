@@ -347,9 +347,11 @@ impl SwarmOrchestrator {
         }
 
         // Build tool registry for this agent
+        let pending_transition_question = Arc::new(std::sync::Mutex::new(None::<Ulid>));
         let registry = mux_tools::build_registry(
             Arc::clone(actor),
             Arc::clone(question_pending),
+            pending_transition_question,
             runner.agent_id.clone(),
         )
         .await;
