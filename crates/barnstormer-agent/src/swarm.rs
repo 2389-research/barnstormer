@@ -2,6 +2,7 @@
 // ABOUTME: Each agent runs as a mux SubAgent with domain tools, coordinated by pause/resume flags and event subscriptions.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::{broadcast, Notify};
@@ -163,6 +164,9 @@ pub struct SwarmOrchestrator {
     /// Signal that a phase transition occurred; wakes the run_loop so it can
     /// re-evaluate which agents should run based on the current phase.
     pub phase_notify: Arc<Notify>,
+    /// Tracks the question ID of a pending transition question so the swarm
+    /// can watch for its answer and trigger a phase transition automatically.
+    pub pending_transition_question: Arc<Mutex<Option<Ulid>>>,
 }
 
 impl SwarmOrchestrator {
@@ -205,6 +209,7 @@ impl SwarmOrchestrator {
             model: resolved_model,
             human_message_notify: Arc::new(Notify::new()),
             phase_notify: Arc::new(Notify::new()),
+            pending_transition_question: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -230,6 +235,7 @@ impl SwarmOrchestrator {
             model,
             human_message_notify: Arc::new(Notify::new()),
             phase_notify: Arc::new(Notify::new()),
+            pending_transition_question: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -330,6 +336,7 @@ impl SwarmOrchestrator {
         runner: &mut AgentRunner,
         actor: &Arc<SpecActorHandle>,
         question_pending: &Arc<AtomicBool>,
+        pending_transition_question: &Arc<Mutex<Option<Ulid>>>,
         client: &Arc<dyn LlmClient>,
         model: &str,
     ) -> bool {
@@ -347,11 +354,10 @@ impl SwarmOrchestrator {
         }
 
         // Build tool registry for this agent
-        let pending_transition_question = Arc::new(std::sync::Mutex::new(None::<Ulid>));
         let registry = mux_tools::build_registry(
             Arc::clone(actor),
             Arc::clone(question_pending),
-            pending_transition_question,
+            Arc::clone(pending_transition_question),
             runner.agent_id.clone(),
         )
         .await;
@@ -474,6 +480,7 @@ async fn run_agent_by_index(
         let mut s = swarm.lock().await;
         let actor_ref = Arc::clone(&s.actor);
         let question_pending = Arc::clone(&s.question_pending);
+        let pending_transition_question = Arc::clone(&s.pending_transition_question);
         let client = Arc::clone(&s.client);
         let model = s.model.clone();
         match s.agents[index].take() {
@@ -482,7 +489,7 @@ async fn run_agent_by_index(
                 // buffered events so we drain them below.
                 let event_rx =
                     std::mem::replace(&mut s.event_receivers[index], actor_ref.subscribe());
-                Some((runner, event_rx, actor_ref, question_pending, client, model))
+                Some((runner, event_rx, actor_ref, question_pending, pending_transition_question, client, model))
             }
             None => {
                 tracing::warn!(agent_index = index, "agent runner slot is empty, skipping");
@@ -490,7 +497,7 @@ async fn run_agent_by_index(
             }
         }
     };
-    let Some((mut runner, mut event_rx, actor_ref, question_pending, client, model)) = extracted
+    let Some((mut runner, mut event_rx, actor_ref, question_pending, pending_transition_question, client, model)) = extracted
     else {
         return false;
     };
@@ -507,6 +514,7 @@ async fn run_agent_by_index(
         &mut runner,
         &actor_ref,
         &question_pending,
+        &pending_transition_question,
         &client,
         &model,
     )
@@ -529,6 +537,24 @@ fn find_manager_index(swarm: &SwarmOrchestrator) -> Option<usize> {
             .map(|r| r.role == AgentRole::Manager)
             .unwrap_or(false)
     })
+}
+
+/// Check if a QuestionAnswered event matches a pending transition question.
+/// Returns true if transition should proceed (yes answer).
+/// Clears the pending question ID regardless of the answer.
+fn should_transition_on_answer(
+    pending: &Mutex<Option<Ulid>>,
+    question_id: Ulid,
+    answer: &str,
+) -> bool {
+    let stored = { *pending.lock().unwrap() };
+    if let Some(pending_id) = stored
+        && question_id == pending_id
+    {
+        *pending.lock().unwrap() = None;
+        return answer.to_lowercase().starts_with('y') || answer == "true";
+    }
+    false
 }
 
 /// Run the agent loop. This drives all agents in the swarm through their
@@ -592,6 +618,18 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
             if did_work {
                 any_work = true;
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+
+        // Check for transition question answers
+        while let Ok(event) = phase_rx.try_recv() {
+            if let EventPayload::QuestionAnswered { question_id, answer } = &event.payload {
+                let s = swarm.lock().await;
+                if should_transition_on_answer(&s.pending_transition_question, *question_id, answer) {
+                    let _ = s.actor.send_command(Command::TransitionPhase {
+                        target: SpecPhase::Active,
+                    }).await;
+                }
             }
         }
 
@@ -774,11 +812,13 @@ mod tests {
         let question_pending = Arc::new(AtomicBool::new(false));
 
         let mut runner = AgentRunner::new(spec_id, AgentRole::Brainstormer);
+        let pending_transition = Arc::new(Mutex::new(None));
 
         let did_work = SwarmOrchestrator::run_agent_step(
             &mut runner,
             &actor_arc,
             &question_pending,
+            &pending_transition,
             &client,
             "stub-model",
         )
@@ -1287,5 +1327,44 @@ mod tests {
 
         // All 3 agents should be present and none skipped in Active
         assert_eq!(swarm.agents.iter().flatten().count(), 3);
+    }
+
+    #[test]
+    fn should_transition_on_yes_answer() {
+        let id = Ulid::new();
+        let pending = Mutex::new(Some(id));
+        assert!(should_transition_on_answer(&pending, id, "yes"));
+        assert!(pending.lock().unwrap().is_none(), "should clear pending");
+    }
+
+    #[test]
+    fn should_transition_on_true_answer() {
+        let id = Ulid::new();
+        let pending = Mutex::new(Some(id));
+        assert!(should_transition_on_answer(&pending, id, "true"));
+        assert!(pending.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn should_not_transition_on_no_answer() {
+        let id = Ulid::new();
+        let pending = Mutex::new(Some(id));
+        assert!(!should_transition_on_answer(&pending, id, "no"));
+        assert!(pending.lock().unwrap().is_none(), "should still clear pending");
+    }
+
+    #[test]
+    fn should_not_transition_on_wrong_question_id() {
+        let id = Ulid::new();
+        let wrong = Ulid::new();
+        let pending = Mutex::new(Some(id));
+        assert!(!should_transition_on_answer(&pending, wrong, "yes"));
+        assert!(pending.lock().unwrap().is_some(), "should NOT clear pending for wrong ID");
+    }
+
+    #[test]
+    fn should_not_transition_when_no_pending() {
+        let pending = Mutex::new(None);
+        assert!(!should_transition_on_answer(&pending, Ulid::new(), "yes"));
     }
 }
