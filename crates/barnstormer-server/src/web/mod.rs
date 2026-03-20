@@ -8,7 +8,7 @@ use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
 use barnstormer_agent::SwarmOrchestrator;
-use barnstormer_core::{Command, SpecState, spawn};
+use barnstormer_core::{ActorError, Command, SpecPhase, SpecState, spawn};
 use barnstormer_store::{JsonlLog, SnapshotData, save_snapshot};
 use chrono::Utc;
 use ulid::Ulid;
@@ -2006,6 +2006,73 @@ pub async fn undo(State(state): State<SharedState>, Path(id): Path<String>) -> i
     let spec_state = handle.read_state().await;
     let lanes = cards_by_lane(&spec_state);
     BoardTemplate { spec_id: id, lanes }.into_response()
+}
+
+#[derive(Deserialize)]
+pub struct PhaseForm {
+    target: String,
+}
+
+/// POST /web/specs/{id}/phase - Transition a spec between phases.
+pub async fn transition_phase(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    Form(form): Form<PhaseForm>,
+) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let target = match form.target.as_str() {
+        "brainstorming" => SpecPhase::Brainstorming,
+        "active" => SpecPhase::Active,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Html("<p class=\"error-msg\">Invalid phase target.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    let actors = state.actors.read().await;
+    let Some(handle) = actors.get(&spec_id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+        )
+            .into_response();
+    };
+
+    match handle
+        .send_command(Command::TransitionPhase {
+            target: target.clone(),
+        })
+        .await
+    {
+        Ok(_) => {
+            let label = match target {
+                SpecPhase::Brainstorming => "Brainstorming",
+                SpecPhase::Active => "Active",
+            };
+            (
+                StatusCode::OK,
+                Html(format!("<span class=\"phase-badge\">{}</span>", label)),
+            )
+                .into_response()
+        }
+        Err(ActorError::AlreadyInPhase) => (
+            StatusCode::CONFLICT,
+            Html("<p class=\"error-msg\">Already in target phase.</p>".to_string()),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(format!("<p class=\"error-msg\">Error: {}</p>", e)),
+        )
+            .into_response(),
+    }
 }
 
 /// Provider status partial template.
@@ -4380,5 +4447,204 @@ mod tests {
         let result = render_markdown("```\nlet x = 1;\n```");
         assert!(result.contains("<code>"));
         assert!(result.contains("let x = 1;"));
+    }
+
+    #[tokio::test]
+    async fn phase_transition_to_active_returns_200() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("description=Phase+test+spec"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::post(&format!("/web/specs/{}/phase", spec_id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("target=active"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn phase_transition_to_brainstorming_returns_200() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("description=Phase+test+spec"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        // First transition to Active
+        let app2 = create_router(Arc::clone(&state), None);
+        app2.oneshot(
+            Request::post(&format!("/web/specs/{}/phase", spec_id))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("target=active"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        // Then back to Brainstorming
+        let app3 = create_router(Arc::clone(&state), None);
+        let resp = app3
+            .oneshot(
+                Request::post(&format!("/web/specs/{}/phase", spec_id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("target=brainstorming"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn phase_transition_invalid_target_returns_400() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("description=Phase+test+spec"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::post(&format!("/web/specs/{}/phase", spec_id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("target=invalid"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn phase_transition_already_in_phase_returns_409() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("description=Phase+test+spec"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        // Transition to active first
+        let app2 = create_router(Arc::clone(&state), None);
+        app2.oneshot(
+            Request::post(&format!("/web/specs/{}/phase", spec_id))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("target=active"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        // Try active again — 409
+        let app3 = create_router(Arc::clone(&state), None);
+        let resp = app3
+            .oneshot(
+                Request::post(&format!("/web/specs/{}/phase", spec_id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("target=active"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn phase_transition_nonexistent_spec_returns_404() {
+        let state = test_state();
+        let fake_id = ulid::Ulid::new();
+        let app = create_router(state, None);
+        let resp = app
+            .oneshot(
+                Request::post(&format!("/web/specs/{}/phase", fake_id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("target=active"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn state_api_includes_phase_field() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("description=Phase+test+spec"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/api/specs/{}/state", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.get("phase").is_some());
     }
 }
