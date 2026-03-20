@@ -80,6 +80,9 @@ pub enum EventPayload {
     SnapshotWritten {
         snapshot_id: u64,
     },
+    PhaseTransitioned {
+        phase: crate::state::SpecPhase,
+    },
 }
 
 #[cfg(test)]
@@ -212,5 +215,12 @@ mod tests {
     #[test]
     fn event_serializes_round_trip_snapshot_written() {
         round_trip_event(EventPayload::SnapshotWritten { snapshot_id: 42 });
+    }
+
+    #[test]
+    fn phase_transitioned_round_trip() {
+        round_trip_event(EventPayload::PhaseTransitioned {
+            phase: crate::state::SpecPhase::Brainstorming,
+        });
     }
 }

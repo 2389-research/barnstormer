@@ -276,6 +276,11 @@ impl SpecState {
             EventPayload::SnapshotWritten { .. } => {
                 // No-op on state
             }
+
+            EventPayload::PhaseTransitioned { phase } => {
+                self.phase = phase.clone();
+                // No undo entry — phase transitions are lifecycle events
+            }
         }
     }
 
@@ -322,6 +327,9 @@ impl SpecState {
             }
             EventPayload::CardDeleted { card_id } => {
                 self.cards.remove(card_id);
+            }
+            EventPayload::PhaseTransitioned { phase } => {
+                self.phase = phase.clone();
             }
             // Other event types during undo are applied normally
             _ => {
@@ -775,6 +783,38 @@ mod tests {
     fn spec_state_new_defaults_to_active() {
         let state = SpecState::new();
         assert_eq!(state.phase, SpecPhase::Active);
+    }
+
+    #[test]
+    fn phase_transitioned_updates_state() {
+        let mut state = SpecState::new();
+        assert_eq!(state.phase, SpecPhase::Active);
+
+        let event = Event {
+            event_id: 1,
+            spec_id: Ulid::new(),
+            timestamp: Utc::now(),
+            payload: EventPayload::PhaseTransitioned {
+                phase: SpecPhase::Brainstorming,
+            },
+        };
+        state.apply(&event);
+        assert_eq!(state.phase, SpecPhase::Brainstorming);
+    }
+
+    #[test]
+    fn phase_transitioned_does_not_push_undo() {
+        let mut state = SpecState::new();
+        let event = Event {
+            event_id: 1,
+            spec_id: Ulid::new(),
+            timestamp: Utc::now(),
+            payload: EventPayload::PhaseTransitioned {
+                phase: SpecPhase::Brainstorming,
+            },
+        };
+        state.apply(&event);
+        assert!(state.undo_stack.is_empty());
     }
 
     #[test]

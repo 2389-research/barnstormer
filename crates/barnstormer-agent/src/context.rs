@@ -214,6 +214,9 @@ fn describe_event_payload(payload: &EventPayload) -> String {
         EventPayload::SnapshotWritten { snapshot_id } => {
             format!("snapshot #{} written", snapshot_id)
         }
+        EventPayload::PhaseTransitioned { phase } => {
+            format!("phase transitioned to {:?}", phase)
+        }
     }
 }
 
