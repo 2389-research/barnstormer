@@ -324,6 +324,10 @@ impl SpecActor {
                 vec![EventPayload::PhaseTransitioned { phase: target }]
             }
 
+            Command::UpdateCanvas { content } => {
+                vec![EventPayload::CanvasUpdated { content }]
+            }
+
             Command::Undo => {
                 if state.undo_stack.is_empty() {
                     return Err(ActorError::NothingToUndo);
@@ -769,5 +773,33 @@ mod tests {
             .unwrap();
         let state = handle.read_state().await;
         assert_eq!(state.phase, SpecPhase::Brainstorming);
+    }
+
+    #[tokio::test]
+    async fn update_canvas_produces_event() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "Test".to_string(),
+                one_liner: "t".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let events = handle
+            .send_command(Command::UpdateCanvas {
+                content: "<h1>Hello</h1>".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0].payload {
+            EventPayload::CanvasUpdated { content } => {
+                assert_eq!(content, "<h1>Hello</h1>");
+            }
+            _ => panic!("wrong event"),
+        }
     }
 }

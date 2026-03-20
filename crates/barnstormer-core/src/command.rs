@@ -73,6 +73,9 @@ pub enum Command {
     TransitionPhase {
         target: crate::state::SpecPhase,
     },
+    UpdateCanvas {
+        content: String,
+    },
     Undo,
 }
 
@@ -150,6 +153,9 @@ mod tests {
             Command::TransitionPhase {
                 target: crate::state::SpecPhase::Active,
             },
+            Command::UpdateCanvas {
+                content: "<h1>Hello</h1>".to_string(),
+            },
             Command::Undo,
         ];
 
@@ -175,6 +181,20 @@ mod tests {
             Command::TransitionPhase { target } => {
                 assert_eq!(target, crate::state::SpecPhase::Active);
             }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn update_canvas_round_trip() {
+        let cmd = Command::UpdateCanvas {
+            content: "<h1>Test</h1>".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"UpdateCanvas\""));
+        let back: Command = serde_json::from_str(&json).unwrap();
+        match back {
+            Command::UpdateCanvas { content } => assert_eq!(content, "<h1>Test</h1>"),
             _ => panic!("wrong variant"),
         }
     }

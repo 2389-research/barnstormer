@@ -481,6 +481,7 @@ mod tests {
             last_event_id: 0,
             lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
             phase: SpecPhase::Active,
+            canvas_content: None,
         }
     }
 
@@ -971,6 +972,7 @@ mod tests {
             last_event_id: 0,
             lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
             phase: SpecPhase::Active,
+            canvas_content: None,
         };
         let dot = export_dot(&state);
 
@@ -991,6 +993,7 @@ mod tests {
             last_event_id: 0,
             lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
             phase: SpecPhase::Active,
+            canvas_content: None,
         };
         let dot = export_dot(&state);
 
@@ -1030,6 +1033,7 @@ mod tests {
             last_event_id: 0,
             lanes: vec!["Ideas".to_string()],
             phase: SpecPhase::Active,
+            canvas_content: None,
         };
         let dot = export_dot(&state);
 

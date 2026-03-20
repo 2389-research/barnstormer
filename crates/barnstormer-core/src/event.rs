@@ -83,6 +83,9 @@ pub enum EventPayload {
     PhaseTransitioned {
         phase: crate::state::SpecPhase,
     },
+    CanvasUpdated {
+        content: String,
+    },
 }
 
 #[cfg(test)]
@@ -221,6 +224,13 @@ mod tests {
     fn phase_transitioned_round_trip() {
         round_trip_event(EventPayload::PhaseTransitioned {
             phase: crate::state::SpecPhase::Brainstorming,
+        });
+    }
+
+    #[test]
+    fn canvas_updated_round_trip() {
+        round_trip_event(EventPayload::CanvasUpdated {
+            content: "<h1>Test</h1>".to_string(),
         });
     }
 }
