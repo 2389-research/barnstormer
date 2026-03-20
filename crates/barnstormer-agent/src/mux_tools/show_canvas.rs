@@ -16,16 +16,23 @@ static RE_SCRIPT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap());
 static RE_ON_EVENT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?i)\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)"#).unwrap());
+static RE_JS_URI: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)(href|src|action)\s*=\s*["']?\s*javascript:"#).unwrap());
+static RE_DANGEROUS_TAGS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<(?:iframe|object|embed)[^>]*>.*?</(?:iframe|object|embed)>|<(?:iframe|object|embed)[^>]*/>").unwrap());
 
 #[derive(Clone)]
 pub struct ShowCanvasTool {
     pub(crate) actor: Arc<SpecActorHandle>,
 }
 
-/// Strip <script> tags and on* event attributes from HTML content.
+/// Strip dangerous HTML: <script>/<iframe>/<object>/<embed> tags, on* event
+/// attributes, and javascript: URIs in href/src/action attributes.
 fn sanitize_html(input: &str) -> String {
     let without_scripts = RE_SCRIPT.replace_all(input, "");
-    RE_ON_EVENT.replace_all(&without_scripts, "").to_string()
+    let without_dangerous = RE_DANGEROUS_TAGS.replace_all(&without_scripts, "");
+    let without_on = RE_ON_EVENT.replace_all(&without_dangerous, "");
+    RE_JS_URI.replace_all(&without_on, r#"$1=""#).to_string()
 }
 
 #[async_trait]
@@ -122,6 +129,23 @@ mod tests {
         let input = r#"<div style="color:red;"><h1>Title</h1><p>Body</p></div>"#;
         let result = sanitize_html(input);
         assert_eq!(result, input);
+    }
+
+    #[test]
+    fn sanitize_strips_javascript_uris() {
+        let input = r#"<a href="javascript:alert(document.cookie)">Click</a>"#;
+        let result = sanitize_html(input);
+        assert!(!result.contains("javascript:"));
+        assert!(result.contains("Click"));
+    }
+
+    #[test]
+    fn sanitize_strips_iframe_tags() {
+        let input = r#"<p>Safe</p><iframe src="evil.com"></iframe><p>Also safe</p>"#;
+        let result = sanitize_html(input);
+        assert!(!result.contains("iframe"));
+        assert!(result.contains("<p>Safe</p>"));
+        assert!(result.contains("<p>Also safe</p>"));
     }
 
     #[tokio::test]

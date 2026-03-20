@@ -188,9 +188,6 @@ pub struct SwarmOrchestrator {
     /// Signal that a human message has arrived; wakes the run_loop from its
     /// idle sleep so the manager agent can respond promptly.
     pub human_message_notify: Arc<Notify>,
-    /// Signal that a phase transition occurred; wakes the run_loop so it can
-    /// re-evaluate which agents should run based on the current phase.
-    pub phase_notify: Arc<Notify>,
     /// Tracks the question ID of a pending transition question so the swarm
     /// can watch for its answer and trigger a phase transition automatically.
     pub pending_transition_question: Arc<Mutex<Option<Ulid>>>,
@@ -235,7 +232,6 @@ impl SwarmOrchestrator {
             client: llm_client,
             model: resolved_model,
             human_message_notify: Arc::new(Notify::new()),
-            phase_notify: Arc::new(Notify::new()),
             pending_transition_question: Arc::new(Mutex::new(None)),
         })
     }
@@ -261,7 +257,6 @@ impl SwarmOrchestrator {
             client,
             model,
             human_message_notify: Arc::new(Notify::new()),
-            phase_notify: Arc::new(Notify::new()),
             pending_transition_question: Arc::new(Mutex::new(None)),
         }
     }
@@ -606,14 +601,13 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
 
     loop {
         // Recover any empty slots from prior cancellations, then check pause.
-        let (is_paused, agent_count, notify, phase_notify) = {
+        let (is_paused, agent_count, notify) = {
             let mut s = swarm.lock().await;
             s.recover_empty_slots();
             (
                 s.is_paused(),
                 s.agents.len(),
                 Arc::clone(&s.human_message_notify),
-                Arc::clone(&s.phase_notify),
             )
         };
 
@@ -686,10 +680,6 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
                         tracing::info!("human message received, prioritising manager agent");
                         run_agent_by_index(&swarm, idx).await;
                 }
-            }
-            _ = phase_notify.notified() => {
-                // Phase changed — re-enter loop to re-check gating
-                tracing::info!("phase transition detected, re-evaluating agent gating");
             }
             result = phase_rx.recv() => {
                 if let Ok(event) = result

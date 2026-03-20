@@ -54,11 +54,13 @@ impl Tool for ProposeTransitionTool {
             ));
         }
 
-        let summary = params
-            .get("summary")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("missing 'summary' parameter"))?
-            .to_string();
+        let summary = match params.get("summary").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => {
+                self.question_pending.store(false, Ordering::SeqCst);
+                return Err(anyhow::anyhow!("missing 'summary' parameter"));
+            }
+        };
 
         let question_id = Ulid::new();
         let question = UserQuestion::Boolean {
@@ -234,5 +236,36 @@ mod tests {
         let q2 = *pending_transition.lock().unwrap();
         assert!(q2.is_some());
         assert_ne!(q1, q2);
+    }
+
+    #[tokio::test]
+    async fn propose_transition_resets_pending_on_missing_summary() {
+        let (_id, handle) = make_test_actor();
+        let handle = Arc::new(handle);
+        handle
+            .send_command(Command::CreateSpec {
+                title: "Test".to_string(),
+                one_liner: "t".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let question_pending = Arc::new(AtomicBool::new(false));
+        let tool = ProposeTransitionTool {
+            actor: handle,
+            question_pending: question_pending.clone(),
+            pending_transition_question: Arc::new(Mutex::new(None)),
+        };
+
+        // Call without summary parameter — should error
+        let result = tool.execute(json!({})).await;
+        assert!(result.is_err());
+
+        // question_pending must be reset so future questions still work
+        assert!(
+            !question_pending.load(Ordering::SeqCst),
+            "question_pending should be reset after parameter validation failure"
+        );
     }
 }
