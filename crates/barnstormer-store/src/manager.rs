@@ -139,6 +139,7 @@ mod tests {
     use chrono::Utc;
     use barnstormer_core::card::Card;
     use barnstormer_core::model::SpecCore;
+    use barnstormer_core::state::SpecPhase;
     use std::collections::BTreeMap;
     use tempfile::TempDir;
 
@@ -164,6 +165,7 @@ mod tests {
             undo_stack: Vec::new(),
             last_event_id: 0,
             lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
+            phase: SpecPhase::Active,
         }
     }
 

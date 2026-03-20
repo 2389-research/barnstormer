@@ -116,6 +116,7 @@ mod tests {
     use super::*;
     use crate::card::Card;
     use crate::model::SpecCore;
+    use crate::state::SpecPhase;
     use chrono::Utc;
     use std::collections::BTreeMap;
     use ulid::Ulid;
@@ -143,6 +144,7 @@ mod tests {
             undo_stack: Vec::new(),
             last_event_id: 0,
             lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
+            phase: SpecPhase::Active,
         }
     }
 

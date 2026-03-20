@@ -18,6 +18,18 @@ pub struct UndoEntry {
     pub inverse: Vec<EventPayload>,
 }
 
+/// Tracks which lifecycle phase a spec is in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpecPhase {
+    Brainstorming,
+    Active,
+}
+
+fn default_phase_active() -> SpecPhase {
+    SpecPhase::Active
+}
+
 /// The full materialized state of a spec, built by replaying events.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpecState {
@@ -28,6 +40,8 @@ pub struct SpecState {
     pub undo_stack: Vec<UndoEntry>,
     pub last_event_id: u64,
     pub lanes: Vec<String>,
+    #[serde(default = "default_phase_active")]
+    pub phase: SpecPhase,
 }
 
 impl Default for SpecState {
@@ -40,6 +54,7 @@ impl Default for SpecState {
             undo_stack: Vec::new(),
             last_event_id: 0,
             lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
+            phase: SpecPhase::Active,
         }
     }
 }
@@ -736,5 +751,37 @@ mod tests {
             state.lanes,
             vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()]
         );
+    }
+
+    #[test]
+    fn spec_phase_serde_brainstorming() {
+        let phase = SpecPhase::Brainstorming;
+        let json = serde_json::to_string(&phase).unwrap();
+        assert_eq!(json, "\"brainstorming\"");
+        let back: SpecPhase = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, SpecPhase::Brainstorming);
+    }
+
+    #[test]
+    fn spec_phase_serde_active() {
+        let phase = SpecPhase::Active;
+        let json = serde_json::to_string(&phase).unwrap();
+        assert_eq!(json, "\"active\"");
+        let back: SpecPhase = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, SpecPhase::Active);
+    }
+
+    #[test]
+    fn spec_state_new_defaults_to_active() {
+        let state = SpecState::new();
+        assert_eq!(state.phase, SpecPhase::Active);
+    }
+
+    #[test]
+    fn snapshot_without_phase_deserializes_as_active() {
+        // Simulate an old snapshot JSON without a "phase" field
+        let json = r#"{"core":null,"cards":{},"transcript":[],"pending_question":null,"undo_stack":[],"last_event_id":0,"lanes":["Ideas","Plan","Spec"]}"#;
+        let state: SpecState = serde_json::from_str(json).unwrap();
+        assert_eq!(state.phase, SpecPhase::Active);
     }
 }
