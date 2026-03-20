@@ -4881,4 +4881,35 @@ mod tests {
             "should not have brainstorming badge"
         );
     }
+
+    #[tokio::test]
+    async fn board_returns_200_during_brainstorming() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("description=Board+peek+test"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        // Spec starts in Brainstorming — board should still work
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}/board", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
 }
