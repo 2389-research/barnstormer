@@ -247,12 +247,17 @@ pub async fn import_spec(
         }
     };
     let spec_id_str = spec_id.to_string();
+    let phase = match spec_state.phase {
+        SpecPhase::Brainstorming => "brainstorming".to_string(),
+        SpecPhase::Active => "active".to_string(),
+    };
 
     let mut response = SpecViewTemplate {
         spec_id: spec_id_str.clone(),
         title: core.title.clone(),
         one_liner: core.one_liner.clone(),
         goal: core.goal.clone(),
+        phase,
         lanes,
     }
     .into_response();
@@ -418,12 +423,17 @@ pub async fn create_spec(
         }
     };
     let spec_id_str = spec_id.to_string();
+    let phase = match spec_state.phase {
+        SpecPhase::Brainstorming => "brainstorming".to_string(),
+        SpecPhase::Active => "active".to_string(),
+    };
 
     let mut response = SpecViewTemplate {
         spec_id: spec_id_str.clone(),
         title: core.title.clone(),
         one_liner: core.one_liner.clone(),
         goal: core.goal.clone(),
+        phase,
         lanes,
     }
     .into_response();
@@ -550,6 +560,7 @@ pub struct SpecViewTemplate {
     pub title: String,
     pub one_liner: String,
     pub goal: String,
+    pub phase: String,
     pub lanes: Vec<LaneData>,
 }
 
@@ -588,12 +599,17 @@ pub async fn spec_view(
     };
 
     let lanes = cards_by_lane(&spec_state);
+    let phase = match spec_state.phase {
+        SpecPhase::Brainstorming => "brainstorming".to_string(),
+        SpecPhase::Active => "active".to_string(),
+    };
 
     SpecViewTemplate {
         spec_id: id,
         title: core.title.clone(),
         one_liner: core.one_liner.clone(),
         goal: core.goal.clone(),
+        phase,
         lanes,
     }
     .into_response()
@@ -3042,6 +3058,7 @@ mod tests {
             title: "Test Spec".to_string(),
             one_liner: "A test spec".to_string(),
             goal: "Test goal".to_string(),
+            phase: "active".to_string(),
             lanes: vec![],
         };
         let rendered = tmpl.render().unwrap();
@@ -4646,5 +4663,118 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(json.get("phase").is_some());
+    }
+
+    #[tokio::test]
+    async fn spec_view_brainstorming_contains_phase_marker() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("description=Brainstorming+UI+test"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains("data-view=\"brainstorming\""),
+            "should have brainstorming marker"
+        );
+        assert!(
+            html.contains("phase-brainstorming"),
+            "should have brainstorming badge"
+        );
+        assert!(
+            html.contains("View Board"),
+            "should have View Board button"
+        );
+        assert!(
+            html.contains("agent-canvas"),
+            "should have agent-canvas container"
+        );
+        assert!(
+            !html.contains("Resume Brainstorming"),
+            "should not have Resume button in brainstorming"
+        );
+    }
+
+    #[tokio::test]
+    async fn spec_view_active_contains_tab_toggles() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("description=Active+UI+test"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        // Transition to Active
+        let actors = state.actors.read().await;
+        let handle = actors.get(&spec_id).unwrap();
+        handle
+            .send_command(Command::TransitionPhase {
+                target: SpecPhase::Active,
+            })
+            .await
+            .unwrap();
+        drop(actors);
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains("data-view=\"document\""),
+            "should have document tab toggle"
+        );
+        assert!(
+            html.contains("Resume Brainstorming"),
+            "should have Resume button"
+        );
+        assert!(
+            !html.contains("data-view=\"brainstorming\""),
+            "should not have brainstorming marker"
+        );
+        assert!(
+            !html.contains("phase-brainstorming"),
+            "should not have brainstorming badge"
+        );
     }
 }
