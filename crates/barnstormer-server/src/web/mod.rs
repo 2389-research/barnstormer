@@ -1187,7 +1187,9 @@ pub struct TranscriptQuery {
 /// user-controlled values rendered into script tags and HTMX attributes.
 fn sanitize_container_id(raw: &str) -> String {
     match raw {
-        "activity-transcript" | "chat-transcript" | "mission-ticker" => raw.to_string(),
+        "activity-transcript" | "chat-transcript" | "mission-ticker" | "canvas" | "chat-rail" => {
+            raw.to_string()
+        }
         _ => "chat-transcript".to_string(),
     }
 }
@@ -1334,6 +1336,7 @@ pub struct ChatTranscriptTemplate {
 pub struct ChatPanelTemplate {
     pub spec_id: String,
     pub container_id: String,
+    pub is_fullwidth: bool,
     pub transcript: Vec<TranscriptEntry>,
     pub pending_question: Option<QuestionData>,
 }
@@ -1362,6 +1365,13 @@ pub async fn chat_panel(
 
     let spec_state = handle.read_state().await;
 
+    let is_fullwidth = spec_state.phase == SpecPhase::Brainstorming;
+    let container_id = if is_fullwidth {
+        "canvas".to_string()
+    } else {
+        "chat-transcript".to_string()
+    };
+
     let mut transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
@@ -1374,7 +1384,8 @@ pub async fn chat_panel(
 
     ChatPanelTemplate {
         spec_id: id,
-        container_id: "chat-transcript".to_string(),
+        container_id,
+        is_fullwidth,
         transcript,
         pending_question,
     }
@@ -3548,6 +3559,7 @@ mod tests {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
+            is_fullwidth: false,
             transcript: vec![],
             pending_question: None,
         };
@@ -3560,6 +3572,7 @@ mod tests {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
+            is_fullwidth: false,
             transcript: vec![
                 TranscriptEntry {
                     sender: "human".to_string(),
@@ -3602,6 +3615,7 @@ mod tests {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
+            is_fullwidth: false,
             transcript: vec![],
             pending_question: None,
         };
@@ -3616,6 +3630,7 @@ mod tests {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
+            is_fullwidth: false,
             transcript: vec![],
             pending_question: None,
         };
@@ -3632,6 +3647,7 @@ mod tests {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
+            is_fullwidth: false,
             transcript: vec![],
             pending_question: None,
         };
@@ -3699,6 +3715,92 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn chat_panel_brainstorming_has_fullwidth_class() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("description=Chat+fullwidth+test"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        // Spec starts in Brainstorming
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}/chat-panel", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains("chat-fullwidth"),
+            "should have fullwidth class in brainstorming"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_panel_active_no_fullwidth_class() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("description=Chat+active+test"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        // Transition to Active
+        let actors = state.actors.read().await;
+        let handle = actors.get(&spec_id).unwrap();
+        handle
+            .send_command(Command::TransitionPhase {
+                target: SpecPhase::Active,
+            })
+            .await
+            .unwrap();
+        drop(actors);
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}/chat-panel", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            !html.contains("chat-fullwidth"),
+            "should not have fullwidth class in active"
+        );
     }
 
     // ---- Artifacts tests ----
@@ -4203,6 +4305,8 @@ mod tests {
         assert_eq!(sanitize_container_id("activity-transcript"), "activity-transcript");
         assert_eq!(sanitize_container_id("chat-transcript"), "chat-transcript");
         assert_eq!(sanitize_container_id("mission-ticker"), "mission-ticker");
+        assert_eq!(sanitize_container_id("canvas"), "canvas");
+        assert_eq!(sanitize_container_id("chat-rail"), "chat-rail");
         assert_eq!(sanitize_container_id("'); alert('xss'); //"), "chat-transcript");
         assert_eq!(sanitize_container_id("malicious-id"), "chat-transcript");
         assert_eq!(sanitize_container_id(""), "chat-transcript");
