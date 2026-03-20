@@ -11,7 +11,7 @@ use ulid::Ulid;
 use crate::card::Card;
 use crate::command::Command;
 use crate::event::{Event, EventPayload};
-use crate::state::SpecState;
+use crate::state::{SpecPhase, SpecState};
 use crate::transcript::TranscriptMessage;
 
 /// Errors that can occur when processing commands in the actor.
@@ -34,6 +34,9 @@ pub enum ActorError {
 
     #[error("nothing to undo")]
     NothingToUndo,
+
+    #[error("already in target phase")]
+    AlreadyInPhase,
 
     #[error("actor channel closed")]
     ChannelClosed,
@@ -153,11 +156,16 @@ impl SpecActor {
                 one_liner,
                 goal,
             } => {
-                vec![EventPayload::SpecCreated {
-                    title,
-                    one_liner,
-                    goal,
-                }]
+                vec![
+                    EventPayload::SpecCreated {
+                        title,
+                        one_liner,
+                        goal,
+                    },
+                    EventPayload::PhaseTransitioned {
+                        phase: SpecPhase::Brainstorming,
+                    },
+                ]
             }
 
             Command::UpdateSpecCore {
@@ -309,6 +317,13 @@ impl SpecActor {
                 }]
             }
 
+            Command::TransitionPhase { target } => {
+                if state.phase == target {
+                    return Err(ActorError::AlreadyInPhase);
+                }
+                vec![EventPayload::PhaseTransitioned { phase: target }]
+            }
+
             Command::Undo => {
                 if state.undo_stack.is_empty() {
                     return Err(ActorError::NothingToUndo);
@@ -357,6 +372,7 @@ fn question_id_of(q: &crate::transcript::UserQuestion) -> Ulid {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::SpecPhase;
     use crate::transcript::UserQuestion;
 
     #[tokio::test]
@@ -373,9 +389,19 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), 2);
         assert_eq!(events[0].event_id, 1);
         assert_eq!(events[0].spec_id, spec_id);
+        match &events[0].payload {
+            EventPayload::SpecCreated { .. } => {}
+            _ => panic!("first event should be SpecCreated"),
+        }
+        match &events[1].payload {
+            EventPayload::PhaseTransitioned { phase } => {
+                assert_eq!(*phase, SpecPhase::Brainstorming);
+            }
+            _ => panic!("second event should be PhaseTransitioned"),
+        }
 
         let state = handle.read_state().await;
         let core = state.core.as_ref().expect("spec should be created");
@@ -566,11 +592,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), 2);
         assert_eq!(
             events[0].event_id, 51,
             "event_id should continue from last_event_id (50) + 1"
         );
+        assert_eq!(events[1].event_id, 52);
     }
 
     #[tokio::test]
@@ -652,5 +679,95 @@ mod tests {
             "expected NothingToUndo, got: {}",
             err
         );
+    }
+
+    #[tokio::test]
+    async fn transition_phase_produces_event() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        // CreateSpec puts spec into Brainstorming
+        handle
+            .send_command(Command::CreateSpec {
+                title: "Test".to_string(),
+                one_liner: "t".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let events = handle
+            .send_command(Command::TransitionPhase {
+                target: SpecPhase::Active,
+            })
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0].payload {
+            EventPayload::PhaseTransitioned { phase } => {
+                assert_eq!(*phase, SpecPhase::Active);
+            }
+            _ => panic!("wrong event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn transition_phase_already_in_phase_rejected() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "Test".to_string(),
+                one_liner: "t".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        // Brainstorming -> Active
+        handle
+            .send_command(Command::TransitionPhase {
+                target: SpecPhase::Active,
+            })
+            .await
+            .unwrap();
+
+        // Active -> Active should fail
+        let err = handle
+            .send_command(Command::TransitionPhase {
+                target: SpecPhase::Active,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ActorError::AlreadyInPhase));
+    }
+
+    #[tokio::test]
+    async fn transition_phase_brainstorming_active_brainstorming() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "Test".to_string(),
+                one_liner: "t".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        // Brainstorming -> Active -> Brainstorming
+        handle
+            .send_command(Command::TransitionPhase {
+                target: SpecPhase::Active,
+            })
+            .await
+            .unwrap();
+        handle
+            .send_command(Command::TransitionPhase {
+                target: SpecPhase::Brainstorming,
+            })
+            .await
+            .unwrap();
+        let state = handle.read_state().await;
+        assert_eq!(state.phase, SpecPhase::Brainstorming);
     }
 }

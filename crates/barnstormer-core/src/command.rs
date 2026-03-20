@@ -70,6 +70,9 @@ pub enum Command {
         agent_id: String,
         diff_summary: String,
     },
+    TransitionPhase {
+        target: crate::state::SpecPhase,
+    },
     Undo,
 }
 
@@ -144,6 +147,9 @@ mod tests {
                 agent_id: "explorer".to_string(),
                 diff_summary: "Added cards".to_string(),
             },
+            Command::TransitionPhase {
+                target: crate::state::SpecPhase::Active,
+            },
             Command::Undo,
         ];
 
@@ -153,6 +159,23 @@ mod tests {
             // Verify the type tag round-trips by re-serializing
             let json2 = serde_json::to_string(&deser).expect("re-serialize");
             assert_eq!(json, json2, "round-trip mismatch for command");
+        }
+    }
+
+    #[test]
+    fn transition_phase_round_trip() {
+        let cmd = Command::TransitionPhase {
+            target: crate::state::SpecPhase::Active,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"TransitionPhase\""));
+        assert!(json.contains("\"active\""));
+        let back: Command = serde_json::from_str(&json).unwrap();
+        match back {
+            Command::TransitionPhase { target } => {
+                assert_eq!(target, crate::state::SpecPhase::Active);
+            }
+            _ => panic!("wrong variant"),
         }
     }
 }
