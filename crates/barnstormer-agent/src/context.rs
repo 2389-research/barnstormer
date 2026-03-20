@@ -217,6 +217,13 @@ fn describe_event_payload(payload: &EventPayload) -> String {
         EventPayload::PhaseTransitioned { phase } => {
             format!("phase transitioned to {:?}", phase)
         }
+        EventPayload::CanvasUpdated { content } => {
+            if content.is_empty() {
+                "canvas cleared".to_string()
+            } else {
+                "canvas updated with new content".to_string()
+            }
+        }
     }
 }
 
