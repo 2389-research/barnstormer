@@ -1582,8 +1582,8 @@ html, body {
   color: #fff;
 }
 
-/* Full-width chat during brainstorming */
-.chat-fullwidth {
+/* Chat panel fills its parent; parent context controls sizing */
+.canvas .chat-panel {
   max-width: 720px;
   margin: 0 auto;
   padding: var(--spacing-md);
@@ -1591,7 +1591,7 @@ html, body {
   flex: 1;
 }
 
-.chat-fullwidth .chat-input-area {
+.canvas .chat-panel .chat-input-area {
   max-width: none;
 }
 

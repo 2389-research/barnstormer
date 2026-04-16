@@ -1388,7 +1388,6 @@ pub struct ChatTranscriptTemplate {
 pub struct ChatPanelTemplate {
     pub spec_id: String,
     pub container_id: String,
-    pub is_fullwidth: bool,
     pub transcript: Vec<TranscriptEntry>,
     pub pending_question: Option<QuestionData>,
 }
@@ -1417,8 +1416,7 @@ pub async fn chat_panel(
 
     let spec_state = handle.read_state().await;
 
-    let is_fullwidth = spec_state.phase == SpecPhase::Brainstorming;
-    let container_id = if is_fullwidth {
+    let container_id = if spec_state.phase == SpecPhase::Brainstorming {
         "brainstorm-chat".to_string()
     } else {
         "chat-transcript".to_string()
@@ -1437,7 +1435,6 @@ pub async fn chat_panel(
     ChatPanelTemplate {
         spec_id: id,
         container_id,
-        is_fullwidth,
         transcript,
         pending_question,
     }
@@ -3642,7 +3639,7 @@ mod tests {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
-            is_fullwidth: false,
+
             transcript: vec![],
             pending_question: None,
         };
@@ -3655,7 +3652,7 @@ mod tests {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
-            is_fullwidth: false,
+
             transcript: vec![
                 TranscriptEntry {
                     sender: "human".to_string(),
@@ -3698,7 +3695,7 @@ mod tests {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
-            is_fullwidth: false,
+
             transcript: vec![],
             pending_question: None,
         };
@@ -3713,7 +3710,7 @@ mod tests {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
-            is_fullwidth: false,
+
             transcript: vec![],
             pending_question: None,
         };
@@ -3730,7 +3727,7 @@ mod tests {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
-            is_fullwidth: false,
+
             transcript: vec![],
             pending_question: None,
         };
@@ -3801,13 +3798,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chat_panel_brainstorming_has_fullwidth_class() {
+    async fn chat_panel_brainstorming_targets_brainstorm_chat() {
         let state = test_state();
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Chat+fullwidth+test"))
+                .body(Body::from("description=Chat+brainstorm+test"))
                 .unwrap(),
         )
         .await
@@ -3833,19 +3830,23 @@ mod tests {
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(
-            html.contains("chat-fullwidth"),
-            "should have fullwidth class in brainstorming"
+            html.contains("brainstorm-chat"),
+            "should target brainstorm-chat container in brainstorming"
+        );
+        assert!(
+            !html.contains("chat-fullwidth"),
+            "should not have chat-fullwidth class (removed)"
         );
     }
 
     #[tokio::test]
-    async fn chat_panel_refining_no_fullwidth_class() {
+    async fn chat_panel_refining_targets_chat_transcript() {
         let state = test_state();
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Chat+active+test"))
+                .body(Body::from("description=Chat+refining+test"))
                 .unwrap(),
         )
         .await
@@ -3881,8 +3882,12 @@ mod tests {
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(
+            html.contains("chat-transcript"),
+            "should target chat-transcript container in refining"
+        );
+        assert!(
             !html.contains("chat-fullwidth"),
-            "should not have fullwidth class in active"
+            "should not have chat-fullwidth class (removed)"
         );
     }
 
