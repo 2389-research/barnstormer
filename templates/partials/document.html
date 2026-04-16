@@ -11,6 +11,7 @@
         <button class="btn btn-sm btn-export"
                 hx-post="/web/specs/{{ spec_id }}/regenerate"
                 hx-target=".regen-status" hx-swap="innerHTML"
+                hx-indicator=".btn-export"
                 title="Save exports to disk">
             Export to Disk
         </button>

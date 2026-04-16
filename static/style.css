@@ -1730,3 +1730,23 @@ html, body {
     opacity: 0.6;
     white-space: nowrap;
 }
+
+/* Export button loading indicator */
+.btn-export.htmx-request {
+    opacity: 0.5;
+    pointer-events: none;
+}
+/* Regen confirmation flash */
+.regen-status {
+    font-size: 12px;
+    color: var(--success);
+    font-weight: 500;
+}
+.regen-confirm {
+    animation: regenFlash 3s ease-out forwards;
+}
+@keyframes regenFlash {
+    0% { opacity: 1; }
+    70% { opacity: 1; }
+    100% { opacity: 0; }
+}
