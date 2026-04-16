@@ -60,12 +60,14 @@
             btnBoard.addEventListener('click', function() {
                 btnBoard.style.display = 'none';
                 btnChat.style.display = '';
+                document.getElementById('canvas').classList.add('canvas-board');
             });
         }
         if (btnChat) {
             btnChat.addEventListener('click', function() {
                 btnChat.style.display = 'none';
                 btnBoard.style.display = '';
+                document.getElementById('canvas').classList.remove('canvas-board');
             });
         }
 

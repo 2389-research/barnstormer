@@ -1651,6 +1651,12 @@ html, body {
   flex-direction: column;
 }
 
+[data-view="brainstorming"] .spec-body > .canvas.canvas-board {
+  overflow-y: auto;
+  padding: var(--spacing-lg);
+  display: block;
+}
+
 .workflow-placeholder {
     padding: 24px;
 }
