@@ -2180,6 +2180,32 @@ pub async fn transition_phase(
     }
 }
 
+/// Returns the current phase as plain text — used by the client-side
+/// polling fallback when SSE might be disconnected.
+pub async fn phase_check(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (StatusCode::NOT_FOUND, "not_found").into_response();
+        }
+    };
+    let spec_state = handle.read_state().await;
+    let phase_str = match spec_state.phase {
+        SpecPhase::Brainstorming => "brainstorming",
+        SpecPhase::Refining => "refining",
+        SpecPhase::Complete => "complete",
+    };
+    phase_str.into_response()
+}
+
 /// Provider status partial template.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/provider_status.html")]

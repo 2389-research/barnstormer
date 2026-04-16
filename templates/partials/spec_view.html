@@ -98,6 +98,19 @@
                     canvas.style.display = 'none';
                 }
             });
+
+            // Polling fallback: if SSE drops, check phase every 15 seconds
+            var currentPhase = '{{ phase }}';
+            setInterval(function() {
+                fetch('/web/specs/{{ spec_id }}/phase-check')
+                    .then(function(r) { return r.text(); })
+                    .then(function(serverPhase) {
+                        if (serverPhase !== currentPhase) {
+                            htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
+                        }
+                    })
+                    .catch(function() {}); // silently ignore network errors
+            }, 15000);
         }
     })();
 </script>
@@ -213,6 +226,19 @@
         compositor.addEventListener('sse:phase_transitioned', function() {
             htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
         });
+
+        // Polling fallback: if SSE drops, check phase every 15 seconds
+        var currentPhase = '{{ phase }}';
+        setInterval(function() {
+            fetch('/web/specs/{{ spec_id }}/phase-check')
+                .then(function(r) { return r.text(); })
+                .then(function(serverPhase) {
+                    if (serverPhase !== currentPhase) {
+                        htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
+                    }
+                })
+                .catch(function() {}); // silently ignore network errors
+        }, 15000);
     })();
 </script>
 
@@ -252,6 +278,19 @@
             compositor.addEventListener('sse:phase_transitioned', function() {
                 htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
             });
+
+            // Polling fallback: if SSE drops, check phase every 15 seconds
+            var currentPhase = '{{ phase }}';
+            setInterval(function() {
+                fetch('/web/specs/{{ spec_id }}/phase-check')
+                    .then(function(r) { return r.text(); })
+                    .then(function(serverPhase) {
+                        if (serverPhase !== currentPhase) {
+                            htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
+                        }
+                    })
+                    .catch(function() {}); // silently ignore network errors
+            }, 15000);
         }
     })();
 </script>
