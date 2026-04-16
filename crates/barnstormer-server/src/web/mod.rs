@@ -1490,16 +1490,14 @@ pub async fn artifacts(
     .into_response()
 }
 
-/// Spec tab template showing a synthesized specification document.
+/// Workflow tab template showing a placeholder for DAG visualization.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/spec.html")]
 pub struct SpecTabTemplate {
     pub spec_id: String,
-    pub spec_html: String,
-    pub spec_markdown: String,
 }
 
-/// GET /web/specs/{id}/spec - Render the synthesized Spec tab.
+/// GET /web/specs/{id}/spec - Render the Workflow tab placeholder.
 pub async fn spec(
     State(state): State<SharedState>,
     Path(id): Path<String>,
@@ -1510,25 +1508,16 @@ pub async fn spec(
     };
 
     let actors = state.actors.read().await;
-    let handle = match actors.get(&spec_id) {
-        Some(h) => h,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
-            )
-                .into_response();
-        }
-    };
-
-    let spec_state = handle.read_state().await;
-    let spec_markdown = barnstormer_core::export::export_spec(&spec_state);
-    let spec_html = render_markdown(&spec_markdown);
+    if !actors.contains_key(&spec_id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+        )
+            .into_response();
+    }
 
     SpecTabTemplate {
         spec_id: id,
-        spec_html,
-        spec_markdown,
     }
     .into_response()
 }
@@ -4046,8 +4035,8 @@ mod tests {
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(
-            html.contains("spec-document"),
-            "spec response should contain spec-document class: {}",
+            html.contains("workflow-placeholder"),
+            "spec response should contain workflow-placeholder class: {}",
             html
         );
     }
@@ -4069,26 +4058,14 @@ mod tests {
     }
 
     #[test]
-    fn spec_template_renders_with_content() {
+    fn spec_template_renders_workflow_placeholder() {
         let tmpl = SpecTabTemplate {
             spec_id: "01HTEST".to_string(),
-            spec_html: "<h1>Test</h1>".to_string(),
-            spec_markdown: "# Test".to_string(),
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("spec-document"), "should contain spec-document class");
-        assert!(rendered.contains("spec-copy-md"), "should contain copy markdown button");
-    }
-
-    #[test]
-    fn spec_template_renders_empty_state() {
-        let tmpl = SpecTabTemplate {
-            spec_id: "01HTEST".to_string(),
-            spec_html: String::new(),
-            spec_markdown: String::new(),
-        };
-        let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("spec-document"));
+        assert!(rendered.contains("workflow-placeholder"), "should contain workflow-placeholder class");
+        assert!(rendered.contains("Download DOT"), "should contain DOT download link");
+        assert!(rendered.contains("Pipeline Structure"), "should contain pipeline structure heading");
     }
 
     // ---- Export download tests ----

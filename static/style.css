@@ -1642,3 +1642,10 @@ html, body {
   display: flex;
   flex-direction: column;
 }
+
+.workflow-placeholder {
+    padding: 24px;
+}
+.workflow-summary {
+    margin-top: 24px;
+}
