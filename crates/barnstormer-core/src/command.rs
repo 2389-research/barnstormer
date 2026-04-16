@@ -175,7 +175,7 @@ mod tests {
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("\"TransitionPhase\""));
-        assert!(json.contains("\"refining\""));
+        assert!(json.contains("\"Refining\""));
         let back: Command = serde_json::from_str(&json).unwrap();
         match back {
             Command::TransitionPhase { target } => {

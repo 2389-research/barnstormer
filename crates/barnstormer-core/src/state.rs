@@ -20,10 +20,9 @@ pub struct UndoEntry {
 
 /// Tracks which lifecycle phase a spec is in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum SpecPhase {
     Brainstorming,
-    #[serde(alias = "active")]
+    #[serde(alias = "Active")]
     Refining,
     Complete,
 }
@@ -789,7 +788,7 @@ mod tests {
     fn spec_phase_serde_brainstorming() {
         let phase = SpecPhase::Brainstorming;
         let json = serde_json::to_string(&phase).unwrap();
-        assert_eq!(json, "\"brainstorming\"");
+        assert_eq!(json, "\"Brainstorming\"");
         let back: SpecPhase = serde_json::from_str(&json).unwrap();
         assert_eq!(back, SpecPhase::Brainstorming);
     }
@@ -798,15 +797,15 @@ mod tests {
     fn spec_phase_serde_refining() {
         let phase = SpecPhase::Refining;
         let json = serde_json::to_string(&phase).unwrap();
-        assert_eq!(json, "\"refining\"");
+        assert_eq!(json, "\"Refining\"");
         let back: SpecPhase = serde_json::from_str(&json).unwrap();
         assert_eq!(back, SpecPhase::Refining);
     }
 
     #[test]
     fn spec_phase_serde_active_alias_deserializes_as_refining() {
-        // Backwards compat: persisted events with "active" should deserialize as Refining
-        let back: SpecPhase = serde_json::from_str("\"active\"").unwrap();
+        // Backwards compat: persisted events with "Active" should deserialize as Refining
+        let back: SpecPhase = serde_json::from_str("\"Active\"").unwrap();
         assert_eq!(back, SpecPhase::Refining);
     }
 
@@ -931,7 +930,7 @@ mod tests {
     fn spec_phase_serde_complete() {
         let phase = SpecPhase::Complete;
         let json = serde_json::to_string(&phase).unwrap();
-        assert_eq!(json, "\"complete\"");
+        assert_eq!(json, "\"Complete\"");
         let back: SpecPhase = serde_json::from_str(&json).unwrap();
         assert_eq!(back, SpecPhase::Complete);
     }
