@@ -638,6 +638,17 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
                 }
             }
 
+            // Question gating: skip all agents while a question is pending.
+            // The user needs to answer before agents can make progress.
+            // The loop will wake immediately via human_message_notify when
+            // the answer arrives.
+            {
+                let s = swarm.lock().await;
+                if s.has_pending_question() {
+                    continue;
+                }
+            }
+
             let did_work = run_agent_by_index(&swarm, i).await;
 
             if did_work {
