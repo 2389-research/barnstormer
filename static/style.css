@@ -1581,6 +1581,14 @@ html, body {
   background: var(--agent-accent);
   color: #fff;
 }
+.phase-refining {
+  background: var(--accent, #6366f1);
+  color: #fff;
+}
+.phase-complete {
+  background: var(--success, #22c55e);
+  color: #fff;
+}
 
 /* Chat panel fills its parent; parent context controls sizing */
 .canvas .chat-panel {
