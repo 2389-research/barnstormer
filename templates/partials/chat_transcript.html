@@ -3,7 +3,7 @@
 
 <div id="{{ container_id }}"
      class="chat-transcript-wrap"
-     hx-trigger="sse:transcript_appended, sse:question_asked, sse:question_answered, sse:agent_step_started, sse:agent_step_finished"
+     hx-trigger="sse:transcript_appended, sse:question_asked, sse:question_answered"
      hx-get="/web/specs/{{ spec_id }}/activity/transcript?container_id={{ container_id }}"
      hx-target="#{{ container_id }}"
      hx-swap="outerHTML">
@@ -28,6 +28,17 @@
         </div>
         {% endif %}
         {% endfor %}
+        <div id="{{ container_id }}-throbber" class="chat-throbber" style="display:none;">
+            <div class="chat-message">
+                <div class="chat-message-header">
+                    <div class="chat-avatar avatar-manager">O</div>
+                    <span class="chat-sender">Orchestrator</span>
+                </div>
+                <div class="chat-body">
+                    <span class="thinking-dots"><span></span><span></span><span></span></span>
+                </div>
+            </div>
+        </div>
         {% if transcript.is_empty() %}
         <div class="chat-empty">
             <div class="chat-empty-icon">&#128172;</div>
@@ -142,5 +153,20 @@
                 }
             }
         });
+
+        var compositor = document.querySelector('.spec-compositor');
+        var throbberId = '{{ container_id }}-throbber';
+        if (compositor) {
+            compositor.addEventListener('sse:agent_step_started', function() {
+                var th = document.getElementById(throbberId);
+                if (th) { th.style.display = ''; }
+                var f = document.getElementById(feedId);
+                if (f) { f.scrollTop = f.scrollHeight; }
+            });
+            compositor.addEventListener('sse:agent_step_finished', function() {
+                var th = document.getElementById(throbberId);
+                if (th) { th.style.display = 'none'; }
+            });
+        }
     })();
 </script>
