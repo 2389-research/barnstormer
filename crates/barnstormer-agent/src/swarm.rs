@@ -427,10 +427,19 @@ impl SwarmOrchestrator {
                     "agent step failed"
                 );
                 // Show a sanitized, user-friendly message in the transcript
-                // without exposing internal error details.
+                // with a short error summary for debugging context.
+                let error_text = e.to_string();
+                let error_summary: String = error_text
+                    .chars()
+                    .filter(|c| *c != '\n' && *c != '\r')
+                    .take(100)
+                    .collect::<String>()
+                    .trim()
+                    .to_string();
                 let user_msg = format!(
-                    "[{}] encountered an issue and will retry on the next cycle.",
+                    "[{}] encountered an issue ({}). Will retry next cycle.",
                     runner.role.label(),
+                    error_summary,
                 );
                 let _ = actor
                     .send_command(Command::AppendTranscript {

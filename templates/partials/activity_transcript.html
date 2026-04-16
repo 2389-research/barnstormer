@@ -14,6 +14,9 @@
             <span class="activity-status-badge">{{ entry.sender_label }}</span>
             <span class="activity-status-text">{{ entry.content }}</span>
             <span class="activity-status-time">{{ entry.timestamp }}</span>
+            {% if entry.repeat_count > 1 %}
+            <span class="chat-status-repeat">(&times;{{ entry.repeat_count }})</span>
+            {% endif %}
         </div>
         {% else %}
         <div class="message {% if entry.is_human %}message-human{% else %}message-agent{% endif %}">

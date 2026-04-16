@@ -1724,3 +1724,9 @@ html, body {
 .chat-option-submit:hover {
     opacity: 0.85;
 }
+.chat-status-repeat {
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: 0.6;
+    white-space: nowrap;
+}

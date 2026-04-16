@@ -1079,6 +1079,8 @@ pub struct TranscriptEntry {
     /// Pre-rendered markdown→HTML for template use with `|safe`.
     pub content_html: String,
     pub timestamp: String,
+    /// Number of consecutive identical step messages collapsed into this one.
+    pub repeat_count: u32,
 }
 
 /// Render markdown content to HTML, stripping raw HTML tags from input
@@ -1110,6 +1112,7 @@ fn to_transcript_entry(m: &barnstormer_core::TranscriptMessage) -> TranscriptEnt
         content: m.content.clone(),
         content_html,
         timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+        repeat_count: 1,
     }
 }
 
@@ -1122,6 +1125,25 @@ fn mark_continuations(entries: &mut [TranscriptEntry]) {
         if entries[i].sender == entries[i - 1].sender && !entries[i].is_step && !entries[i - 1].is_step {
             entries[i].is_continuation = true;
         }
+    }
+}
+
+/// Collapse consecutive identical step messages into a single entry with
+/// a repeat_count, so the UI can show "(x3)" instead of three identical lines.
+fn collapse_repeated_steps(entries: &mut Vec<TranscriptEntry>) {
+    let mut i = 0;
+    while i < entries.len() {
+        if entries[i].is_step {
+            let mut j = i + 1;
+            while j < entries.len() && entries[j].is_step && entries[j].content == entries[i].content {
+                entries[i].repeat_count += 1;
+                j += 1;
+            }
+            if entries[i].repeat_count > 1 {
+                entries.drain((i + 1)..j);
+            }
+        }
+        i += 1;
     }
 }
 
@@ -1299,11 +1321,13 @@ pub async fn activity(
 
     let spec_state = handle.read_state().await;
 
-    let transcript: Vec<TranscriptEntry> = spec_state
+    let mut transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
         .map(to_transcript_entry)
         .collect();
+    mark_continuations(&mut transcript);
+    collapse_repeated_steps(&mut transcript);
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
@@ -1360,6 +1384,7 @@ pub async fn activity_transcript(
         .map(to_transcript_entry)
         .collect();
     mark_continuations(&mut transcript);
+    collapse_repeated_steps(&mut transcript);
 
     if is_chat {
         ChatTranscriptTemplate {
@@ -1438,6 +1463,7 @@ pub async fn chat_panel(
         .map(to_transcript_entry)
         .collect();
     mark_continuations(&mut transcript);
+    collapse_repeated_steps(&mut transcript);
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
@@ -1878,6 +1904,7 @@ pub async fn answer_question(
         .map(to_transcript_entry)
         .collect();
     mark_continuations(&mut transcript);
+    collapse_repeated_steps(&mut transcript);
 
     if is_ticker {
         // For mission ticker, show only last 10 entries
@@ -2033,6 +2060,7 @@ pub async fn chat(
         .map(to_transcript_entry)
         .collect();
     mark_continuations(&mut transcript);
+    collapse_repeated_steps(&mut transcript);
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
@@ -2945,6 +2973,7 @@ mod tests {
                 content: "Started analysis".to_string(),
                 content_html: "<p>Started analysis</p>\n".to_string(),
                 timestamp: "12:34:56".to_string(),
+                repeat_count: 1,
             }],
             pending_question: None,
         };
@@ -3102,6 +3131,7 @@ mod tests {
                 content: "Started analysis".to_string(),
                 content_html: "<p>Started analysis</p>\n".to_string(),
                 timestamp: "12:34:56".to_string(),
+                repeat_count: 1,
             }],
             pending_question: None,
         };
@@ -3127,6 +3157,7 @@ mod tests {
                 content: "Hello chat".to_string(),
                 content_html: "<p>Hello chat</p>\n".to_string(),
                 timestamp: "12:00:00".to_string(),
+                repeat_count: 1,
             }],
             pending_question: None,
         };
@@ -3232,6 +3263,7 @@ mod tests {
                 content: "Analyzing requirements".to_string(),
                 content_html: "<p>Analyzing requirements</p>\n".to_string(),
                 timestamp: "12:34:56".to_string(),
+                repeat_count: 1,
             }],
             pending_question: None,
         };
@@ -3691,6 +3723,7 @@ mod tests {
                     content: "Hello from human".to_string(),
                     content_html: "<p>Hello from human</p>\n".to_string(),
                     timestamp: "12:34:56".to_string(),
+                    repeat_count: 1,
                 },
                 TranscriptEntry {
                     sender: "manager-01HAGENT".to_string(),
@@ -3703,6 +3736,7 @@ mod tests {
                     content: "Agent response here".to_string(),
                     content_html: "<p>Agent response here</p>\n".to_string(),
                     timestamp: "12:35:00".to_string(),
+                    repeat_count: 1,
                 },
             ],
             pending_question: None,
