@@ -55,10 +55,10 @@
             <input type="hidden" name="question_id" value="{{ question_id }}" data-1p-ignore>
             <button type="submit" name="answer" value="Yes" class="chat-option-btn">Yes</button>
             <button type="submit" name="answer" value="No" class="chat-option-btn">No</button>
-            <button type="button" class="chat-option-btn chat-option-else" onclick="var f=this.closest('.chat-question-options'); f.querySelectorAll('.chat-option-btn').forEach(function(b){b.style.display='none'}); f.querySelector('.chat-else-expand').style.display='flex'; f.querySelector('.chat-else-expand textarea').name='answer';">Something else&hellip;</button>
+            <button type="button" class="chat-option-btn chat-option-else" onclick="var f=this.closest('.chat-question-options'); f.querySelectorAll('.chat-option-btn').forEach(function(b){b.style.display='none'}); f.querySelector('.chat-else-expand').style.display='flex'; f.querySelector('.chat-else-expand textarea').name='answer'; f.querySelector('.chat-else-expand textarea').focus();">Something else&hellip;</button>
             <div class="chat-else-expand" style="display:none;">
                 <div class="chat-input-row">
-                    <textarea placeholder="Describe what you mean..." rows="2" data-1p-ignore required></textarea>
+                    <textarea placeholder="Describe what you mean..." rows="1" data-1p-ignore required></textarea>
                     <button type="submit" class="btn btn-send" title="Send">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
                     </button>
@@ -77,10 +77,10 @@
             {% for choice in choices %}
             <button type="submit" name="answer" value="{{ choice }}" class="chat-option-btn">{{ choice }}</button>
             {% endfor %}
-            <button type="button" class="chat-option-btn chat-option-else" onclick="var f=this.closest('.chat-question-options'); f.querySelectorAll('.chat-option-btn').forEach(function(b){b.style.display='none'}); f.querySelector('.chat-else-expand').style.display='flex'; f.querySelector('.chat-else-expand textarea').name='answer';">Something else&hellip;</button>
+            <button type="button" class="chat-option-btn chat-option-else" onclick="var f=this.closest('.chat-question-options'); f.querySelectorAll('.chat-option-btn').forEach(function(b){b.style.display='none'}); f.querySelector('.chat-else-expand').style.display='flex'; f.querySelector('.chat-else-expand textarea').name='answer'; f.querySelector('.chat-else-expand textarea').focus();">Something else&hellip;</button>
             <div class="chat-else-expand" style="display:none;">
                 <div class="chat-input-row">
-                    <textarea placeholder="Describe what you mean..." rows="2" data-1p-ignore required></textarea>
+                    <textarea placeholder="Describe what you mean..." rows="1" data-1p-ignore required></textarea>
                     <button type="submit" class="btn btn-send" title="Send">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
                     </button>
@@ -97,7 +97,7 @@
               class="chat-question-options">
             <input type="hidden" name="question_id" value="{{ question_id }}" data-1p-ignore>
             <div class="chat-input-row">
-                <textarea name="answer" placeholder="{{ placeholder }}" rows="2" data-1p-ignore required></textarea>
+                <textarea name="answer" placeholder="{{ placeholder }}" rows="1" data-1p-ignore required></textarea>
                 <button type="submit" class="btn btn-send" title="Send">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
                 </button>
