@@ -27,6 +27,13 @@
 </header>
 
 <div class="spec-body">
+    <div id="agents-offline-banner" class="agents-offline-banner" style="display:none;">
+        <span>Agents are not running.</span>
+        <button class="btn btn-sm btn-start-agents"
+                hx-post="/web/specs/{{ spec_id }}/agents/start"
+                hx-target="#agent-controls"
+                hx-swap="innerHTML">Start Agents</button>
+    </div>
     <main class="canvas" id="canvas"
           hx-get="/web/specs/{{ spec_id }}/chat-panel"
           hx-trigger="load" hx-swap="innerHTML">
@@ -93,8 +100,8 @@
     })();
 </script>
 
-{% else %}
-{# Active layout: tabs, chat rail, board/document/spec views #}
+{% else if phase == "refining" %}
+{# Refining layout: tabs, chat rail, board/document/workflow views #}
 <div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
 
 <header class="command-bar">
@@ -102,6 +109,7 @@
         <span class="command-bar-title">{{ title }}</span>
         <span class="command-bar-chevron">&#8250;</span>
         <span class="command-bar-subtitle">{{ one_liner }}</span>
+        <span class="phase-badge phase-refining">Refining</span>
     </div>
     <div class="view-toggles-capsule">
         <button class="view-toggle active" data-view="document"
@@ -120,10 +128,14 @@
                 hx-get="/web/specs/{{ spec_id }}/spec"
                 hx-target="#canvas" hx-swap="innerHTML">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
-            <span class="view-toggle-label">Spec</span>
+            <span class="view-toggle-label">Workflow</span>
         </button>
     </div>
     <div class="command-bar-right">
+        <button class="btn btn-sm"
+                hx-post="/web/specs/{{ spec_id }}/phase"
+                hx-vals='{"target":"complete"}'
+                hx-swap="none">Finalize Spec</button>
         <button class="btn btn-sm"
                 hx-post="/web/specs/{{ spec_id }}/phase"
                 hx-vals='{"target":"brainstorming"}'
@@ -135,6 +147,13 @@
 </header>
 
 <div class="spec-body">
+    <div id="agents-offline-banner" class="agents-offline-banner" style="display:none;">
+        <span>Agents are not running.</span>
+        <button class="btn btn-sm btn-start-agents"
+                hx-post="/web/specs/{{ spec_id }}/agents/start"
+                hx-target="#agent-controls"
+                hx-swap="innerHTML">Start Agents</button>
+    </div>
     <main class="canvas" id="canvas"
           hx-get="/web/specs/{{ spec_id }}/document"
           hx-trigger="load" hx-swap="innerHTML">
@@ -192,6 +211,46 @@
         compositor.addEventListener('sse:phase_transitioned', function() {
             htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
         });
+    })();
+</script>
+
+{% else %}
+{# Complete layout: read-only export with download buttons #}
+<div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
+
+<header class="command-bar">
+    <div class="command-bar-left">
+        <span class="command-bar-title">{{ title }}</span>
+        <span class="command-bar-chevron">&#8250;</span>
+        <span class="command-bar-subtitle">{{ one_liner }}</span>
+        <span class="phase-badge phase-complete">Complete</span>
+    </div>
+    <div class="command-bar-right">
+        <a href="/web/specs/{{ spec_id }}/export/markdown" download class="btn btn-sm">Download .md</a>
+        <button class="btn btn-sm"
+                hx-post="/web/specs/{{ spec_id }}/phase"
+                hx-vals='{"target":"refining"}'
+                hx-swap="none">Keep Refining</button>
+    </div>
+</header>
+
+<div class="spec-body">
+    <main class="canvas" id="canvas"
+          hx-get="/web/specs/{{ spec_id }}/document"
+          hx-trigger="load" hx-swap="innerHTML">
+    </main>
+</div>
+
+</div>
+
+<script>
+    (function() {
+        var compositor = document.querySelector('.spec-compositor');
+        if (compositor) {
+            compositor.addEventListener('sse:phase_transitioned', function() {
+                htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
+            });
+        }
     })();
 </script>
 
