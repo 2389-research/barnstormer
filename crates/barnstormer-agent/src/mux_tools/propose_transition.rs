@@ -1,4 +1,4 @@
-// ABOUTME: Tool that lets the Manager propose transitioning from brainstorming to active mode.
+// ABOUTME: Tool that lets the Manager propose transitioning to the next spec phase.
 // ABOUTME: Reuses existing AskQuestion infrastructure with swarm-level answer-watching.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,6 +11,7 @@ use ulid::Ulid;
 
 use barnstormer_core::actor::SpecActorHandle;
 use barnstormer_core::command::Command;
+use barnstormer_core::state::SpecPhase;
 use barnstormer_core::transcript::UserQuestion;
 
 #[derive(Clone)]
@@ -27,7 +28,7 @@ impl Tool for ProposeTransitionTool {
     }
 
     fn description(&self) -> &str {
-        "Propose transitioning from brainstorming to active mode. Summarize what you've learned and ask the user if they're ready to build the spec."
+        "Propose transitioning to the next phase of the spec. Summarize progress so far and ask the user if they're ready to move on."
     }
 
     fn schema(&self) -> serde_json::Value {
@@ -44,6 +45,14 @@ impl Tool for ProposeTransitionTool {
     }
 
     async fn execute(&self, params: serde_json::Value) -> Result<ToolResult, anyhow::Error> {
+        // Check current phase to determine appropriate question text
+        let current_phase = self.actor.read_state().await.phase.clone();
+        if current_phase == SpecPhase::Complete {
+            return Ok(ToolResult::text(
+                "The spec is already in the Complete phase. No further transitions are available.",
+            ));
+        }
+
         if self
             .question_pending
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -62,10 +71,20 @@ impl Tool for ProposeTransitionTool {
             }
         };
 
+        let question_text = match current_phase {
+            SpecPhase::Brainstorming => {
+                format!("{}\n\nReady to start organizing the spec?", summary)
+            }
+            SpecPhase::Refining => {
+                format!("{}\n\nThe spec looks complete. Ready to finalize?", summary)
+            }
+            SpecPhase::Complete => unreachable!(),
+        };
+
         let question_id = Ulid::new();
         let question = UserQuestion::Boolean {
             question_id,
-            question: format!("{}\n\nReady to move on and build the spec?", summary),
+            question: question_text,
             default: Some(true),
         };
 
@@ -266,6 +285,126 @@ mod tests {
         assert!(
             !question_pending.load(Ordering::SeqCst),
             "question_pending should be reset after parameter validation failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn propose_transition_brainstorming_asks_about_organizing() {
+        let (_id, handle) = make_test_actor();
+        let handle = Arc::new(handle);
+        handle
+            .send_command(Command::CreateSpec {
+                title: "Test".to_string(),
+                one_liner: "t".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let tool = ProposeTransitionTool {
+            actor: handle.clone(),
+            question_pending: Arc::new(AtomicBool::new(false)),
+            pending_transition_question: Arc::new(Mutex::new(None)),
+        };
+
+        tool.execute(json!({"summary": "Brainstorming complete."}))
+            .await
+            .unwrap();
+
+        let state = handle.read_state().await;
+        if let Some(UserQuestion::Boolean { question, .. }) = &state.pending_question {
+            assert!(
+                question.contains("organizing the spec"),
+                "brainstorming question should mention organizing: {}",
+                question
+            );
+        } else {
+            panic!("expected Boolean question");
+        }
+    }
+
+    #[tokio::test]
+    async fn propose_transition_refining_asks_about_finalizing() {
+        let (_id, handle) = make_test_actor();
+        let handle = Arc::new(handle);
+        handle
+            .send_command(Command::CreateSpec {
+                title: "Test".to_string(),
+                one_liner: "t".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+        // Move to Refining phase
+        handle
+            .send_command(Command::TransitionPhase {
+                target: SpecPhase::Refining,
+            })
+            .await
+            .unwrap();
+
+        let tool = ProposeTransitionTool {
+            actor: handle.clone(),
+            question_pending: Arc::new(AtomicBool::new(false)),
+            pending_transition_question: Arc::new(Mutex::new(None)),
+        };
+
+        tool.execute(json!({"summary": "Spec is refined."}))
+            .await
+            .unwrap();
+
+        let state = handle.read_state().await;
+        if let Some(UserQuestion::Boolean { question, .. }) = &state.pending_question {
+            assert!(
+                question.contains("Ready to finalize"),
+                "refining question should mention finalizing: {}",
+                question
+            );
+        } else {
+            panic!("expected Boolean question");
+        }
+    }
+
+    #[tokio::test]
+    async fn propose_transition_complete_phase_returns_noop() {
+        let (_id, handle) = make_test_actor();
+        let handle = Arc::new(handle);
+        handle
+            .send_command(Command::CreateSpec {
+                title: "Test".to_string(),
+                one_liner: "t".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+        // Move to Refining, then Complete
+        handle
+            .send_command(Command::TransitionPhase {
+                target: SpecPhase::Refining,
+            })
+            .await
+            .unwrap();
+        handle
+            .send_command(Command::TransitionPhase {
+                target: SpecPhase::Complete,
+            })
+            .await
+            .unwrap();
+
+        let tool = ProposeTransitionTool {
+            actor: handle.clone(),
+            question_pending: Arc::new(AtomicBool::new(false)),
+            pending_transition_question: Arc::new(Mutex::new(None)),
+        };
+
+        let result = tool
+            .execute(json!({"summary": "Already done."}))
+            .await
+            .unwrap();
+        assert!(
+            result.content.contains("already in the Complete phase"),
+            "should indicate no transitions available: {}",
+            result.content
         );
     }
 }

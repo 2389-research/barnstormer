@@ -662,8 +662,14 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
             if let EventPayload::QuestionAnswered { question_id, answer } = &event.payload {
                 let s = swarm.lock().await;
                 if should_transition_on_answer(&s.pending_transition_question, *question_id, answer) {
+                    let current_phase = s.actor.read_state().await.phase.clone();
+                    let target = match current_phase {
+                        SpecPhase::Brainstorming => SpecPhase::Refining,
+                        SpecPhase::Refining => SpecPhase::Complete,
+                        SpecPhase::Complete => continue,
+                    };
                     let _ = s.actor.send_command(Command::TransitionPhase {
-                        target: SpecPhase::Refining,
+                        target,
                     }).await;
                 }
             }
