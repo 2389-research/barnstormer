@@ -10,7 +10,10 @@ use tracing;
 use ulid::Ulid;
 
 use mux::agent::{AgentDefinition, SubAgent};
+use mux::hook::HookRegistry;
 use mux::llm::LlmClient;
+
+use crate::streaming_hook::StreamingHook;
 
 use std::collections::HashMap;
 
@@ -385,13 +388,19 @@ impl SwarmOrchestrator {
         )
         .await;
 
+        let is_manager = runner.role == AgentRole::Manager;
+
         // Create agent definition with role-specific system prompt + tool guide
-        let definition = AgentDefinition::new(
+        let mut definition = AgentDefinition::new(
             runner.role.label(),
             full_system_prompt(&runner.role, &runner.agent_id, phase),
         )
         .model(model)
         .max_iterations(10);
+
+        if is_manager {
+            definition = definition.streaming(true);
+        }
 
         // Create a fresh SubAgent
         let mut sub_agent = SubAgent::new(
@@ -399,6 +408,16 @@ impl SwarmOrchestrator {
             Arc::clone(client),
             registry,
         );
+
+        // Attach streaming hook for real-time event forwarding
+        let hook_registry = Arc::new(HookRegistry::new());
+        let hook = StreamingHook::new(
+            Arc::clone(actor),
+            runner.agent_id.clone(),
+            is_manager,
+        );
+        hook_registry.register(hook).await;
+        sub_agent = sub_agent.with_hooks(hook_registry);
 
         // Build task prompt from context
         let task_prompt = build_task_prompt(&runner.context);
