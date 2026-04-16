@@ -2671,6 +2671,9 @@ pub fn spawn_event_persister(
         loop {
             match rx.recv().await {
                 Ok(event) => {
+                    if event.payload.is_ephemeral() {
+                        continue;
+                    }
                     if let Err(e) = log.append(&event) {
                         tracing::error!(
                             "event persister failed to write event for spec {}: {}",

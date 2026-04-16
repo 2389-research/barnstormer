@@ -159,6 +159,26 @@ mod tests {
     }
 
     #[test]
+    fn event_type_names_streaming() {
+        use barnstormer_core::EventPayload;
+
+        assert_eq!(
+            event_type_name(&EventPayload::StreamingDelta {
+                agent_id: String::new(),
+                text: String::new(),
+            }),
+            "streaming_delta"
+        );
+        assert_eq!(
+            event_type_name(&EventPayload::StreamingToolActivity {
+                agent_id: String::new(),
+                activity: String::new(),
+            }),
+            "streaming_tool_activity"
+        );
+    }
+
+    #[test]
     fn event_type_names_are_correct() {
         use barnstormer_core::Card;
         use barnstormer_core::EventPayload;
