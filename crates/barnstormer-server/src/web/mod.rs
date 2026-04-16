@@ -250,6 +250,7 @@ pub async fn import_spec(
     let phase = match spec_state.phase {
         SpecPhase::Brainstorming => "brainstorming".to_string(),
         SpecPhase::Refining => "refining".to_string(),
+        SpecPhase::Complete => "complete".to_string(),
     };
 
     let has_pending_question = spec_state.pending_question.is_some();
@@ -431,6 +432,7 @@ pub async fn create_spec(
     let phase = match spec_state.phase {
         SpecPhase::Brainstorming => "brainstorming".to_string(),
         SpecPhase::Refining => "refining".to_string(),
+        SpecPhase::Complete => "complete".to_string(),
     };
 
     let has_pending_question = spec_state.pending_question.is_some();
@@ -632,6 +634,7 @@ pub async fn spec_view(
     let phase = match spec_state.phase {
         SpecPhase::Brainstorming => "brainstorming".to_string(),
         SpecPhase::Refining => "refining".to_string(),
+        SpecPhase::Complete => "complete".to_string(),
     };
 
     let has_pending_question = spec_state.pending_question.is_some();
@@ -2130,6 +2133,7 @@ pub async fn transition_phase(
     let target = match form.target.as_str() {
         "brainstorming" => SpecPhase::Brainstorming,
         "refining" => SpecPhase::Refining,
+        "complete" => SpecPhase::Complete,
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -2158,6 +2162,7 @@ pub async fn transition_phase(
             let label = match target {
                 SpecPhase::Brainstorming => "Brainstorming",
                 SpecPhase::Refining => "Refining",
+                SpecPhase::Complete => "Complete",
             };
             (
                 StatusCode::OK,

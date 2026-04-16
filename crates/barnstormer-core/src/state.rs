@@ -25,6 +25,7 @@ pub enum SpecPhase {
     Brainstorming,
     #[serde(alias = "active")]
     Refining,
+    Complete,
 }
 
 fn default_phase_refining() -> SpecPhase {
@@ -924,6 +925,15 @@ mod tests {
         let json = serde_json::to_string(&SpecState::new()).unwrap();
         let back: SpecState = serde_json::from_str(&json).unwrap();
         assert_eq!(back.canvas_content, None);
+    }
+
+    #[test]
+    fn spec_phase_serde_complete() {
+        let phase = SpecPhase::Complete;
+        let json = serde_json::to_string(&phase).unwrap();
+        assert_eq!(json, "\"complete\"");
+        let back: SpecPhase = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, SpecPhase::Complete);
     }
 
     #[test]
