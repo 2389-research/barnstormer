@@ -85,10 +85,20 @@
               autocomplete="off"
               class="chat-question-options">
             <input type="hidden" name="question_id" value="{{ question_id }}" data-1p-ignore>
+            {% if allow_multi %}
+            {% for choice in choices %}
+            <label class="chat-option-checkbox">
+                <input type="checkbox" name="answer" value="{{ choice }}">
+                <span>{{ choice }}</span>
+            </label>
+            {% endfor %}
+            <button type="submit" class="chat-option-btn chat-option-submit" onclick="var f=this.closest('form'); var checked=f.querySelectorAll('input[name=answer]:checked'); if(checked.length===0){event.preventDefault(); return;} var vals=[]; checked.forEach(function(c){vals.push(c.value);}); var h=document.createElement('input'); h.type='hidden'; h.name='answer'; h.value=vals.join(', '); f.appendChild(h); checked.forEach(function(c){c.disabled=true;});">Submit</button>
+            {% else %}
             {% for choice in choices %}
             <button type="submit" name="answer" value="{{ choice }}" class="chat-option-btn">{{ choice }}</button>
             {% endfor %}
-            <button type="button" class="chat-option-btn chat-option-else" onclick="var f=this.closest('.chat-question-options'); f.querySelectorAll('.chat-option-btn').forEach(function(b){b.style.display='none'}); f.querySelector('.chat-else-expand').style.display='flex'; f.querySelector('.chat-else-expand textarea').name='answer'; f.querySelector('.chat-else-expand textarea').focus();">Something else&hellip;</button>
+            {% endif %}
+            <button type="button" class="chat-option-btn chat-option-else" onclick="var f=this.closest('.chat-question-options'); f.querySelectorAll('.chat-option-btn, .chat-option-checkbox').forEach(function(b){b.style.display='none'}); f.querySelector('.chat-else-expand').style.display='flex'; f.querySelector('.chat-else-expand textarea').name='answer'; f.querySelector('.chat-else-expand textarea').focus();">Something else&hellip;</button>
             <div class="chat-else-expand" style="display:none;">
                 <div class="chat-input-row">
                     <textarea placeholder="Describe what you mean..." rows="1" data-1p-ignore required></textarea>
