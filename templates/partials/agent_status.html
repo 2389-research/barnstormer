@@ -28,3 +28,21 @@
     </button>
     {% endif %}
 </div>
+
+<script>
+(function() {
+    var running = {% if running %}true{% else %}false{% endif %};
+    var compositor = document.querySelector('.spec-compositor');
+    var banner = document.getElementById('agents-offline-banner');
+    if (compositor) {
+        if (running) {
+            compositor.classList.remove('agents-offline');
+        } else {
+            compositor.classList.add('agents-offline');
+        }
+    }
+    if (banner) {
+        banner.style.display = running ? 'none' : 'flex';
+    }
+})();
+</script>

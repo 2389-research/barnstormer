@@ -1611,6 +1611,29 @@ html, body {
   flex: 1;
 }
 
+/* Agents-offline: dim entire interface when agents aren't running */
+.spec-compositor.agents-offline .spec-body {
+    opacity: 0.5;
+    pointer-events: none;
+}
+.spec-compositor.agents-offline .agents-offline-banner {
+    pointer-events: auto;
+    opacity: 1;
+}
+.agents-offline-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.875rem;
+    color: var(--text-muted);
+}
+.agents-offline-banner .btn {
+    white-space: nowrap;
+}
+
 [data-view="brainstorming"] .spec-body > .canvas {
   flex: 1;
   min-width: 300px;
