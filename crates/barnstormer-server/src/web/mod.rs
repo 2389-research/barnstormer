@@ -249,7 +249,7 @@ pub async fn import_spec(
     let spec_id_str = spec_id.to_string();
     let phase = match spec_state.phase {
         SpecPhase::Brainstorming => "brainstorming".to_string(),
-        SpecPhase::Active => "active".to_string(),
+        SpecPhase::Refining => "refining".to_string(),
     };
 
     let has_pending_question = spec_state.pending_question.is_some();
@@ -430,7 +430,7 @@ pub async fn create_spec(
     let spec_id_str = spec_id.to_string();
     let phase = match spec_state.phase {
         SpecPhase::Brainstorming => "brainstorming".to_string(),
-        SpecPhase::Active => "active".to_string(),
+        SpecPhase::Refining => "refining".to_string(),
     };
 
     let has_pending_question = spec_state.pending_question.is_some();
@@ -631,7 +631,7 @@ pub async fn spec_view(
     let lanes = cards_by_lane(&spec_state);
     let phase = match spec_state.phase {
         SpecPhase::Brainstorming => "brainstorming".to_string(),
-        SpecPhase::Active => "active".to_string(),
+        SpecPhase::Refining => "refining".to_string(),
     };
 
     let has_pending_question = spec_state.pending_question.is_some();
@@ -2129,7 +2129,7 @@ pub async fn transition_phase(
 
     let target = match form.target.as_str() {
         "brainstorming" => SpecPhase::Brainstorming,
-        "active" => SpecPhase::Active,
+        "refining" => SpecPhase::Refining,
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -2157,7 +2157,7 @@ pub async fn transition_phase(
         Ok(_) => {
             let label = match target {
                 SpecPhase::Brainstorming => "Brainstorming",
-                SpecPhase::Active => "Active",
+                SpecPhase::Refining => "Refining",
             };
             (
                 StatusCode::OK,
@@ -3145,7 +3145,7 @@ mod tests {
             title: "Test Spec".to_string(),
             one_liner: "A test spec".to_string(),
             goal: "Test goal".to_string(),
-            phase: "active".to_string(),
+            phase: "refining".to_string(),
             lanes: vec![],
             canvas_content: None,
             has_pending_question: false,
@@ -3834,7 +3834,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chat_panel_active_no_fullwidth_class() {
+    async fn chat_panel_refining_no_fullwidth_class() {
         let state = test_state();
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
@@ -3851,12 +3851,12 @@ mod tests {
             *actors.keys().next().unwrap()
         };
 
-        // Transition to Active
+        // Transition to Refining
         let actors = state.actors.read().await;
         let handle = actors.get(&spec_id).unwrap();
         handle
             .send_command(Command::TransitionPhase {
-                target: SpecPhase::Active,
+                target: SpecPhase::Refining,
             })
             .await
             .unwrap();
@@ -4649,7 +4649,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn phase_transition_to_active_returns_200() {
+    async fn phase_transition_to_refining_returns_200() {
         let state = test_state();
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
@@ -4671,7 +4671,7 @@ mod tests {
             .oneshot(
                 Request::post(&format!("/web/specs/{}/phase", spec_id))
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("target=active"))
+                    .body(Body::from("target=refining"))
                     .unwrap(),
             )
             .await
@@ -4697,12 +4697,12 @@ mod tests {
             *actors.keys().next().unwrap()
         };
 
-        // First transition to Active
+        // First transition to Refining
         let app2 = create_router(Arc::clone(&state), None);
         app2.oneshot(
             Request::post(&format!("/web/specs/{}/phase", spec_id))
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("target=active"))
+                .body(Body::from("target=refining"))
                 .unwrap(),
         )
         .await
@@ -4771,24 +4771,24 @@ mod tests {
             *actors.keys().next().unwrap()
         };
 
-        // Transition to active first
+        // Transition to refining first
         let app2 = create_router(Arc::clone(&state), None);
         app2.oneshot(
             Request::post(&format!("/web/specs/{}/phase", spec_id))
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("target=active"))
+                .body(Body::from("target=refining"))
                 .unwrap(),
         )
         .await
         .unwrap();
 
-        // Try active again — 409
+        // Try refining again — 409
         let app3 = create_router(Arc::clone(&state), None);
         let resp = app3
             .oneshot(
                 Request::post(&format!("/web/specs/{}/phase", spec_id))
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("target=active"))
+                    .body(Body::from("target=refining"))
                     .unwrap(),
             )
             .await
@@ -4805,7 +4805,7 @@ mod tests {
             .oneshot(
                 Request::post(&format!("/web/specs/{}/phase", fake_id))
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("target=active"))
+                    .body(Body::from("target=refining"))
                     .unwrap(),
             )
             .await
@@ -4901,7 +4901,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spec_view_active_contains_tab_toggles() {
+    async fn spec_view_refining_contains_tab_toggles() {
         let state = test_state();
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
@@ -4918,12 +4918,12 @@ mod tests {
             *actors.keys().next().unwrap()
         };
 
-        // Transition to Active
+        // Transition to Refining
         let actors = state.actors.read().await;
         let handle = actors.get(&spec_id).unwrap();
         handle
             .send_command(Command::TransitionPhase {
-                target: SpecPhase::Active,
+                target: SpecPhase::Refining,
             })
             .await
             .unwrap();

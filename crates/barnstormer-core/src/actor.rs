@@ -701,14 +701,14 @@ mod tests {
 
         let events = handle
             .send_command(Command::TransitionPhase {
-                target: SpecPhase::Active,
+                target: SpecPhase::Refining,
             })
             .await
             .unwrap();
         assert_eq!(events.len(), 1);
         match &events[0].payload {
             EventPayload::PhaseTransitioned { phase } => {
-                assert_eq!(*phase, SpecPhase::Active);
+                assert_eq!(*phase, SpecPhase::Refining);
             }
             _ => panic!("wrong event"),
         }
@@ -727,18 +727,18 @@ mod tests {
             .await
             .unwrap();
 
-        // Brainstorming -> Active
+        // Brainstorming -> Refining
         handle
             .send_command(Command::TransitionPhase {
-                target: SpecPhase::Active,
+                target: SpecPhase::Refining,
             })
             .await
             .unwrap();
 
-        // Active -> Active should fail
+        // Refining -> Refining should fail
         let err = handle
             .send_command(Command::TransitionPhase {
-                target: SpecPhase::Active,
+                target: SpecPhase::Refining,
             })
             .await
             .unwrap_err();
@@ -746,7 +746,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transition_phase_brainstorming_active_brainstorming() {
+    async fn transition_phase_brainstorming_refining_brainstorming() {
         let spec_id = Ulid::new();
         let handle = spawn(spec_id, SpecState::new());
         handle
@@ -758,10 +758,10 @@ mod tests {
             .await
             .unwrap();
 
-        // Brainstorming -> Active -> Brainstorming
+        // Brainstorming -> Refining -> Brainstorming
         handle
             .send_command(Command::TransitionPhase {
-                target: SpecPhase::Active,
+                target: SpecPhase::Refining,
             })
             .await
             .unwrap();

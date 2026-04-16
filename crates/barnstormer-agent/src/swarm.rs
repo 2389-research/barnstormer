@@ -663,7 +663,7 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
                 let s = swarm.lock().await;
                 if should_transition_on_answer(&s.pending_transition_question, *question_id, answer) {
                     let _ = s.actor.send_command(Command::TransitionPhase {
-                        target: SpecPhase::Active,
+                        target: SpecPhase::Refining,
                     }).await;
                 }
             }
@@ -853,7 +853,7 @@ mod tests {
             &pending_transition,
             &client,
             "stub-model",
-            &SpecPhase::Active,
+            &SpecPhase::Refining,
         )
         .await;
 
@@ -1332,17 +1332,17 @@ mod tests {
             })
             .await
             .unwrap();
-        // Transition to Active
+        // Transition to Refining
         handle
             .send_command(Command::TransitionPhase {
-                target: SpecPhase::Active,
+                target: SpecPhase::Refining,
             })
             .await
             .unwrap();
 
         {
             let state = handle.read_state().await;
-            assert_eq!(state.phase, SpecPhase::Active);
+            assert_eq!(state.phase, SpecPhase::Refining);
         }
 
         let agents = vec![
@@ -1409,15 +1409,15 @@ mod tests {
     }
 
     #[test]
-    fn manager_gets_standard_prompt_in_active() {
-        let prompt = full_system_prompt(&AgentRole::Manager, "agent-123", &SpecPhase::Active);
+    fn manager_gets_standard_prompt_in_refining() {
+        let prompt = full_system_prompt(&AgentRole::Manager, "agent-123", &SpecPhase::Refining);
         assert!(!prompt.contains("ONE question at a time"));
         assert!(prompt.contains("manager agent for a product specification"));
     }
 
     #[test]
     fn non_manager_gets_same_prompt_regardless_of_phase() {
-        let active = full_system_prompt(&AgentRole::Brainstormer, "agent-123", &SpecPhase::Active);
+        let active = full_system_prompt(&AgentRole::Brainstormer, "agent-123", &SpecPhase::Refining);
         let brainstorming = full_system_prompt(&AgentRole::Brainstormer, "agent-123", &SpecPhase::Brainstorming);
         assert_eq!(active, brainstorming);
     }

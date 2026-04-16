@@ -23,11 +23,12 @@ pub struct UndoEntry {
 #[serde(rename_all = "snake_case")]
 pub enum SpecPhase {
     Brainstorming,
-    Active,
+    #[serde(alias = "active")]
+    Refining,
 }
 
-fn default_phase_active() -> SpecPhase {
-    SpecPhase::Active
+fn default_phase_refining() -> SpecPhase {
+    SpecPhase::Refining
 }
 
 /// The full materialized state of a spec, built by replaying events.
@@ -40,7 +41,7 @@ pub struct SpecState {
     pub undo_stack: Vec<UndoEntry>,
     pub last_event_id: u64,
     pub lanes: Vec<String>,
-    #[serde(default = "default_phase_active")]
+    #[serde(default = "default_phase_refining")]
     pub phase: SpecPhase,
     #[serde(default)]
     pub canvas_content: Option<String>,
@@ -56,7 +57,7 @@ impl Default for SpecState {
             undo_stack: Vec::new(),
             last_event_id: 0,
             lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
-            phase: SpecPhase::Active,
+            phase: SpecPhase::Refining,
             canvas_content: None,
         }
     }
@@ -793,24 +794,31 @@ mod tests {
     }
 
     #[test]
-    fn spec_phase_serde_active() {
-        let phase = SpecPhase::Active;
+    fn spec_phase_serde_refining() {
+        let phase = SpecPhase::Refining;
         let json = serde_json::to_string(&phase).unwrap();
-        assert_eq!(json, "\"active\"");
+        assert_eq!(json, "\"refining\"");
         let back: SpecPhase = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, SpecPhase::Active);
+        assert_eq!(back, SpecPhase::Refining);
     }
 
     #[test]
-    fn spec_state_new_defaults_to_active() {
+    fn spec_phase_serde_active_alias_deserializes_as_refining() {
+        // Backwards compat: persisted events with "active" should deserialize as Refining
+        let back: SpecPhase = serde_json::from_str("\"active\"").unwrap();
+        assert_eq!(back, SpecPhase::Refining);
+    }
+
+    #[test]
+    fn spec_state_new_defaults_to_refining() {
         let state = SpecState::new();
-        assert_eq!(state.phase, SpecPhase::Active);
+        assert_eq!(state.phase, SpecPhase::Refining);
     }
 
     #[test]
     fn phase_transitioned_updates_state() {
         let mut state = SpecState::new();
-        assert_eq!(state.phase, SpecPhase::Active);
+        assert_eq!(state.phase, SpecPhase::Refining);
 
         let event = Event {
             event_id: 1,
@@ -919,10 +927,10 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_without_phase_deserializes_as_active() {
+    fn snapshot_without_phase_deserializes_as_refining() {
         // Simulate an old snapshot JSON without a "phase" field
         let json = r#"{"core":null,"cards":{},"transcript":[],"pending_question":null,"undo_stack":[],"last_event_id":0,"lanes":["Ideas","Plan","Spec"]}"#;
         let state: SpecState = serde_json::from_str(json).unwrap();
-        assert_eq!(state.phase, SpecPhase::Active);
+        assert_eq!(state.phase, SpecPhase::Refining);
     }
 }
