@@ -5,6 +5,7 @@ pub mod client;
 pub mod context;
 pub mod import;
 pub mod mux_tools;
+pub mod streaming_hook;
 pub mod swarm;
 pub mod testing;
 
