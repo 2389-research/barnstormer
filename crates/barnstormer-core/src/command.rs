@@ -165,6 +165,14 @@ mod tests {
                 content: "<h1>Hello</h1>".to_string(),
             },
             Command::Undo,
+            Command::StreamDelta {
+                agent_id: "manager-1".to_string(),
+                text: "token".to_string(),
+            },
+            Command::StreamToolActivity {
+                agent_id: "brainstormer-1".to_string(),
+                activity: "creating card".to_string(),
+            },
         ];
 
         for cmd in &commands {
