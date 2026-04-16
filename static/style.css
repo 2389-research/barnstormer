@@ -1750,3 +1750,27 @@ html, body {
     70% { opacity: 1; }
     100% { opacity: 0; }
 }
+
+/* Streaming message — raw text while tokens arrive */
+.chat-streaming-msg {
+    padding: 8px 20px;
+}
+.chat-streaming-msg .chat-body {
+    white-space: pre-wrap;
+    font-family: inherit;
+    min-height: 20px;
+}
+
+/* Worker activity status line — "tail -n 1" of agent activity */
+.chat-activity-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 20px;
+    font-size: 12px;
+    color: var(--text-muted);
+    opacity: 0.8;
+}
+.chat-activity-status .status-dot {
+    flex-shrink: 0;
+}
