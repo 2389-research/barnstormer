@@ -252,6 +252,7 @@ pub async fn import_spec(
         SpecPhase::Active => "active".to_string(),
     };
 
+    let has_pending_question = spec_state.pending_question.is_some();
     let canvas_content = spec_state.canvas_content.clone();
 
     let mut response = SpecViewTemplate {
@@ -262,6 +263,7 @@ pub async fn import_spec(
         phase,
         lanes,
         canvas_content,
+        has_pending_question,
     }
     .into_response();
 
@@ -431,6 +433,7 @@ pub async fn create_spec(
         SpecPhase::Active => "active".to_string(),
     };
 
+    let has_pending_question = spec_state.pending_question.is_some();
     let canvas_content = spec_state.canvas_content.clone();
 
     let mut response = SpecViewTemplate {
@@ -441,6 +444,7 @@ pub async fn create_spec(
         phase,
         lanes,
         canvas_content,
+        has_pending_question,
     }
     .into_response();
 
@@ -569,13 +573,32 @@ pub struct SpecViewTemplate {
     pub phase: String,
     pub lanes: Vec<LaneData>,
     pub canvas_content: Option<String>,
+    pub has_pending_question: bool,
+}
+
+/// Full-page spec view for direct navigation / page reload (non-HTMX requests).
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "spec_page.html")]
+pub struct SpecPageTemplate {
+    pub spec_id: String,
+    pub title: String,
+    pub one_liner: String,
+    pub goal: String,
+    pub phase: String,
+    pub lanes: Vec<LaneData>,
+    pub canvas_content: Option<String>,
+    pub has_pending_question: bool,
 }
 
 /// GET /web/specs/{id} - Render the spec compositor (command bar + canvas + chat rail).
+/// For HTMX requests returns the partial; for full page loads returns the complete shell.
 pub async fn spec_view(
     State(state): State<SharedState>,
     Path(id): Path<String>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
+    let is_htmx = headers.get("HX-Request").is_some();
+
     let spec_id = match parse_spec_id(&id) {
         Ok(id) => id,
         Err(resp) => return *resp,
@@ -611,18 +634,34 @@ pub async fn spec_view(
         SpecPhase::Active => "active".to_string(),
     };
 
+    let has_pending_question = spec_state.pending_question.is_some();
     let canvas_content = spec_state.canvas_content.clone();
 
-    SpecViewTemplate {
-        spec_id: id,
-        title: core.title.clone(),
-        one_liner: core.one_liner.clone(),
-        goal: core.goal.clone(),
-        phase,
-        lanes,
-        canvas_content,
+    if is_htmx {
+        SpecViewTemplate {
+            spec_id: id,
+            title: core.title.clone(),
+            one_liner: core.one_liner.clone(),
+            goal: core.goal.clone(),
+            phase,
+            lanes,
+            canvas_content,
+            has_pending_question,
+        }
+        .into_response()
+    } else {
+        SpecPageTemplate {
+            spec_id: id,
+            title: core.title.clone(),
+            one_liner: core.one_liner.clone(),
+            goal: core.goal.clone(),
+            phase,
+            lanes,
+            canvas_content,
+            has_pending_question,
+        }
+        .into_response()
     }
-    .into_response()
 }
 
 /// Board partial template.
@@ -1158,7 +1197,7 @@ fn question_to_view_data(q: &barnstormer_core::UserQuestion) -> QuestionData {
             default,
         } => QuestionData::Boolean {
             question_id: question_id.to_string(),
-            question: question.clone(),
+            question: render_markdown(question),
             default: *default,
         },
         barnstormer_core::UserQuestion::MultipleChoice {
@@ -1168,7 +1207,7 @@ fn question_to_view_data(q: &barnstormer_core::UserQuestion) -> QuestionData {
             allow_multi,
         } => QuestionData::MultipleChoice {
             question_id: question_id.to_string(),
-            question: question.clone(),
+            question: render_markdown(question),
             choices: choices.clone(),
             allow_multi: *allow_multi,
         },
@@ -1179,7 +1218,7 @@ fn question_to_view_data(q: &barnstormer_core::UserQuestion) -> QuestionData {
             ..
         } => QuestionData::Freeform {
             question_id: question_id.to_string(),
-            question: question.clone(),
+            question: render_markdown(question),
             placeholder: placeholder.clone().unwrap_or_default(),
         },
     }
@@ -1197,7 +1236,7 @@ pub struct TranscriptQuery {
 /// user-controlled values rendered into script tags and HTMX attributes.
 fn sanitize_container_id(raw: &str) -> String {
     match raw {
-        "activity-transcript" | "chat-transcript" | "mission-ticker" | "canvas" | "chat-rail" => {
+        "activity-transcript" | "chat-transcript" | "mission-ticker" | "canvas" | "chat-rail" | "brainstorm-chat" => {
             raw.to_string()
         }
         _ => "chat-transcript".to_string(),
@@ -1300,7 +1339,7 @@ pub async fn activity_transcript(
         query.container_id.as_deref().unwrap_or("activity-transcript"),
     );
 
-    let is_chat = container_id == "chat-transcript";
+    let is_chat = container_id == "chat-transcript" || container_id == "brainstorm-chat";
 
     let mut transcript: Vec<TranscriptEntry> = spec_state
         .transcript
@@ -1377,7 +1416,7 @@ pub async fn chat_panel(
 
     let is_fullwidth = spec_state.phase == SpecPhase::Brainstorming;
     let container_id = if is_fullwidth {
-        "canvas".to_string()
+        "brainstorm-chat".to_string()
     } else {
         "chat-transcript".to_string()
     };
@@ -1789,6 +1828,30 @@ pub async fn answer_question(
     };
 
     // Events are persisted by the background broadcast subscriber.
+    // Drop actors lock before acquiring swarms to avoid deadlock.
+    drop(actors);
+
+    // Wake the agent loop so agents resume promptly after an answer.
+    {
+        let swarms = state.swarms.read().await;
+        if let Some(swarm_handle) = swarms.get(&spec_id) {
+            let swarm = swarm_handle.swarm.lock().await;
+            swarm.notify_human_message();
+        }
+    }
+
+    // Re-acquire actors to read transcript for response
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
 
     // Determine container_id from HX-Target header so the response replaces
     // the correct transcript container (activity panel vs chat tab).
@@ -1803,8 +1866,11 @@ pub async fn answer_question(
     // Return refreshed transcript partial
     let spec_state = handle.read_state().await;
 
-    let is_chat = container_id == "chat-transcript";
+    let is_chat = container_id == "chat-transcript" || container_id == "brainstorm-chat";
     let is_ticker = container_id == "mission-ticker";
+
+    // Read actual pending question from state instead of assuming None
+    let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
     let mut transcript: Vec<TranscriptEntry> = spec_state
         .transcript
@@ -1829,7 +1895,7 @@ pub async fn answer_question(
         MissionTickerTemplate {
             spec_id: id,
             ticker_entries,
-            pending_question: None,
+            pending_question,
         }
         .into_response()
     } else if is_chat {
@@ -1837,7 +1903,7 @@ pub async fn answer_question(
             spec_id: id,
             container_id,
             transcript,
-            pending_question: None,
+            pending_question,
         }
         .into_response()
     } else {
@@ -1845,7 +1911,7 @@ pub async fn answer_question(
             spec_id: id,
             container_id,
             transcript,
-            pending_question: None,
+            pending_question,
         }
         .into_response()
     }
@@ -1957,7 +2023,7 @@ pub async fn chat(
     // Return refreshed transcript partial
     let spec_state = handle.read_state().await;
 
-    let is_chat = container_id == "chat-transcript";
+    let is_chat = container_id == "chat-transcript" || container_id == "brainstorm-chat";
     let is_ticker = container_id == "mission-ticker";
 
     let mut transcript: Vec<TranscriptEntry> = spec_state
@@ -3082,6 +3148,7 @@ mod tests {
             phase: "active".to_string(),
             lanes: vec![],
             canvas_content: None,
+            has_pending_question: false,
         };
         let rendered = tmpl.render().unwrap();
         // Command bar with title and subtitle
@@ -4983,13 +5050,23 @@ mod tests {
             *actors.keys().next().unwrap()
         };
 
-        // Send UpdateCanvas command to set canvas content
+        // Send UpdateCanvas command to set canvas content and a question so canvas is visible
         {
             let actors = state.actors.read().await;
             let handle = actors.get(&spec_id).unwrap();
             handle
                 .send_command(Command::UpdateCanvas {
                     content: "<p>Canvas pre-populated content</p>".to_string(),
+                })
+                .await
+                .unwrap();
+            handle
+                .send_command(Command::AskQuestion {
+                    question: barnstormer_core::UserQuestion::Boolean {
+                        question_id: ulid::Ulid::new(),
+                        question: "Test?".to_string(),
+                        default: Some(true),
+                    },
                 })
                 .await
                 .unwrap();

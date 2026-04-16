@@ -227,6 +227,7 @@ impl SpecState {
                 answer,
             } => {
                 self.pending_question = None;
+                self.canvas_content = None;
                 self.transcript.push(TranscriptMessage {
                     message_id: *question_id,
                     sender: "human".to_string(),

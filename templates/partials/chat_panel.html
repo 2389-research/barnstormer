@@ -11,9 +11,10 @@
         <form hx-post="/web/specs/{{ spec_id }}/chat"
               hx-target="#{{ container_id }}"
               hx-swap="outerHTML"
-              hx-on::after-request="this.reset()">
+              hx-on::after-request="this.reset()"
+              autocomplete="off">
             <div class="chat-input-row">
-                <textarea name="message" placeholder="Ask the agents anything..." rows="1" required></textarea>
+                <textarea name="message" placeholder="Ask the agents anything..." rows="1" required data-1p-ignore></textarea>
                 <button type="submit" class="btn btn-send" title="Send">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
                 </button>

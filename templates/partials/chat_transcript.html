@@ -46,37 +46,62 @@
         </div>
         {% match q %}
         {% when QuestionData::Boolean { question_id, question, default } %}
-        <div class="chat-question-body">{{ question }}</div>
+        <div class="chat-question-body">{{ question|safe }}</div>
         <form hx-post="/web/specs/{{ spec_id }}/answer"
               hx-target="#{{ container_id }}"
               hx-swap="outerHTML"
+              autocomplete="off"
               class="chat-question-options">
-            <input type="hidden" name="question_id" value="{{ question_id }}">
+            <input type="hidden" name="question_id" value="{{ question_id }}" data-1p-ignore>
             <button type="submit" name="answer" value="Yes" class="chat-option-btn">Yes</button>
             <button type="submit" name="answer" value="No" class="chat-option-btn">No</button>
+            <button type="button" class="chat-option-btn chat-option-else" onclick="var f=this.closest('.chat-question-options'); f.querySelectorAll('.chat-option-btn').forEach(function(b){b.style.display='none'}); f.querySelector('.chat-else-expand').style.display='flex'; f.querySelector('.chat-else-expand textarea').name='answer';">Something else&hellip;</button>
+            <div class="chat-else-expand" style="display:none;">
+                <div class="chat-input-row">
+                    <textarea placeholder="Describe what you mean..." rows="2" data-1p-ignore required></textarea>
+                    <button type="submit" class="btn btn-send" title="Send">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+                    </button>
+                </div>
+            </div>
         </form>
 
         {% when QuestionData::MultipleChoice { question_id, question, choices, allow_multi } %}
-        <div class="chat-question-body">{{ question }}</div>
+        <div class="chat-question-body">{{ question|safe }}</div>
         <form hx-post="/web/specs/{{ spec_id }}/answer"
               hx-target="#{{ container_id }}"
               hx-swap="outerHTML"
+              autocomplete="off"
               class="chat-question-options">
-            <input type="hidden" name="question_id" value="{{ question_id }}">
+            <input type="hidden" name="question_id" value="{{ question_id }}" data-1p-ignore>
             {% for choice in choices %}
             <button type="submit" name="answer" value="{{ choice }}" class="chat-option-btn">{{ choice }}</button>
             {% endfor %}
+            <button type="button" class="chat-option-btn chat-option-else" onclick="var f=this.closest('.chat-question-options'); f.querySelectorAll('.chat-option-btn').forEach(function(b){b.style.display='none'}); f.querySelector('.chat-else-expand').style.display='flex'; f.querySelector('.chat-else-expand textarea').name='answer';">Something else&hellip;</button>
+            <div class="chat-else-expand" style="display:none;">
+                <div class="chat-input-row">
+                    <textarea placeholder="Describe what you mean..." rows="2" data-1p-ignore required></textarea>
+                    <button type="submit" class="btn btn-send" title="Send">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+                    </button>
+                </div>
+            </div>
         </form>
 
         {% when QuestionData::Freeform { question_id, question, placeholder } %}
-        <div class="chat-question-body">{{ question }}</div>
+        <div class="chat-question-body">{{ question|safe }}</div>
         <form hx-post="/web/specs/{{ spec_id }}/answer"
               hx-target="#{{ container_id }}"
               hx-swap="outerHTML"
+              autocomplete="off"
               class="chat-question-options">
-            <input type="hidden" name="question_id" value="{{ question_id }}">
-            <textarea name="answer" placeholder="{{ placeholder }}" rows="2" class="chat-question-textarea"></textarea>
-            <button type="submit" class="chat-option-btn">Submit</button>
+            <input type="hidden" name="question_id" value="{{ question_id }}" data-1p-ignore>
+            <div class="chat-input-row">
+                <textarea name="answer" placeholder="{{ placeholder }}" rows="2" data-1p-ignore required></textarea>
+                <button type="submit" class="btn btn-send" title="Send">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+                </button>
+            </div>
         </form>
         {% endmatch %}
     </div>
@@ -86,7 +111,36 @@
 
 <script>
     (function() {
-        var feed = document.getElementById('{{ container_id }}-feed');
+        var feedId = '{{ container_id }}-feed';
+        var feed = document.getElementById(feedId);
         if (feed) feed.scrollTop = feed.scrollHeight;
+
+        // Save scroll position before swap, restore after
+        document.body.addEventListener('htmx:beforeSwap', function(evt) {
+            if (evt.detail.target && evt.detail.target.id === '{{ container_id }}') {
+                var f = document.getElementById(feedId);
+                if (f) {
+                    // Store whether user was scrolled to bottom
+                    var atBottom = (f.scrollHeight - f.scrollTop - f.clientHeight) < 50;
+                    evt.detail.target._wasAtBottom = atBottom;
+                    evt.detail.target._scrollTop = f.scrollTop;
+                }
+            }
+        });
+
+        document.body.addEventListener('htmx:afterSwap', function(evt) {
+            if (evt.detail.target && evt.detail.target.id === '{{ container_id }}') {
+                var f = document.getElementById(feedId);
+                if (!f) return;
+                // If user was at bottom (or close), scroll to new bottom
+                // Otherwise restore their scroll position
+                var prev = evt.detail.target;
+                if (prev._wasAtBottom !== false) {
+                    f.scrollTop = f.scrollHeight;
+                } else if (prev._scrollTop !== undefined) {
+                    f.scrollTop = prev._scrollTop;
+                }
+            }
+        });
     })();
 </script>

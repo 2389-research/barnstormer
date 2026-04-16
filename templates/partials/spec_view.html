@@ -31,12 +31,16 @@
           hx-get="/web/specs/{{ spec_id }}/chat-panel"
           hx-trigger="load" hx-swap="innerHTML">
     </main>
+    {% if has_pending_question %}
     {% match canvas_content %}
     {% when Some with (content) %}
     <div id="agent-canvas" style="display:block;">{{ content|safe }}</div>
     {% when None %}
     <div id="agent-canvas" style="display:none;"></div>
     {% endmatch %}
+    {% else %}
+    <div id="agent-canvas" style="display:none;"></div>
+    {% endif %}
 </div>
 
 </div>
@@ -72,6 +76,15 @@
                     canvas.innerHTML = content;
                     canvas.style.display = 'block';
                 } else {
+                    canvas.innerHTML = '';
+                    canvas.style.display = 'none';
+                }
+            });
+
+            // Clear the agent canvas when a question is answered (stale visual)
+            compositor.addEventListener('sse:question_answered', function() {
+                var canvas = document.getElementById('agent-canvas');
+                if (canvas) {
                     canvas.innerHTML = '';
                     canvas.style.display = 'none';
                 }
