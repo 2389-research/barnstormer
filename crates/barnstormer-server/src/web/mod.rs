@@ -1237,9 +1237,15 @@ pub struct TranscriptQuery {
 /// Validate and sanitize a container_id value. Only known IDs are accepted;
 /// anything else falls back to "chat-transcript" to prevent XSS via
 /// user-controlled values rendered into script tags and HTMX attributes.
+///
+/// Allowed IDs and where they are used:
+/// - "activity-transcript" -- activity panel transcript (default for activity handlers)
+/// - "chat-transcript"     -- chat panel transcript in refining phase
+/// - "brainstorm-chat"     -- chat panel transcript in brainstorming phase
+/// - "mission-ticker"      -- compact ticker strip; also the hx-target for answer forms
 fn sanitize_container_id(raw: &str) -> String {
     match raw {
-        "activity-transcript" | "chat-transcript" | "mission-ticker" | "canvas" | "chat-rail" | "brainstorm-chat" => {
+        "activity-transcript" | "chat-transcript" | "mission-ticker" | "brainstorm-chat" => {
             raw.to_string()
         }
         _ => "chat-transcript".to_string(),
@@ -1342,6 +1348,9 @@ pub async fn activity_transcript(
         query.container_id.as_deref().unwrap_or("activity-transcript"),
     );
 
+    // Chat containers only show human + manager messages (filtered by
+    // is_chat_participant) so the user sees a clean conversation thread.
+    // The activity-transcript and mission-ticker containers show all senders.
     let is_chat = container_id == "chat-transcript" || container_id == "brainstorm-chat";
 
     let mut transcript: Vec<TranscriptEntry> = spec_state
@@ -1855,6 +1864,7 @@ pub async fn answer_question(
     // Return refreshed transcript partial
     let spec_state = handle.read_state().await;
 
+    // Chat containers only show human + manager messages; see sanitize_container_id docs.
     let is_chat = container_id == "chat-transcript" || container_id == "brainstorm-chat";
     let is_ticker = container_id == "mission-ticker";
 
@@ -2012,6 +2022,7 @@ pub async fn chat(
     // Return refreshed transcript partial
     let spec_state = handle.read_state().await;
 
+    // Chat containers only show human + manager messages; see sanitize_container_id docs.
     let is_chat = container_id == "chat-transcript" || container_id == "brainstorm-chat";
     let is_ticker = container_id == "mission-ticker";
 
@@ -4370,8 +4381,10 @@ mod tests {
         assert_eq!(sanitize_container_id("activity-transcript"), "activity-transcript");
         assert_eq!(sanitize_container_id("chat-transcript"), "chat-transcript");
         assert_eq!(sanitize_container_id("mission-ticker"), "mission-ticker");
-        assert_eq!(sanitize_container_id("canvas"), "canvas");
-        assert_eq!(sanitize_container_id("chat-rail"), "chat-rail");
+        assert_eq!(sanitize_container_id("brainstorm-chat"), "brainstorm-chat");
+        // IDs that are DOM element IDs but not transcript container_ids should be rejected.
+        assert_eq!(sanitize_container_id("canvas"), "chat-transcript");
+        assert_eq!(sanitize_container_id("chat-rail"), "chat-transcript");
         assert_eq!(sanitize_container_id("'); alert('xss'); //"), "chat-transcript");
         assert_eq!(sanitize_container_id("malicious-id"), "chat-transcript");
         assert_eq!(sanitize_container_id(""), "chat-transcript");
