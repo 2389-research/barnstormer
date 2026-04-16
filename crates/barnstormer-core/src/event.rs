@@ -86,6 +86,26 @@ pub enum EventPayload {
     CanvasUpdated {
         content: String,
     },
+    StreamingDelta {
+        agent_id: String,
+        text: String,
+    },
+    StreamingToolActivity {
+        agent_id: String,
+        activity: String,
+    },
+}
+
+impl EventPayload {
+    /// Returns true for events that should not be persisted to the event log.
+    /// Streaming events are broadcast-only — they carry ephemeral LLM state
+    /// that has no meaning during replay.
+    pub fn is_ephemeral(&self) -> bool {
+        matches!(
+            self,
+            EventPayload::StreamingDelta { .. } | EventPayload::StreamingToolActivity { .. }
+        )
+    }
 }
 
 #[cfg(test)]
@@ -232,5 +252,49 @@ mod tests {
         round_trip_event(EventPayload::CanvasUpdated {
             content: "<h1>Test</h1>".to_string(),
         });
+    }
+
+    #[test]
+    fn streaming_delta_round_trip() {
+        round_trip_event(EventPayload::StreamingDelta {
+            agent_id: "manager-1".to_string(),
+            text: "Hello".to_string(),
+        });
+    }
+
+    #[test]
+    fn streaming_tool_activity_round_trip() {
+        round_trip_event(EventPayload::StreamingToolActivity {
+            agent_id: "brainstormer-1".to_string(),
+            activity: "creating card 'Auth Flow'".to_string(),
+        });
+    }
+
+    #[test]
+    fn is_ephemeral_returns_true_for_streaming_events() {
+        assert!(EventPayload::StreamingDelta {
+            agent_id: String::new(),
+            text: String::new(),
+        }
+        .is_ephemeral());
+        assert!(EventPayload::StreamingToolActivity {
+            agent_id: String::new(),
+            activity: String::new(),
+        }
+        .is_ephemeral());
+    }
+
+    #[test]
+    fn is_ephemeral_returns_false_for_durable_events() {
+        assert!(!EventPayload::SpecCreated {
+            title: String::new(),
+            one_liner: String::new(),
+            goal: String::new(),
+        }
+        .is_ephemeral());
+        assert!(!EventPayload::TranscriptAppended {
+            message: TranscriptMessage::new("x".into(), "y".into()),
+        }
+        .is_ephemeral());
     }
 }

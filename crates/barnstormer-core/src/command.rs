@@ -77,6 +77,14 @@ pub enum Command {
         content: String,
     },
     Undo,
+    StreamDelta {
+        agent_id: String,
+        text: String,
+    },
+    StreamToolActivity {
+        agent_id: String,
+        activity: String,
+    },
 }
 
 #[cfg(test)]

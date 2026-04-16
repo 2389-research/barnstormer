@@ -328,6 +328,14 @@ impl SpecActor {
                 vec![EventPayload::CanvasUpdated { content }]
             }
 
+            Command::StreamDelta { agent_id, text } => {
+                vec![EventPayload::StreamingDelta { agent_id, text }]
+            }
+
+            Command::StreamToolActivity { agent_id, activity } => {
+                vec![EventPayload::StreamingToolActivity { agent_id, activity }]
+            }
+
             Command::Undo => {
                 if state.undo_stack.is_empty() {
                     return Err(ActorError::NothingToUndo);
@@ -773,6 +781,36 @@ mod tests {
             .unwrap();
         let state = handle.read_state().await;
         assert_eq!(state.phase, SpecPhase::Brainstorming);
+    }
+
+    #[tokio::test]
+    async fn actor_broadcasts_streaming_delta() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        let mut rx = handle.subscribe();
+
+        let events = handle
+            .send_command(Command::StreamDelta {
+                agent_id: "manager-1".to_string(),
+                text: "Hi".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        match &events[0].payload {
+            EventPayload::StreamingDelta { agent_id, text } => {
+                assert_eq!(agent_id, "manager-1");
+                assert_eq!(text, "Hi");
+            }
+            _ => panic!("expected StreamingDelta"),
+        }
+
+        let broadcast = rx.recv().await.unwrap();
+        match &broadcast.payload {
+            EventPayload::StreamingDelta { .. } => {}
+            _ => panic!("expected StreamingDelta broadcast"),
+        }
     }
 
     #[tokio::test]

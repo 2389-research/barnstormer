@@ -297,6 +297,14 @@ impl SpecState {
                 self.phase = phase.clone();
                 // No undo entry — phase transitions are lifecycle events
             }
+
+            EventPayload::StreamingDelta { .. } => {
+                // Ephemeral — no state mutation
+            }
+
+            EventPayload::StreamingToolActivity { .. } => {
+                // Ephemeral — no state mutation
+            }
         }
     }
 
@@ -353,6 +361,12 @@ impl SpecState {
                 } else {
                     self.canvas_content = Some(content.clone());
                 }
+            }
+            EventPayload::StreamingDelta { .. } => {
+                // Ephemeral — no state mutation
+            }
+            EventPayload::StreamingToolActivity { .. } => {
+                // Ephemeral — no state mutation
             }
             // Other event types during undo are applied normally
             _ => {
@@ -924,6 +938,25 @@ mod tests {
         let json = serde_json::to_string(&SpecState::new()).unwrap();
         let back: SpecState = serde_json::from_str(&json).unwrap();
         assert_eq!(back.canvas_content, None);
+    }
+
+    #[test]
+    fn apply_streaming_delta_is_noop() {
+        let mut state = SpecState::new();
+        let spec_id = make_spec_id();
+        let before_cards = state.cards.len();
+        let before_transcript = state.transcript.len();
+        state.apply(&make_event(
+            1,
+            spec_id,
+            EventPayload::StreamingDelta {
+                agent_id: "manager-1".to_string(),
+                text: "Hello".to_string(),
+            },
+        ));
+        assert_eq!(state.cards.len(), before_cards);
+        assert_eq!(state.transcript.len(), before_transcript);
+        assert!(state.core.is_none());
     }
 
     #[test]

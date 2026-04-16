@@ -30,6 +30,8 @@ fn event_type_name(payload: &barnstormer_core::EventPayload) -> &'static str {
         barnstormer_core::EventPayload::SnapshotWritten { .. } => "snapshot_written",
         barnstormer_core::EventPayload::PhaseTransitioned { .. } => "phase_transitioned",
         barnstormer_core::EventPayload::CanvasUpdated { .. } => "canvas_updated",
+        barnstormer_core::EventPayload::StreamingDelta { .. } => "streaming_delta",
+        barnstormer_core::EventPayload::StreamingToolActivity { .. } => "streaming_tool_activity",
     }
 }
 
