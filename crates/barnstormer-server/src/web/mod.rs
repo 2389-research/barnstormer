@@ -2228,16 +2228,9 @@ pub async fn transition_phase(
         .await
     {
         Ok(_) => {
-            let label = match target {
-                SpecPhase::Brainstorming => "Brainstorming",
-                SpecPhase::Refining => "Refining",
-                SpecPhase::Complete => "Complete",
-            };
-            (
-                StatusCode::OK,
-                Html(format!("<span class=\"phase-badge\">{}</span>", label)),
-            )
-                .into_response()
+            // Phase transition triggers SSE phase_transitioned event,
+            // which causes the client to reload the entire workspace.
+            (StatusCode::OK, Html("<span>OK</span>".to_string())).into_response()
         }
         Err(ActorError::AlreadyInPhase) => (
             StatusCode::CONFLICT,
@@ -4990,20 +4983,20 @@ mod tests {
             "should have brainstorming marker"
         );
         assert!(
-            html.contains("phase-brainstorming"),
-            "should have brainstorming badge"
+            html.contains("phase-stepper"),
+            "should have phase stepper"
         );
         assert!(
-            html.contains("View Board"),
-            "should have View Board button"
+            html.contains("step-active"),
+            "should have active stepper step"
         );
         assert!(
             html.contains("agent-canvas"),
             "should have agent-canvas container"
         );
         assert!(
-            !html.contains("Resume Brainstorming"),
-            "should not have Resume button in brainstorming"
+            !html.contains("view-toggles-row"),
+            "brainstorming should not have view toggles row"
         );
     }
 
@@ -5054,16 +5047,20 @@ mod tests {
             "should have document tab toggle"
         );
         assert!(
-            html.contains("Resume Brainstorming"),
-            "should have Resume button"
+            html.contains("view-toggles-row"),
+            "refining should have view toggles row"
+        );
+        assert!(
+            html.contains("phase-stepper"),
+            "should have phase stepper"
+        );
+        assert!(
+            html.contains("step-completed"),
+            "brainstorming step should be completed in refining phase"
         );
         assert!(
             !html.contains("data-view=\"brainstorming\""),
             "should not have brainstorming marker"
-        );
-        assert!(
-            !html.contains("phase-brainstorming"),
-            "should not have brainstorming badge"
         );
     }
 
