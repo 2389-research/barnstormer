@@ -2,7 +2,7 @@
 {# ABOUTME: Loaded into #workspace when a spec is selected; layout varies by phase. #}
 
 {% if phase == "brainstorming" %}
-{# Brainstorming layout: full-width chat with agent canvas #}
+{# Brainstorming layout: command bar + stepper + full-width chat #}
 <div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream"
      data-view="brainstorming">
 
@@ -94,7 +94,7 @@
 </script>
 
 {% else if phase == "refining" %}
-{# Refining layout: tabs, chat rail, board/document/workflow views #}
+{# Refining layout: command bar + stepper + view toggles + canvas + chat rail #}
 <div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
 
 <header class="command-bar">
