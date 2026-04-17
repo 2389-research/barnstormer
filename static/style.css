@@ -92,6 +92,7 @@ html, body {
 }
 
 .spec-compositor {
+    position: relative;
     display: flex;
     flex-direction: column;
     flex: 1;
@@ -233,14 +234,19 @@ html, body {
     background: var(--text-primary);
     color: var(--bg-primary);
 }
-.agent-pill-paused,
-.agent-pill-stopped {
+.agent-pill-paused {
     background: var(--bg-secondary);
     color: var(--text-muted);
 }
-.agent-pill-paused:hover,
-.agent-pill-stopped:hover {
+.agent-pill-paused:hover {
     color: var(--text-primary);
+}
+.agent-pill-stopped {
+    background: var(--agent-accent, #222);
+    color: #fff;
+}
+.agent-pill-stopped:hover {
+    opacity: 0.85;
 }
 .agent-pill-dot {
     width: 8px;
@@ -250,10 +256,13 @@ html, body {
 .agent-pill-running .agent-pill-dot {
     background: #34D399;
 }
-.agent-pill-paused .agent-pill-dot,
-.agent-pill-stopped .agent-pill-dot {
+.agent-pill-paused .agent-pill-dot {
     background: var(--text-muted);
     opacity: 0.4;
+}
+.agent-pill-stopped .agent-pill-dot {
+    background: #fff;
+    opacity: 0.6;
 }
 
 /* --- Chat panel (right rail) --- */
@@ -1619,27 +1628,59 @@ html, body {
   flex: 1;
 }
 
-/* Agents-offline: dim entire interface when agents aren't running */
+/* Agents-offline: dim when agents aren't running, but still interactive */
 .spec-compositor.agents-offline .spec-body {
     opacity: 0.5;
-    pointer-events: none;
-}
-.spec-compositor.agents-offline .agents-offline-banner {
-    pointer-events: auto;
-    opacity: 1;
 }
 .agents-offline-banner {
+    display: none;
+}
+.spec-compositor.agents-offline .agents-offline-banner {
     display: flex;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 10;
+    flex-direction: column;
     align-items: center;
     gap: 12px;
-    padding: 10px 16px;
-    background: var(--bg-secondary);
-    border-bottom: 1px solid var(--border);
+    padding: 24px 32px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
     font-size: 0.875rem;
     color: var(--text-muted);
+    pointer-events: auto;
 }
-.agents-offline-banner .btn {
+.agents-offline-banner .btn-start-agents {
     white-space: nowrap;
+    padding: 8px 24px;
+    background: var(--agent-accent, #222);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-weight: 500;
+    cursor: pointer;
+}
+.agents-offline-banner .btn-start-agents:hover {
+    opacity: 0.85;
+}
+.agents-offline-dismiss {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    background: none;
+    border: none;
+    font-size: 1.1rem;
+    line-height: 1;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0 4px;
+}
+.agents-offline-dismiss:hover {
+    color: var(--text-primary);
 }
 
 [data-view="brainstorming"] .spec-body > .canvas {

@@ -27,13 +27,6 @@
 </header>
 
 <div class="spec-body">
-    <div id="agents-offline-banner" class="agents-offline-banner" style="display:none;">
-        <span>Agents are not running.</span>
-        <button class="btn btn-sm btn-start-agents"
-                hx-post="/web/specs/{{ spec_id }}/agents/start"
-                hx-target="#agent-controls"
-                hx-swap="innerHTML">Start Agents</button>
-    </div>
     <main class="canvas" id="canvas"
           hx-get="/web/specs/{{ spec_id }}/chat-panel"
           hx-trigger="load" hx-swap="innerHTML">
@@ -48,6 +41,14 @@
     {% else %}
     <div id="agent-canvas" style="display:none;"></div>
     {% endif %}
+</div>
+<div id="agents-offline-banner" class="agents-offline-banner">
+    <button class="agents-offline-dismiss" onclick="this.parentElement.style.display='none'" title="Dismiss">&times;</button>
+    <span>Agents are not running.</span>
+    <button class="btn btn-start-agents"
+            hx-post="/web/specs/{{ spec_id }}/agents/start"
+            hx-target="#agent-controls"
+            hx-swap="innerHTML">Start Agents</button>
 </div>
 
 </div>
@@ -162,13 +163,6 @@
 </header>
 
 <div class="spec-body">
-    <div id="agents-offline-banner" class="agents-offline-banner" style="display:none;">
-        <span>Agents are not running.</span>
-        <button class="btn btn-sm btn-start-agents"
-                hx-post="/web/specs/{{ spec_id }}/agents/start"
-                hx-target="#agent-controls"
-                hx-swap="innerHTML">Start Agents</button>
-    </div>
     <main class="canvas" id="canvas"
           hx-get="/web/specs/{{ spec_id }}/document"
           hx-trigger="load" hx-swap="innerHTML">
@@ -177,6 +171,14 @@
            hx-get="/web/specs/{{ spec_id }}/chat-panel"
            hx-trigger="load" hx-swap="innerHTML">
     </aside>
+</div>
+<div id="agents-offline-banner" class="agents-offline-banner">
+    <button class="agents-offline-dismiss" onclick="this.parentElement.style.display='none'" title="Dismiss">&times;</button>
+    <span>Agents are not running.</span>
+    <button class="btn btn-start-agents"
+            hx-post="/web/specs/{{ spec_id }}/agents/start"
+            hx-target="#agent-controls"
+            hx-swap="innerHTML">Start Agents</button>
 </div>
 
 </div>

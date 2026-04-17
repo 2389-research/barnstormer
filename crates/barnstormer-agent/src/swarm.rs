@@ -561,6 +561,21 @@ async fn run_agent_by_index(
     )
     .await;
 
+    // Skip the LLM call if nothing has changed since the last step.
+    // The agent only needs to run when there are new events to react to.
+    // First run (last_event_seen == 0) always proceeds.
+    if runner.context.recent_events.is_empty() && runner.context.last_event_seen > 0 {
+        tracing::debug!(
+            agent = %runner.agent_id,
+            "no new events, skipping agent step"
+        );
+        // Put the runner back without calling the LLM
+        let mut s = swarm.lock().await;
+        s.agents[index] = Some(runner);
+        s.event_receivers[index] = event_rx;
+        return false;
+    }
+
     let phase = actor_ref.read_state().await.phase.clone();
 
     let did_work = SwarmOrchestrator::run_agent_step(
