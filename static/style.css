@@ -216,6 +216,17 @@ html, body {
     }
 }
 
+/* View toggles row — sits below stepper when phase has sub-views */
+.view-toggles-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 20px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
 /* --- Phase stepper --- */
 .phase-stepper {
     display: flex;
