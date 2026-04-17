@@ -216,6 +216,97 @@ html, body {
     }
 }
 
+/* --- Phase stepper --- */
+.phase-stepper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    padding: 12px 20px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.phase-step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: var(--font-body);
+    color: var(--text-muted);
+    transition: all 0.2s;
+    white-space: nowrap;
+    position: relative;
+}
+
+.phase-step-number {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    font-size: 12px;
+    font-weight: 600;
+    border: 2px solid var(--border);
+    color: var(--text-muted);
+    background: var(--bg-card);
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.phase-step-label {
+    transition: color 0.2s;
+}
+
+.phase-step-connector {
+    width: 48px;
+    height: 2px;
+    background: var(--border);
+    flex-shrink: 0;
+    transition: background 0.2s;
+}
+
+.phase-step.step-active {
+    cursor: default;
+    color: var(--text-primary);
+}
+.phase-step.step-active .phase-step-number {
+    background: var(--text-primary);
+    border-color: var(--text-primary);
+    color: var(--bg-card);
+}
+
+.phase-step.step-completed {
+    color: var(--text-primary);
+}
+.phase-step.step-completed:hover {
+    opacity: 0.7;
+}
+.phase-step.step-completed .phase-step-number {
+    background: var(--success, #22c55e);
+    border-color: var(--success, #22c55e);
+    color: #fff;
+}
+
+.phase-step-connector.connector-completed {
+    background: var(--success, #22c55e);
+}
+
+.phase-step.step-disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+.phase-step.step-disabled .phase-step-number {
+    border-style: dashed;
+}
+
 /* --- Agent status pill (replaces separate LEDs + controls) --- */
 .agent-pill {
     display: flex;
