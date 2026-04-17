@@ -264,7 +264,7 @@ html, body {
 .phase-step-label {
     transition: color 0.2s;
 }
-
+/* Connector line between steps */
 .phase-step-connector {
     width: 48px;
     height: 2px;
@@ -272,7 +272,7 @@ html, body {
     flex-shrink: 0;
     transition: background 0.2s;
 }
-
+/* Active step */
 .phase-step.step-active {
     cursor: default;
     color: var(--text-primary);
@@ -282,7 +282,7 @@ html, body {
     border-color: var(--text-primary);
     color: var(--bg-card);
 }
-
+/* Completed step */
 .phase-step.step-completed {
     color: var(--text-primary);
 }
@@ -294,11 +294,11 @@ html, body {
     border-color: var(--success, #22c55e);
     color: #fff;
 }
-
+/* Completed connector */
 .phase-step-connector.connector-completed {
     background: var(--success, #22c55e);
 }
-
+/* Disabled/upcoming step */
 .phase-step.step-disabled {
     cursor: not-allowed;
     opacity: 0.5;
