@@ -1,8 +1,8 @@
-{# ABOUTME: Spec compositor: command bar + canvas + chat rail. #}
-{# ABOUTME: Loaded into #workspace when a spec is selected; default view is the document canvas. #}
+{# ABOUTME: Spec compositor: command bar + phase stepper + canvas + chat rail. #}
+{# ABOUTME: Loaded into #workspace when a spec is selected; layout varies by phase. #}
 
 {% if phase == "brainstorming" %}
-{# Brainstorming layout: full-width chat, phase badge, view board button #}
+{# Brainstorming layout: full-width chat with agent canvas #}
 <div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream"
      data-view="brainstorming">
 
@@ -11,20 +11,14 @@
         <span class="command-bar-title">{{ title }}</span>
         <span class="command-bar-chevron">&#8250;</span>
         <span class="command-bar-subtitle">{{ one_liner }}</span>
-        <span class="phase-badge phase-brainstorming">Brainstorming</span>
     </div>
     <div class="command-bar-right">
-        <button id="btn-view-board" class="btn btn-sm"
-                hx-get="/web/specs/{{ spec_id }}/board"
-                hx-target="#canvas" hx-swap="innerHTML">View Board</button>
-        <button id="btn-back-to-chat" class="btn btn-sm" style="display:none;"
-                hx-get="/web/specs/{{ spec_id }}/chat-panel"
-                hx-target="#canvas" hx-swap="innerHTML">Back to Chat</button>
         <div id="agent-controls" hx-get="/web/specs/{{ spec_id }}/agents/status"
              hx-trigger="load, sse:agent_step_started, sse:agent_step_finished, refreshAgents from:body"
              hx-swap="innerHTML"></div>
     </div>
 </header>
+{% include "partials/phase_stepper.html" %}
 
 <div class="spec-body">
     <main class="canvas" id="canvas"
@@ -55,23 +49,6 @@
 
 <script>
     (function() {
-        var btnBoard = document.getElementById('btn-view-board');
-        var btnChat = document.getElementById('btn-back-to-chat');
-        if (btnBoard) {
-            btnBoard.addEventListener('click', function() {
-                btnBoard.style.display = 'none';
-                btnChat.style.display = '';
-                document.getElementById('canvas').classList.add('canvas-board');
-            });
-        }
-        if (btnChat) {
-            btnChat.addEventListener('click', function() {
-                btnChat.style.display = 'none';
-                btnBoard.style.display = '';
-                document.getElementById('canvas').classList.remove('canvas-board');
-            });
-        }
-
         var compositor = document.querySelector('.spec-compositor');
         if (compositor) {
             compositor.addEventListener('sse:phase_transitioned', function() {
@@ -125,8 +102,15 @@
         <span class="command-bar-title">{{ title }}</span>
         <span class="command-bar-chevron">&#8250;</span>
         <span class="command-bar-subtitle">{{ one_liner }}</span>
-        <span class="phase-badge phase-refining">Refining</span>
     </div>
+    <div class="command-bar-right">
+        <div id="agent-controls" hx-get="/web/specs/{{ spec_id }}/agents/status"
+             hx-trigger="load, sse:agent_step_started, sse:agent_step_finished, refreshAgents from:body"
+             hx-swap="innerHTML"></div>
+    </div>
+</header>
+{% include "partials/phase_stepper.html" %}
+<div class="view-toggles-row">
     <div class="view-toggles-capsule">
         <button class="view-toggle active" data-view="document"
                 hx-get="/web/specs/{{ spec_id }}/document"
@@ -147,20 +131,7 @@
             <span class="view-toggle-label">Workflow</span>
         </button>
     </div>
-    <div class="command-bar-right">
-        <button class="btn btn-sm"
-                hx-post="/web/specs/{{ spec_id }}/phase"
-                hx-vals='{"target":"complete"}'
-                hx-swap="none">Finalize Spec</button>
-        <button class="btn btn-sm"
-                hx-post="/web/specs/{{ spec_id }}/phase"
-                hx-vals='{"target":"brainstorming"}'
-                hx-swap="none">Resume Brainstorming</button>
-        <div id="agent-controls" hx-get="/web/specs/{{ spec_id }}/agents/status"
-             hx-trigger="load, sse:agent_step_started, sse:agent_step_finished, refreshAgents from:body"
-             hx-swap="innerHTML"></div>
-    </div>
-</header>
+</div>
 
 <div class="spec-body">
     <main class="canvas" id="canvas"
@@ -245,7 +216,7 @@
 </script>
 
 {% else %}
-{# Complete layout: read-only export with download buttons #}
+{# Complete layout: read-only export view #}
 <div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
 
 <header class="command-bar">
@@ -253,16 +224,11 @@
         <span class="command-bar-title">{{ title }}</span>
         <span class="command-bar-chevron">&#8250;</span>
         <span class="command-bar-subtitle">{{ one_liner }}</span>
-        <span class="phase-badge phase-complete">Complete</span>
     </div>
     <div class="command-bar-right">
-        <a href="/web/specs/{{ spec_id }}/export/markdown" download class="btn btn-sm">Download .md</a>
-        <button class="btn btn-sm"
-                hx-post="/web/specs/{{ spec_id }}/phase"
-                hx-vals='{"target":"refining"}'
-                hx-swap="none">Keep Refining</button>
     </div>
 </header>
+{% include "partials/phase_stepper.html" %}
 
 <div class="spec-body">
     <main class="canvas" id="canvas"
