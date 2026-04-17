@@ -18,16 +18,16 @@
     <button class="phase-step step-completed"
             hx-post="/web/specs/{{ spec_id }}/phase"
             hx-vals='{"target":"{{ phase_id }}"}'
-            hx-swap="none"
-            title="Return to {{ label }}">
+            hx-swap="none">
         <span class="phase-step-number">✓</span>
         <span class="phase-step-label">{{ label }}</span>
+        <span class="phase-step-tooltip">Return to {{ label }}</span>
     </button>
     {% else %}
-    <div class="phase-step step-disabled"
-         title="{{ self.disabled_tooltip(phase_id) }}">
+    <div class="phase-step step-disabled">
         <span class="phase-step-number">{{ number }}</span>
         <span class="phase-step-label">{{ label }}</span>
+        <span class="phase-step-tooltip">{{ self.disabled_tooltip(phase_id) }}</span>
     </div>
     {% endif %}
     {% endfor %}
