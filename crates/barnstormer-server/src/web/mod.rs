@@ -578,6 +578,28 @@ pub struct SpecViewTemplate {
     pub has_pending_question: bool,
 }
 
+impl SpecViewTemplate {
+    /// A phase is "completed" if the current phase is further along in the lifecycle.
+    fn is_completed(&self, phase_id: &str) -> bool {
+        let order = |p: &str| match p {
+            "brainstorming" => 0,
+            "refining" => 1,
+            "complete" => 2,
+            _ => 99,
+        };
+        order(phase_id) < order(&self.phase)
+    }
+
+    /// Tooltip text explaining why a future phase is disabled.
+    fn disabled_tooltip(&self, phase_id: &str) -> &'static str {
+        match phase_id {
+            "refining" => "Complete brainstorming to unlock refining",
+            "complete" => "Refine the spec before finalizing",
+            _ => "",
+        }
+    }
+}
+
 /// Full-page spec view for direct navigation / page reload (non-HTMX requests).
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "spec_page.html")]
@@ -590,6 +612,28 @@ pub struct SpecPageTemplate {
     pub lanes: Vec<LaneData>,
     pub canvas_content: Option<String>,
     pub has_pending_question: bool,
+}
+
+impl SpecPageTemplate {
+    /// A phase is "completed" if the current phase is further along in the lifecycle.
+    fn is_completed(&self, phase_id: &str) -> bool {
+        let order = |p: &str| match p {
+            "brainstorming" => 0,
+            "refining" => 1,
+            "complete" => 2,
+            _ => 99,
+        };
+        order(phase_id) < order(&self.phase)
+    }
+
+    /// Tooltip text explaining why a future phase is disabled.
+    fn disabled_tooltip(&self, phase_id: &str) -> &'static str {
+        match phase_id {
+            "refining" => "Complete brainstorming to unlock refining",
+            "complete" => "Refine the spec before finalizing",
+            _ => "",
+        }
+    }
 }
 
 /// GET /web/specs/{id} - Render the spec compositor (command bar + canvas + chat rail).
