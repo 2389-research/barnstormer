@@ -234,6 +234,9 @@ html, body {
 .view-toggle-label {
     display: none;
 }
+.view-toggle.active .view-toggle-label {
+    display: inline;
+}
 @media (min-width: 901px) {
     .view-toggle-label {
         display: inline;
@@ -1836,6 +1839,27 @@ html, body {
         display: flex;
         width: 100%;
         border-left: none;
+    }
+
+    .phase-stepper {
+        gap: 0;
+        padding: 8px 16px;
+    }
+
+    .phase-step-connector {
+        width: 24px;
+    }
+
+    .phase-step {
+        padding: 4px 8px;
+    }
+
+    .phase-step-label {
+        display: none;
+    }
+
+    .phase-step.step-active .phase-step-label {
+        display: inline;
     }
 }
 
