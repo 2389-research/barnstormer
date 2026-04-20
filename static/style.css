@@ -159,6 +159,12 @@ html, body {
     padding: var(--spacing-lg);
 }
 
+.create-spec-form {
+    padding: var(--spacing-lg);
+    max-width: 500px;
+    margin: 0 auto;
+}
+
 .chat-rail {
     width: var(--chat-rail-width);
     flex-shrink: 0;

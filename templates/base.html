@@ -33,9 +33,9 @@
         <div class="workspace" id="workspace">{% block workspace %}{% endblock %}</div>
     </div>
     <script>
-        // Close mobile nav drawer when a link inside it is clicked
+        // Close mobile nav drawer when a link or button inside it is clicked
         document.querySelector('.nav-rail').addEventListener('click', function(e) {
-            if (e.target.closest('a')) {
+            if (e.target.closest('a') || e.target.closest('button')) {
                 document.querySelector('.app-layout').classList.remove('nav-open');
             }
         });
