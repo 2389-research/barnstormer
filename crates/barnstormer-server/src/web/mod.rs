@@ -1295,9 +1295,12 @@ fn question_to_view_data(q: &barnstormer_core::UserQuestion) -> QuestionData {
 
 /// Query parameters for the transcript endpoint, allowing callers to specify
 /// which container the response should target (activity panel vs chat tab).
+/// The optional `part` field selects a sub-section: "feed" for messages only,
+/// "question" for the question card only, or omitted for the full transcript.
 #[derive(Deserialize)]
 pub struct TranscriptQuery {
     pub container_id: Option<String>,
+    pub part: Option<String>,
 }
 
 /// Validate and sanitize a container_id value. Only known IDs are accepted;
@@ -1430,7 +1433,23 @@ pub async fn activity_transcript(
     mark_continuations(&mut transcript);
     collapse_repeated_steps(&mut transcript);
 
-    if is_chat {
+    let part = query.part.as_deref().unwrap_or("");
+
+    if is_chat && part == "feed" {
+        ChatFeedTemplate {
+            spec_id: id,
+            container_id,
+            transcript,
+        }
+        .into_response()
+    } else if is_chat && part == "question" {
+        ChatQuestionTemplate {
+            spec_id: id,
+            container_id,
+            pending_question,
+        }
+        .into_response()
+    } else if is_chat {
         ChatTranscriptTemplate {
             spec_id: id,
             container_id,
@@ -1457,6 +1476,26 @@ pub struct ChatTranscriptTemplate {
     pub spec_id: String,
     pub container_id: String,
     pub transcript: Vec<TranscriptEntry>,
+    pub pending_question: Option<QuestionData>,
+}
+
+/// Chat message feed partial — messages, throbber, streaming, empty state.
+/// Rendered independently so transcript refreshes don't disturb the question card.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/chat_feed.html")]
+pub struct ChatFeedTemplate {
+    pub spec_id: String,
+    pub container_id: String,
+    pub transcript: Vec<TranscriptEntry>,
+}
+
+/// Chat question card partial — pending question with answer form.
+/// Rendered independently so question refreshes don't disturb the message feed.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/chat_question.html")]
+pub struct ChatQuestionTemplate {
+    pub spec_id: String,
+    pub container_id: String,
     pub pending_question: Option<QuestionData>,
 }
 
@@ -1923,13 +1962,21 @@ pub async fn answer_question(
 
     // Determine container_id from HX-Target header so the response replaces
     // the correct transcript container (activity panel vs chat tab).
-    let container_id = sanitize_container_id(
-        headers
-            .get("HX-Target")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.trim_start_matches('#'))
-            .unwrap_or("activity-transcript"),
-    );
+    // If the target ends with "-question", we return only the question card
+    // partial so the message feed is untouched.
+    let raw_target = headers
+        .get("HX-Target")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim_start_matches('#'))
+        .unwrap_or("activity-transcript");
+
+    let is_question_target = raw_target.ends_with("-question");
+    let base_target = if is_question_target {
+        raw_target.trim_end_matches("-question")
+    } else {
+        raw_target
+    };
+    let container_id = sanitize_container_id(base_target);
 
     // Return refreshed transcript partial
     let spec_state = handle.read_state().await;
@@ -1940,6 +1987,17 @@ pub async fn answer_question(
 
     // Read actual pending question from state instead of assuming None
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
+
+    // If the answer form targeted the question card directly, return only
+    // the question partial so the message feed and any user input are preserved.
+    if is_question_target && is_chat {
+        return ChatQuestionTemplate {
+            spec_id: id,
+            container_id,
+            pending_question,
+        }
+        .into_response();
+    }
 
     let mut transcript: Vec<TranscriptEntry> = spec_state
         .transcript
@@ -4700,6 +4758,499 @@ mod tests {
             html.contains(r#"id="chat-transcript""#),
             "response should target chat-transcript container: {}",
             html
+        );
+    }
+
+    // ---- Chat feed / question split template tests ----
+
+    #[test]
+    fn chat_feed_template_renders_empty() {
+        let tmpl = ChatFeedTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains(r#"id="chat-transcript-feed""#),
+            "should contain feed container id"
+        );
+        assert!(
+            rendered.contains("No messages yet"),
+            "empty feed should show empty state"
+        );
+        assert!(
+            rendered.contains("sse:transcript_appended"),
+            "feed should trigger on transcript_appended"
+        );
+        assert!(
+            !rendered.contains("chat-question-card"),
+            "feed should not contain question card"
+        );
+    }
+
+    #[test]
+    fn chat_feed_template_renders_with_entries() {
+        let tmpl = ChatFeedTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![TranscriptEntry {
+                sender: "human".to_string(),
+                sender_label: "You".to_string(),
+                initial: "Y".to_string(),
+                is_human: true,
+                is_step: false,
+                is_continuation: false,
+                role_class: "human".to_string(),
+                content: "Hello world".to_string(),
+                content_html: "<p>Hello world</p>\n".to_string(),
+                timestamp: "12:00:00".to_string(),
+                repeat_count: 1,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Hello world"));
+        assert!(rendered.contains("You"), "should contain sender label");
+        assert!(
+            !rendered.contains("No messages yet"),
+            "should not show empty state when entries exist"
+        );
+    }
+
+    #[test]
+    fn chat_feed_template_contains_part_feed_in_hx_get() {
+        let tmpl = ChatFeedTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "brainstorm-chat".to_string(),
+            transcript: vec![],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("part=feed"),
+            "feed hx-get should include part=feed param"
+        );
+        assert!(
+            rendered.contains("container_id=brainstorm-chat"),
+            "feed hx-get should include container_id param"
+        );
+    }
+
+    #[test]
+    fn chat_question_template_renders_no_question() {
+        let tmpl = ChatQuestionTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains(r#"id="chat-transcript-question""#),
+            "should contain question container id"
+        );
+        assert!(
+            !rendered.contains("chat-question-card"),
+            "should not render question card when no question pending"
+        );
+        assert!(
+            rendered.contains("sse:question_asked"),
+            "question container should trigger on question_asked"
+        );
+    }
+
+    #[test]
+    fn chat_question_template_renders_boolean_question() {
+        let tmpl = ChatQuestionTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            pending_question: Some(QuestionData::Boolean {
+                question_id: "01HQID".to_string(),
+                question: "Continue?".to_string(),
+                default: Some(true),
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Continue?"));
+        assert!(rendered.contains("Yes"));
+        assert!(rendered.contains("No"));
+        assert!(
+            rendered.contains("Something else"),
+            "boolean question should have 'Something else' option"
+        );
+    }
+
+    #[test]
+    fn chat_question_template_renders_freeform_question() {
+        let tmpl = ChatQuestionTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            pending_question: Some(QuestionData::Freeform {
+                question_id: "01HQID".to_string(),
+                question: "Describe the goal".to_string(),
+                placeholder: "Enter goal...".to_string(),
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Describe the goal"));
+        assert!(rendered.contains("Enter goal..."));
+    }
+
+    #[test]
+    fn chat_question_template_renders_multiple_choice() {
+        let tmpl = ChatQuestionTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            pending_question: Some(QuestionData::MultipleChoice {
+                question_id: "01HQID".to_string(),
+                question: "Pick a language".to_string(),
+                choices: vec!["Rust".to_string(), "Python".to_string()],
+                allow_multi: false,
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Pick a language"));
+        assert!(rendered.contains("Rust"));
+        assert!(rendered.contains("Python"));
+    }
+
+    #[test]
+    fn chat_question_template_targets_question_container() {
+        let tmpl = ChatQuestionTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            pending_question: Some(QuestionData::Boolean {
+                question_id: "01HQID".to_string(),
+                question: "Proceed?".to_string(),
+                default: None,
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains(r##"hx-target="#chat-transcript-question""##),
+            "answer form should target question container, not full transcript: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn chat_question_template_contains_part_question_in_hx_get() {
+        let tmpl = ChatQuestionTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("part=question"),
+            "question hx-get should include part=question param"
+        );
+    }
+
+    #[test]
+    fn chat_question_boolean_has_options_set_wrapper() {
+        let tmpl = ChatQuestionTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            pending_question: Some(QuestionData::Boolean {
+                question_id: "01HQID".to_string(),
+                question: "Continue?".to_string(),
+                default: None,
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("chat-options-set"),
+            "boolean question should wrap options in chat-options-set: {}",
+            rendered
+        );
+        assert!(
+            rendered.contains("chat-else-back"),
+            "boolean question should have a back button: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn chat_question_multiple_choice_has_options_set_wrapper() {
+        let tmpl = ChatQuestionTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            pending_question: Some(QuestionData::MultipleChoice {
+                question_id: "01HQID".to_string(),
+                question: "Pick one".to_string(),
+                choices: vec!["A".to_string(), "B".to_string()],
+                allow_multi: false,
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("chat-options-set"),
+            "multiple choice question should wrap options in chat-options-set: {}",
+            rendered
+        );
+        assert!(
+            rendered.contains("chat-else-back"),
+            "multiple choice question should have a back button: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn chat_transcript_wrapper_defines_toggle_else_helper() {
+        let tmpl = ChatTranscriptTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("function toggleElse"),
+            "wrapper script should define toggleElse helper function: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn chat_transcript_template_includes_feed_and_question() {
+        let tmpl = ChatTranscriptTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![TranscriptEntry {
+                sender: "human".to_string(),
+                sender_label: "You".to_string(),
+                initial: "Y".to_string(),
+                is_human: true,
+                is_step: false,
+                is_continuation: false,
+                role_class: "human".to_string(),
+                content: "Test message".to_string(),
+                content_html: "<p>Test message</p>\n".to_string(),
+                timestamp: "12:00:00".to_string(),
+                repeat_count: 1,
+            }],
+            pending_question: Some(QuestionData::Boolean {
+                question_id: "01HQID".to_string(),
+                question: "Ready?".to_string(),
+                default: None,
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        // Wrapper container
+        assert!(
+            rendered.contains(r#"id="chat-transcript""#),
+            "should have wrapper container id"
+        );
+        // Feed sub-container
+        assert!(
+            rendered.contains(r#"id="chat-transcript-feed""#),
+            "should include feed sub-container"
+        );
+        // Question sub-container
+        assert!(
+            rendered.contains(r#"id="chat-transcript-question""#),
+            "should include question sub-container"
+        );
+        // Content from both
+        assert!(rendered.contains("Test message"), "should contain transcript entry");
+        assert!(rendered.contains("Ready?"), "should contain question");
+    }
+
+    #[test]
+    fn chat_transcript_template_feed_and_question_have_independent_triggers() {
+        let tmpl = ChatTranscriptTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        // The wrapper div itself should NOT have hx-trigger (only children do)
+        // Feed triggers on transcript_appended only
+        assert!(
+            rendered.contains("sse:transcript_appended"),
+            "feed should have transcript_appended trigger"
+        );
+        // Question triggers on question_asked and question_answered
+        assert!(
+            rendered.contains("sse:question_asked"),
+            "question should have question_asked trigger"
+        );
+        assert!(
+            rendered.contains("sse:question_answered"),
+            "question should have question_answered trigger"
+        );
+    }
+
+    // ---- Handler tests for part=feed and part=question ----
+
+    #[tokio::test]
+    async fn activity_transcript_with_part_feed_returns_feed_only() {
+        let state = test_state();
+
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("description=Feed+part+test"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(format!(
+                    "/web/specs/{}/activity/transcript?container_id=chat-transcript&part=feed",
+                    spec_id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains(r#"id="chat-transcript-feed""#),
+            "should return feed container: {}",
+            html
+        );
+        assert!(
+            !html.contains(r#"id="chat-transcript-question""#),
+            "should not include question container in feed-only response"
+        );
+    }
+
+    #[tokio::test]
+    async fn activity_transcript_with_part_question_returns_question_only() {
+        let state = test_state();
+
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("description=Question+part+test"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(format!(
+                    "/web/specs/{}/activity/transcript?container_id=chat-transcript&part=question",
+                    spec_id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains(r#"id="chat-transcript-question""#),
+            "should return question container: {}",
+            html
+        );
+        assert!(
+            !html.contains(r#"id="chat-transcript-feed""#),
+            "should not include feed container in question-only response"
+        );
+    }
+
+    #[tokio::test]
+    async fn post_answer_targeting_question_container_returns_question_only() {
+        let state = test_state();
+
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("description=Answer+question+target+test"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        // Ask a question so we can answer it
+        let question_id = ulid::Ulid::new();
+        {
+            let actors = state.actors.read().await;
+            let handle = actors.get(&spec_id).expect("actor should exist");
+            handle
+                .send_command(Command::AskQuestion {
+                    question: barnstormer_core::UserQuestion::Freeform {
+                        question_id,
+                        question: "What color?".to_string(),
+                        placeholder: None,
+                        validation_hint: None,
+                    },
+                })
+                .await
+                .unwrap();
+        }
+
+        // POST to /answer with HX-Target: #chat-transcript-question
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::post(format!("/web/specs/{}/answer", spec_id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("HX-Target", "#chat-transcript-question")
+                    .body(Body::from(format!(
+                        "question_id={}&answer=Blue",
+                        question_id
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains(r#"id="chat-transcript-question""#),
+            "response should be the question container only: {}",
+            html
+        );
+        assert!(
+            !html.contains(r#"id="chat-transcript-feed""#),
+            "response should not include the feed container"
         );
     }
 

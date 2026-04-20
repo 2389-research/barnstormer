@@ -1,0 +1,64 @@
+{# ABOUTME: Message feed portion of chat transcript, rendered independently for HTMX partial refresh. #}
+{# ABOUTME: Refreshes only on transcript_appended SSE events, leaving question card untouched. #}
+
+<div class="chat-messages"
+     id="{{ container_id }}-feed"
+     hx-trigger="sse:transcript_appended"
+     hx-get="/web/specs/{{ spec_id }}/activity/transcript?container_id={{ container_id }}&amp;part=feed"
+     hx-target="#{{ container_id }}-feed"
+     hx-swap="outerHTML">
+    {% for entry in transcript %}
+    {% if entry.is_step %}
+    <div class="chat-status-line">
+        <span class="status-dot dot-{{ entry.role_class }}"></span>
+        <span class="chat-status-body">{{ entry.sender_label }} {{ entry.content }}</span>
+        <span class="chat-status-time">{{ entry.timestamp }}</span>
+        {% if entry.repeat_count > 1 %}
+        <span class="chat-status-repeat">(&times;{{ entry.repeat_count }})</span>
+        {% endif %}
+    </div>
+    {% else %}
+    <div class="chat-message {% if entry.is_continuation %}chat-continuation{% endif %}">
+        {% if !entry.is_continuation %}
+        <div class="chat-message-header">
+            <div class="chat-avatar avatar-{{ entry.role_class }}">{{ entry.initial }}</div>
+            <span class="chat-sender">{{ entry.sender_label }}</span>
+            <span class="chat-time">{{ entry.timestamp }}</span>
+        </div>
+        {% endif %}
+        <div class="chat-body">{{ entry.content_html|safe }}</div>
+    </div>
+    {% endif %}
+    {% endfor %}
+    <div id="{{ container_id }}-throbber" class="chat-throbber" style="display:none;">
+        <div class="chat-message">
+            <div class="chat-message-header">
+                <div class="chat-avatar avatar-manager">O</div>
+                <span class="chat-sender">Orchestrator</span>
+            </div>
+            <div class="chat-body">
+                <span class="thinking-dots"><span></span><span></span><span></span></span>
+            </div>
+        </div>
+    </div>
+    <div id="{{ container_id }}-streaming" class="chat-streaming-msg" style="display:none;">
+        <div class="chat-message">
+            <div class="chat-message-header">
+                <div class="chat-avatar avatar-manager">O</div>
+                <span class="chat-sender">Orchestrator</span>
+            </div>
+            <div class="chat-body" id="{{ container_id }}-streaming-body"></div>
+        </div>
+    </div>
+    <div id="{{ container_id }}-activity" class="chat-activity-status" style="display:none;">
+        <span class="status-dot dot-agent"></span>
+        <span id="{{ container_id }}-activity-text"></span>
+    </div>
+    {% if transcript.is_empty() %}
+    <div class="chat-empty">
+        <div class="chat-empty-icon">&#128172;</div>
+        <p class="chat-empty-title">No messages yet</p>
+        <p class="chat-empty-hint">Type below to start a conversation with the agents.</p>
+    </div>
+    {% endif %}
+</div>
