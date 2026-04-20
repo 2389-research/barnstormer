@@ -8,9 +8,10 @@
 
 <header class="command-bar">
     <div class="command-bar-left">
-        <span class="command-bar-title">{{ title }}</span>
+        <span class="command-bar-title" onclick="this.parentElement.classList.toggle('popover-open')">{{ title }}</span>
         <span class="command-bar-chevron">&#8250;</span>
         <span class="command-bar-subtitle">{{ one_liner }}</span>
+        <div class="command-bar-popover">{{ one_liner }}</div>
     </div>
     <div class="command-bar-right">
         <div id="agent-controls" hx-get="/web/specs/{{ spec_id }}/agents/status"
@@ -99,9 +100,10 @@
 
 <header class="command-bar">
     <div class="command-bar-left">
-        <span class="command-bar-title">{{ title }}</span>
+        <span class="command-bar-title" onclick="this.parentElement.classList.toggle('popover-open')">{{ title }}</span>
         <span class="command-bar-chevron">&#8250;</span>
         <span class="command-bar-subtitle">{{ one_liner }}</span>
+        <div class="command-bar-popover">{{ one_liner }}</div>
     </div>
     <div class="command-bar-right">
         <div id="agent-controls" hx-get="/web/specs/{{ spec_id }}/agents/status"
@@ -221,9 +223,10 @@
 
 <header class="command-bar">
     <div class="command-bar-left">
-        <span class="command-bar-title">{{ title }}</span>
+        <span class="command-bar-title" onclick="this.parentElement.classList.toggle('popover-open')">{{ title }}</span>
         <span class="command-bar-chevron">&#8250;</span>
         <span class="command-bar-subtitle">{{ one_liner }}</span>
+        <div class="command-bar-popover">{{ one_liner }}</div>
     </div>
     <div class="command-bar-right">
     </div>
@@ -264,3 +267,13 @@
 </script>
 
 {% endif %}
+
+<script>
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.command-bar-left')) {
+        document.querySelectorAll('.command-bar-left.popover-open').forEach(function(el) {
+            el.classList.remove('popover-open');
+        });
+    }
+});
+</script>

@@ -190,6 +190,9 @@ html, body {
     gap: 12px;
     flex-shrink: 0;
 }
+.command-bar-popover {
+    display: none;
+}
 
 /* --- View toggles (capsule) --- */
 .view-toggles-capsule {
@@ -1759,6 +1762,32 @@ html, body {
 
     .command-bar-subtitle {
         display: none;
+    }
+
+    .command-bar-title {
+        cursor: pointer;
+    }
+
+    .command-bar-popover {
+        display: none;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        padding: 8px 16px;
+        background: var(--bg-card);
+        border-bottom: 1px solid var(--border);
+        font-size: 13px;
+        color: var(--text-secondary);
+        z-index: 5;
+    }
+
+    .command-bar-left {
+        position: relative;
+    }
+
+    .command-bar-left.popover-open .command-bar-popover {
+        display: block;
     }
 }
 
