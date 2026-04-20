@@ -1812,6 +1812,10 @@ html, body {
         display: none;
     }
 
+    .format-hint-group {
+        display: none;
+    }
+
     /* Brainstorming canvas: remove min-width that causes horizontal overflow */
     [data-view="brainstorming"] .spec-body > .canvas {
         min-width: 0;
