@@ -1709,6 +1709,11 @@ html, body {
     overflow: hidden;
 }
 
+/* Mobile content/chat tab bar — hidden on desktop */
+.mobile-content-tabs {
+    display: none;
+}
+
 /* --- Responsive: stack on mobile --- */
 @media (max-width: 900px) {
     .app-layout {
@@ -1788,6 +1793,49 @@ html, body {
 
     .command-bar-left.popover-open .command-bar-popover {
         display: block;
+    }
+
+    /* Mobile content/chat tab switcher */
+    .mobile-content-tabs {
+        display: flex;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-card);
+        flex-shrink: 0;
+    }
+
+    .mobile-tab {
+        flex: 1;
+        padding: 10px;
+        border: none;
+        background: none;
+        font-size: 13px;
+        font-weight: 500;
+        font-family: var(--font-body);
+        color: var(--text-muted);
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        transition: all 0.2s;
+    }
+
+    .mobile-tab.active {
+        color: var(--text-primary);
+        border-bottom-color: var(--text-primary);
+    }
+
+    /* Canvas/chat toggle on mobile */
+    .spec-body .canvas {
+        display: flex;
+    }
+    .spec-body .chat-rail {
+        display: none;
+    }
+    .spec-body.show-chat .canvas {
+        display: none;
+    }
+    .spec-body.show-chat .chat-rail {
+        display: flex;
+        width: 100%;
+        border-left: none;
     }
 }
 

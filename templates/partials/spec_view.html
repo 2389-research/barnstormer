@@ -135,6 +135,11 @@
     </div>
 </div>
 
+<div class="mobile-content-tabs">
+    <button class="mobile-tab active" data-target="canvas" onclick="switchMobileTab(this, 'canvas')">Content</button>
+    <button class="mobile-tab" data-target="chat" onclick="switchMobileTab(this, 'chat')">Chat</button>
+</div>
+
 <div class="spec-body">
     <main class="canvas" id="canvas"
           hx-get="/web/specs/{{ spec_id }}/document"
@@ -166,6 +171,18 @@
             btn.classList.add('active');
         });
     });
+
+    // Mobile tab switcher: toggles between canvas and chat on small screens
+    function switchMobileTab(btn, target) {
+        document.querySelectorAll('.mobile-tab').forEach(function(t) { t.classList.remove('active'); });
+        btn.classList.add('active');
+        var body = document.querySelector('.spec-body');
+        if (target === 'chat') {
+            body.classList.add('show-chat');
+        } else {
+            body.classList.remove('show-chat');
+        }
+    }
 
     // Refresh agent status when agent controls are swapped (start/pause/resume)
     document.body.addEventListener('htmx:afterSwap', function(evt) {
