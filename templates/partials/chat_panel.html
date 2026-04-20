@@ -1,10 +1,7 @@
 {# ABOUTME: Chat panel for the right rail of the spec compositor. #}
 {# ABOUTME: Message list with avatars, question cards, and textarea input. SSE provided by parent. #}
 
-<div class="chat-panel{% if is_fullwidth %} chat-fullwidth{% endif %}">
-    <div class="chat-panel-header">
-        <span class="chat-panel-title">Chat</span>
-    </div>
+<div class="chat-panel">
     {% include "partials/chat_transcript.html" %}
 
     <div class="chat-input-area">

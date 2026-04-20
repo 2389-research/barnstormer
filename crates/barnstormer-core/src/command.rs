@@ -77,6 +77,14 @@ pub enum Command {
         content: String,
     },
     Undo,
+    StreamDelta {
+        agent_id: String,
+        text: String,
+    },
+    StreamToolActivity {
+        agent_id: String,
+        activity: String,
+    },
 }
 
 #[cfg(test)]
@@ -151,12 +159,20 @@ mod tests {
                 diff_summary: "Added cards".to_string(),
             },
             Command::TransitionPhase {
-                target: crate::state::SpecPhase::Active,
+                target: crate::state::SpecPhase::Refining,
             },
             Command::UpdateCanvas {
                 content: "<h1>Hello</h1>".to_string(),
             },
             Command::Undo,
+            Command::StreamDelta {
+                agent_id: "manager-1".to_string(),
+                text: "token".to_string(),
+            },
+            Command::StreamToolActivity {
+                agent_id: "brainstormer-1".to_string(),
+                activity: "creating card".to_string(),
+            },
         ];
 
         for cmd in &commands {
@@ -171,15 +187,15 @@ mod tests {
     #[test]
     fn transition_phase_round_trip() {
         let cmd = Command::TransitionPhase {
-            target: crate::state::SpecPhase::Active,
+            target: crate::state::SpecPhase::Refining,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("\"TransitionPhase\""));
-        assert!(json.contains("\"active\""));
+        assert!(json.contains("\"Refining\""));
         let back: Command = serde_json::from_str(&json).unwrap();
         match back {
             Command::TransitionPhase { target } => {
-                assert_eq!(target, crate::state::SpecPhase::Active);
+                assert_eq!(target, crate::state::SpecPhase::Refining);
             }
             _ => panic!("wrong variant"),
         }

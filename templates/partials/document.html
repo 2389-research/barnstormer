@@ -1,3 +1,5 @@
+{# ABOUTME: Rendered narrative document view of a spec, loaded into the canvas area. #}
+{# ABOUTME: Shows goal, description, constraints, success criteria, risks, notes, and lane cards. #}
 <div class="document">
     <div class="document-notice">
         <span class="notice-icon">&#9432;</span>
@@ -11,9 +13,11 @@
         <button class="btn btn-sm btn-export"
                 hx-post="/web/specs/{{ spec_id }}/regenerate"
                 hx-target=".regen-status" hx-swap="innerHTML"
+                hx-indicator=".btn-export"
                 title="Save exports to disk">
             Export to Disk
         </button>
+        <a href="/web/specs/{{ spec_id }}/export/markdown" download="{{ title_slug }}-spec.md" class="btn btn-sm">Download .md</a>
         <span class="regen-status"></span>
     </div>
     <h1>{{ title }}</h1>

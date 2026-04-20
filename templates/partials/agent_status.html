@@ -1,5 +1,5 @@
 {# ABOUTME: Agent status pill button for the command bar. #}
-{# ABOUTME: Single toggle: dark pill when running (with green dot), light when paused/stopped. #}
+{# ABOUTME: Two-state toggle: running (green dot, click to stop) or off (click to start). #}
 
 <div id="agent-status">
     {% if running %}
@@ -10,17 +10,9 @@
         <span class="agent-pill-dot"></span>
         Agents active
     </button>
-    {% else if started %}
-    <button class="agent-pill agent-pill-paused"
-            hx-post="/web/specs/{{ spec_id }}/agents/resume"
-            hx-target="#agent-status"
-            hx-swap="outerHTML">
-        <span class="agent-pill-dot"></span>
-        Agents paused
-    </button>
     {% else %}
     <button class="agent-pill agent-pill-stopped"
-            hx-post="/web/specs/{{ spec_id }}/agents/start"
+            hx-post="/web/specs/{{ spec_id }}/agents/{% if started %}resume{% else %}start{% endif %}"
             hx-target="#agent-status"
             hx-swap="outerHTML">
         <span class="agent-pill-dot"></span>
@@ -28,3 +20,17 @@
     </button>
     {% endif %}
 </div>
+
+<script>
+(function() {
+    var running = {% if running %}true{% else %}false{% endif %};
+    var compositor = document.querySelector('.spec-compositor');
+    if (compositor) {
+        if (running) {
+            compositor.classList.remove('agents-offline');
+        } else {
+            compositor.classList.add('agents-offline');
+        }
+    }
+})();
+</script>

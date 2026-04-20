@@ -1,8 +1,8 @@
-{# ABOUTME: Spec compositor: command bar + canvas + chat rail. #}
-{# ABOUTME: Loaded into #workspace when a spec is selected; default view is the document canvas. #}
+{# ABOUTME: Spec compositor: command bar + phase stepper + canvas + chat rail. #}
+{# ABOUTME: Loaded into #workspace when a spec is selected; layout varies by phase. #}
 
 {% if phase == "brainstorming" %}
-{# Brainstorming layout: full-width chat, phase badge, view board button #}
+{# Brainstorming layout: command bar + stepper + full-width chat #}
 <div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream"
      data-view="brainstorming">
 
@@ -11,20 +11,15 @@
         <span class="command-bar-title">{{ title }}</span>
         <span class="command-bar-chevron">&#8250;</span>
         <span class="command-bar-subtitle">{{ one_liner }}</span>
-        <span class="phase-badge phase-brainstorming">Brainstorming</span>
     </div>
     <div class="command-bar-right">
-        <button id="btn-view-board" class="btn btn-sm"
-                hx-get="/web/specs/{{ spec_id }}/board"
-                hx-target="#canvas" hx-swap="innerHTML">View Board</button>
-        <button id="btn-back-to-chat" class="btn btn-sm" style="display:none;"
-                hx-get="/web/specs/{{ spec_id }}/chat-panel"
-                hx-target="#canvas" hx-swap="innerHTML">Back to Chat</button>
         <div id="agent-controls" hx-get="/web/specs/{{ spec_id }}/agents/status"
              hx-trigger="load, sse:agent_step_started, sse:agent_step_finished, refreshAgents from:body"
              hx-swap="innerHTML"></div>
     </div>
+    <span class="tooltip command-bar-tooltip">{{ one_liner }}</span>
 </header>
+{% include "partials/phase_stepper.html" %}
 
 <div class="spec-body">
     <main class="canvas" id="canvas"
@@ -42,26 +37,19 @@
     <div id="agent-canvas" style="display:none;"></div>
     {% endif %}
 </div>
+<div id="agents-offline-banner" class="agents-offline-banner">
+    <button class="agents-offline-dismiss" onclick="this.parentElement.style.display='none'" title="Dismiss">&times;</button>
+    <span>Agents are not running.</span>
+    <button class="btn btn-start-agents"
+            hx-post="/web/specs/{{ spec_id }}/agents/start"
+            hx-target="#agent-controls"
+            hx-swap="innerHTML">Start Agents</button>
+</div>
 
 </div>
 
 <script>
     (function() {
-        var btnBoard = document.getElementById('btn-view-board');
-        var btnChat = document.getElementById('btn-back-to-chat');
-        if (btnBoard) {
-            btnBoard.addEventListener('click', function() {
-                btnBoard.style.display = 'none';
-                btnChat.style.display = '';
-            });
-        }
-        if (btnChat) {
-            btnChat.addEventListener('click', function() {
-                btnChat.style.display = 'none';
-                btnBoard.style.display = '';
-            });
-        }
-
         var compositor = document.querySelector('.spec-compositor');
         if (compositor) {
             compositor.addEventListener('sse:phase_transitioned', function() {
@@ -89,12 +77,25 @@
                     canvas.style.display = 'none';
                 }
             });
+
+            // Polling fallback: if SSE drops, check phase every 15 seconds
+            var currentPhase = '{{ phase }}';
+            setInterval(function() {
+                fetch('/web/specs/{{ spec_id }}/phase-check')
+                    .then(function(r) { return r.text(); })
+                    .then(function(serverPhase) {
+                        if (serverPhase !== currentPhase) {
+                            htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
+                        }
+                    })
+                    .catch(function() {}); // silently ignore network errors
+            }, 15000);
         }
     })();
 </script>
 
-{% else %}
-{# Active layout: tabs, chat rail, board/document/spec views #}
+{% else if phase == "refining" %}
+{# Refining layout: command bar + stepper + view toggles + canvas + chat rail #}
 <div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
 
 <header class="command-bar">
@@ -103,6 +104,15 @@
         <span class="command-bar-chevron">&#8250;</span>
         <span class="command-bar-subtitle">{{ one_liner }}</span>
     </div>
+    <div class="command-bar-right">
+        <div id="agent-controls" hx-get="/web/specs/{{ spec_id }}/agents/status"
+             hx-trigger="load, sse:agent_step_started, sse:agent_step_finished, refreshAgents from:body"
+             hx-swap="innerHTML"></div>
+    </div>
+    <span class="tooltip command-bar-tooltip">{{ one_liner }}</span>
+</header>
+{% include "partials/phase_stepper.html" %}
+<div class="view-toggles-row">
     <div class="view-toggles-capsule">
         <button class="view-toggle active" data-view="document"
                 hx-get="/web/specs/{{ spec_id }}/document"
@@ -123,16 +133,12 @@
             <span class="view-toggle-label">Spec</span>
         </button>
     </div>
-    <div class="command-bar-right">
-        <button class="btn btn-sm"
-                hx-post="/web/specs/{{ spec_id }}/phase"
-                hx-vals='{"target":"brainstorming"}'
-                hx-swap="none">Resume Brainstorming</button>
-        <div id="agent-controls" hx-get="/web/specs/{{ spec_id }}/agents/status"
-             hx-trigger="load, sse:agent_step_started, sse:agent_step_finished, refreshAgents from:body"
-             hx-swap="innerHTML"></div>
-    </div>
-</header>
+</div>
+
+<div class="mobile-content-tabs">
+    <button class="mobile-tab active" data-target="canvas" onclick="switchMobileTab(this, 'canvas')">Content</button>
+    <button class="mobile-tab" data-target="chat" onclick="switchMobileTab(this, 'chat')">Chat</button>
+</div>
 
 <div class="spec-body">
     <main class="canvas" id="canvas"
@@ -143,6 +149,14 @@
            hx-get="/web/specs/{{ spec_id }}/chat-panel"
            hx-trigger="load" hx-swap="innerHTML">
     </aside>
+</div>
+<div id="agents-offline-banner" class="agents-offline-banner">
+    <button class="agents-offline-dismiss" onclick="this.parentElement.style.display='none'" title="Dismiss">&times;</button>
+    <span>Agents are not running.</span>
+    <button class="btn btn-start-agents"
+            hx-post="/web/specs/{{ spec_id }}/agents/start"
+            hx-target="#agent-controls"
+            hx-swap="innerHTML">Start Agents</button>
 </div>
 
 </div>
@@ -157,6 +171,18 @@
             btn.classList.add('active');
         });
     });
+
+    // Mobile tab switcher: toggles between canvas and chat on small screens
+    function switchMobileTab(btn, target) {
+        document.querySelectorAll('.mobile-tab').forEach(function(t) { t.classList.remove('active'); });
+        btn.classList.add('active');
+        var body = document.querySelector('.spec-body');
+        if (target === 'chat') {
+            body.classList.add('show-chat');
+        } else {
+            body.classList.remove('show-chat');
+        }
+    }
 
     // Refresh agent status when agent controls are swapped (start/pause/resume)
     document.body.addEventListener('htmx:afterSwap', function(evt) {
@@ -192,6 +218,68 @@
         compositor.addEventListener('sse:phase_transitioned', function() {
             htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
         });
+
+        // Polling fallback: if SSE drops, check phase every 15 seconds
+        var currentPhase = '{{ phase }}';
+        setInterval(function() {
+            fetch('/web/specs/{{ spec_id }}/phase-check')
+                .then(function(r) { return r.text(); })
+                .then(function(serverPhase) {
+                    if (serverPhase !== currentPhase) {
+                        htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
+                    }
+                })
+                .catch(function() {}); // silently ignore network errors
+        }, 15000);
+    })();
+</script>
+
+{% else %}
+{# Complete layout: read-only export view #}
+<div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
+
+<header class="command-bar">
+    <div class="command-bar-left">
+        <span class="command-bar-title">{{ title }}</span>
+        <span class="command-bar-chevron">&#8250;</span>
+        <span class="command-bar-subtitle">{{ one_liner }}</span>
+    </div>
+    <div class="command-bar-right">
+    </div>
+    <span class="tooltip command-bar-tooltip">{{ one_liner }}</span>
+</header>
+{% include "partials/phase_stepper.html" %}
+
+<div class="spec-body">
+    <main class="canvas" id="canvas"
+          hx-get="/web/specs/{{ spec_id }}/document"
+          hx-trigger="load" hx-swap="innerHTML">
+    </main>
+</div>
+
+</div>
+
+<script>
+    (function() {
+        var compositor = document.querySelector('.spec-compositor');
+        if (compositor) {
+            compositor.addEventListener('sse:phase_transitioned', function() {
+                htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
+            });
+
+            // Polling fallback: if SSE drops, check phase every 15 seconds
+            var currentPhase = '{{ phase }}';
+            setInterval(function() {
+                fetch('/web/specs/{{ spec_id }}/phase-check')
+                    .then(function(r) { return r.text(); })
+                    .then(function(serverPhase) {
+                        if (serverPhase !== currentPhase) {
+                            htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
+                        }
+                    })
+                    .catch(function() {}); // silently ignore network errors
+            }, 15000);
+        }
     })();
 </script>
 

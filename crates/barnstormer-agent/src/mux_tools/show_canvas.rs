@@ -217,7 +217,7 @@ mod tests {
             .unwrap();
         handle
             .send_command(Command::TransitionPhase {
-                target: SpecPhase::Active,
+                target: SpecPhase::Refining,
             })
             .await
             .unwrap();

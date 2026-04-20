@@ -224,6 +224,12 @@ fn describe_event_payload(payload: &EventPayload) -> String {
                 "canvas updated with new content".to_string()
             }
         }
+        EventPayload::StreamingDelta { agent_id, .. } => {
+            format!("streaming delta from {}", agent_id)
+        }
+        EventPayload::StreamingToolActivity { agent_id, activity } => {
+            format!("{}: {}", agent_id, activity)
+        }
     }
 }
 

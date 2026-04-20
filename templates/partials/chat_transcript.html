@@ -1,139 +1,51 @@
-{# ABOUTME: Chat transcript partial with avatar initials and message continuations. #}
-{# ABOUTME: SSE-refreshed via parent compositor; shows grouped messages and question cards. #}
+{# ABOUTME: Chat transcript wrapper combining message feed and question card as separate HTMX targets. #}
+{# ABOUTME: Feed refreshes on transcript_appended; question card refreshes on question_asked/answered. #}
 
-<div id="{{ container_id }}"
-     class="chat-transcript-wrap"
-     hx-trigger="sse:transcript_appended, sse:question_asked, sse:question_answered, sse:agent_step_started, sse:agent_step_finished"
-     hx-get="/web/specs/{{ spec_id }}/activity/transcript?container_id={{ container_id }}"
-     hx-target="#{{ container_id }}"
-     hx-swap="outerHTML">
-    <div class="chat-messages" id="{{ container_id }}-feed">
-        {% for entry in transcript %}
-        {% if entry.is_step %}
-        <div class="chat-status-line">
-            <span class="status-dot dot-{{ entry.role_class }}"></span>
-            <span class="chat-status-body">{{ entry.sender_label }} {{ entry.content }}</span>
-            <span class="chat-status-time">{{ entry.timestamp }}</span>
-        </div>
-        {% else %}
-        <div class="chat-message {% if entry.is_continuation %}chat-continuation{% endif %}">
-            {% if !entry.is_continuation %}
-            <div class="chat-message-header">
-                <div class="chat-avatar avatar-{{ entry.role_class }}">{{ entry.initial }}</div>
-                <span class="chat-sender">{{ entry.sender_label }}</span>
-                <span class="chat-time">{{ entry.timestamp }}</span>
-            </div>
-            {% endif %}
-            <div class="chat-body">{{ entry.content_html|safe }}</div>
-        </div>
-        {% endif %}
-        {% endfor %}
-        {% if transcript.is_empty() %}
-        <div class="chat-empty">
-            <div class="chat-empty-icon">&#128172;</div>
-            <p class="chat-empty-title">No messages yet</p>
-            <p class="chat-empty-hint">Type below to start a conversation with the agents.</p>
-        </div>
-        {% endif %}
-    </div>
-
-    {% match pending_question %}
-    {% when Some with (q) %}
-    <div class="chat-question-card">
-        <div class="chat-message-header">
-            <div class="chat-avatar avatar-question">?</div>
-            <span class="chat-sender">Quick decision</span>
-        </div>
-        {% match q %}
-        {% when QuestionData::Boolean { question_id, question, default } %}
-        <div class="chat-question-body">{{ question|safe }}</div>
-        <form hx-post="/web/specs/{{ spec_id }}/answer"
-              hx-target="#{{ container_id }}"
-              hx-swap="outerHTML"
-              autocomplete="off"
-              class="chat-question-options">
-            <input type="hidden" name="question_id" value="{{ question_id }}" data-1p-ignore>
-            <button type="submit" name="answer" value="Yes" class="chat-option-btn">Yes</button>
-            <button type="submit" name="answer" value="No" class="chat-option-btn">No</button>
-            <button type="button" class="chat-option-btn chat-option-else" onclick="var f=this.closest('.chat-question-options'); f.querySelectorAll('.chat-option-btn').forEach(function(b){b.style.display='none'}); f.querySelector('.chat-else-expand').style.display='flex'; f.querySelector('.chat-else-expand textarea').name='answer';">Something else&hellip;</button>
-            <div class="chat-else-expand" style="display:none;">
-                <div class="chat-input-row">
-                    <textarea placeholder="Describe what you mean..." rows="2" data-1p-ignore required></textarea>
-                    <button type="submit" class="btn btn-send" title="Send">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
-                    </button>
-                </div>
-            </div>
-        </form>
-
-        {% when QuestionData::MultipleChoice { question_id, question, choices, allow_multi } %}
-        <div class="chat-question-body">{{ question|safe }}</div>
-        <form hx-post="/web/specs/{{ spec_id }}/answer"
-              hx-target="#{{ container_id }}"
-              hx-swap="outerHTML"
-              autocomplete="off"
-              class="chat-question-options">
-            <input type="hidden" name="question_id" value="{{ question_id }}" data-1p-ignore>
-            {% for choice in choices %}
-            <button type="submit" name="answer" value="{{ choice }}" class="chat-option-btn">{{ choice }}</button>
-            {% endfor %}
-            <button type="button" class="chat-option-btn chat-option-else" onclick="var f=this.closest('.chat-question-options'); f.querySelectorAll('.chat-option-btn').forEach(function(b){b.style.display='none'}); f.querySelector('.chat-else-expand').style.display='flex'; f.querySelector('.chat-else-expand textarea').name='answer';">Something else&hellip;</button>
-            <div class="chat-else-expand" style="display:none;">
-                <div class="chat-input-row">
-                    <textarea placeholder="Describe what you mean..." rows="2" data-1p-ignore required></textarea>
-                    <button type="submit" class="btn btn-send" title="Send">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
-                    </button>
-                </div>
-            </div>
-        </form>
-
-        {% when QuestionData::Freeform { question_id, question, placeholder } %}
-        <div class="chat-question-body">{{ question|safe }}</div>
-        <form hx-post="/web/specs/{{ spec_id }}/answer"
-              hx-target="#{{ container_id }}"
-              hx-swap="outerHTML"
-              autocomplete="off"
-              class="chat-question-options">
-            <input type="hidden" name="question_id" value="{{ question_id }}" data-1p-ignore>
-            <div class="chat-input-row">
-                <textarea name="answer" placeholder="{{ placeholder }}" rows="2" data-1p-ignore required></textarea>
-                <button type="submit" class="btn btn-send" title="Send">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
-                </button>
-            </div>
-        </form>
-        {% endmatch %}
-    </div>
-    {% when None %}
-    {% endmatch %}
+<div id="{{ container_id }}" class="chat-transcript-wrap">
+    {% include "partials/chat_feed.html" %}
+    {% include "partials/chat_question.html" %}
 </div>
 
 <script>
+    // Toggle between the structured options and the free-text "something else" input.
+    // Called from onclick handlers in question card buttons.
+    function toggleElse(btn, showElse) {
+        var form = btn.closest('.chat-question-options');
+        var optSet = form.querySelector('.chat-options-set');
+        var expand = form.querySelector('.chat-else-expand');
+        var ta = expand.querySelector('textarea');
+        if (showElse) {
+            optSet.style.display = 'none';
+            expand.style.display = 'flex';
+            ta.name = 'answer';
+            ta.focus();
+        } else {
+            optSet.style.display = '';
+            expand.style.display = 'none';
+            ta.value = '';
+            ta.removeAttribute('name');
+        }
+    }
+
     (function() {
         var feedId = '{{ container_id }}-feed';
         var feed = document.getElementById(feedId);
         if (feed) feed.scrollTop = feed.scrollHeight;
 
-        // Save scroll position before swap, restore after
+        // Scroll preservation for feed-only swaps
         document.body.addEventListener('htmx:beforeSwap', function(evt) {
-            if (evt.detail.target && evt.detail.target.id === '{{ container_id }}') {
-                var f = document.getElementById(feedId);
-                if (f) {
-                    // Store whether user was scrolled to bottom
-                    var atBottom = (f.scrollHeight - f.scrollTop - f.clientHeight) < 50;
-                    evt.detail.target._wasAtBottom = atBottom;
-                    evt.detail.target._scrollTop = f.scrollTop;
-                }
+            if (evt.detail.target && evt.detail.target.id === feedId) {
+                var f = evt.detail.target;
+                var atBottom = (f.scrollHeight - f.scrollTop - f.clientHeight) < 50;
+                f._wasAtBottom = atBottom;
+                f._scrollTop = f.scrollTop;
             }
         });
 
         document.body.addEventListener('htmx:afterSwap', function(evt) {
-            if (evt.detail.target && evt.detail.target.id === '{{ container_id }}') {
+            if (evt.detail.target && evt.detail.target.id === feedId) {
                 var f = document.getElementById(feedId);
                 if (!f) return;
-                // If user was at bottom (or close), scroll to new bottom
-                // Otherwise restore their scroll position
                 var prev = evt.detail.target;
                 if (prev._wasAtBottom !== false) {
                     f.scrollTop = f.scrollHeight;
@@ -142,5 +54,81 @@
                 }
             }
         });
+
+        var compositor = document.querySelector('.spec-compositor');
+        var throbberId = '{{ container_id }}-throbber';
+        if (compositor) {
+            compositor.addEventListener('sse:agent_step_started', function() {
+                var th = document.getElementById(throbberId);
+                if (th) { th.style.display = ''; }
+                var f = document.getElementById(feedId);
+                if (f) { f.scrollTop = f.scrollHeight; }
+            });
+            compositor.addEventListener('sse:agent_step_finished', function() {
+                var th = document.getElementById(throbberId);
+                if (th) { th.style.display = 'none'; }
+            });
+
+            var streamingId = '{{ container_id }}-streaming';
+            var streamingBodyId = '{{ container_id }}-streaming-body';
+            var activityId = '{{ container_id }}-activity';
+            var activityTextId = '{{ container_id }}-activity-text';
+
+            compositor.addEventListener('sse:streaming_delta', function(evt) {
+                var data = {};
+                try { data = JSON.parse(evt.detail.data || '{}'); } catch(e) {}
+                if (!data.payload || data.payload.type !== 'StreamingDelta') return;
+                var text = data.payload.text || '';
+
+                // Hide throbber, show streaming message
+                var th = document.getElementById(throbberId);
+                if (th) th.style.display = 'none';
+                var act = document.getElementById(activityId);
+                if (act) act.style.display = 'none';
+
+                var sm = document.getElementById(streamingId);
+                var sb = document.getElementById(streamingBodyId);
+                if (sm && sb) {
+                    sm.style.display = '';
+                    sb.textContent += text;
+                }
+
+                // Auto-scroll
+                var f = document.getElementById(feedId);
+                if (f) f.scrollTop = f.scrollHeight;
+            });
+
+            compositor.addEventListener('sse:streaming_tool_activity', function(evt) {
+                var data = {};
+                try { data = JSON.parse(evt.detail.data || '{}'); } catch(e) {}
+                if (!data.payload || data.payload.type !== 'StreamingToolActivity') return;
+                var activity = data.payload.activity || '';
+
+                var act = document.getElementById(activityId);
+                var actText = document.getElementById(activityTextId);
+                if (act && actText) {
+                    act.style.display = '';
+                    actText.textContent = activity;
+                }
+
+                // Auto-scroll
+                var f = document.getElementById(feedId);
+                if (f) f.scrollTop = f.scrollHeight;
+            });
+
+            // Hide streaming div when transcript_appended arrives (HTMX will re-render feed)
+            compositor.addEventListener('sse:transcript_appended', function() {
+                var sm = document.getElementById(streamingId);
+                if (sm) sm.style.display = 'none';
+                var sb = document.getElementById(streamingBodyId);
+                if (sb) sb.textContent = '';
+            });
+
+            // Hide activity on agent_step_finished
+            compositor.addEventListener('sse:agent_step_finished', function() {
+                var act = document.getElementById(activityId);
+                if (act) act.style.display = 'none';
+            });
+        }
     })();
 </script>

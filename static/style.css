@@ -57,6 +57,31 @@
     --font-body: 'DM Sans', system-ui, sans-serif;
 }
 
+/* --- Shared tooltip --- */
+.tooltip {
+    display: none;
+    position: absolute;
+    top: calc(100% + 8px);
+    padding: 6px 12px;
+    background: var(--text-primary);
+    color: var(--bg-card);
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.4;
+    border-radius: 6px;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 20;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+.tooltip::before {
+    content: '';
+    position: absolute;
+    bottom: 100%;
+    border: 5px solid transparent;
+    border-bottom-color: var(--text-primary);
+}
+
 html, body {
     height: 100%;
     font-family: var(--font-body);
@@ -84,6 +109,27 @@ html, body {
     overflow: hidden;
 }
 
+/* Hamburger menu — hidden on desktop, shown on mobile */
+.hamburger {
+    display: none;
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 51;
+    border: none;
+    background: var(--bg-card);
+    border-radius: 8px;
+    padding: 8px;
+    cursor: pointer;
+    color: var(--text-primary);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Backdrop for mobile nav drawer */
+.nav-backdrop {
+    display: none;
+}
+
 .workspace {
     display: flex;
     flex-direction: column;
@@ -92,6 +138,7 @@ html, body {
 }
 
 .spec-compositor {
+    position: relative;
     display: flex;
     flex-direction: column;
     flex: 1;
@@ -110,6 +157,35 @@ html, body {
     flex: 1;
     overflow-y: auto;
     padding: var(--spacing-lg);
+}
+
+.create-spec-form {
+    padding: var(--spacing-lg);
+    max-width: 500px;
+    margin: 0 auto;
+}
+.create-spec-form .form-hint {
+    color: var(--text-secondary);
+    margin-bottom: var(--spacing-md);
+    font-size: 0.85rem;
+}
+.create-spec-form .form-label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+.create-spec-form .form-group {
+    margin-bottom: var(--spacing-md);
+}
+.create-spec-form .form-select {
+    margin-top: 4px;
+    width: 100%;
+    padding: 8px 12px;
+    font-size: 14px;
+    font-family: var(--font-body);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-card);
+    color: var(--text-primary);
 }
 
 .chat-rail {
@@ -132,6 +208,7 @@ html, body {
     background: var(--bg-card);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    position: relative;
 }
 .command-bar-left {
     flex: 1;
@@ -167,6 +244,17 @@ html, body {
     align-items: center;
     gap: 12px;
     flex-shrink: 0;
+}
+/* Title tooltip — left-aligned, shown when hovering the title */
+.command-bar-tooltip {
+    left: 20px;
+    top: calc(100% + 4px);
+}
+.command-bar-tooltip::before {
+    left: 20px;
+}
+.command-bar-left:hover ~ .command-bar-tooltip {
+    display: block;
 }
 
 /* --- View toggles (capsule) --- */
@@ -209,10 +297,127 @@ html, body {
 .view-toggle-label {
     display: none;
 }
+.view-toggle.active .view-toggle-label {
+    display: inline;
+}
 @media (min-width: 901px) {
     .view-toggle-label {
         display: inline;
     }
+}
+
+/* View toggles row — sits below stepper when phase has sub-views */
+.view-toggles-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 20px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+/* --- Phase stepper --- */
+.phase-stepper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    padding: 12px 20px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.phase-step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: var(--font-body);
+    color: var(--text-muted);
+    transition: all 0.2s;
+    white-space: nowrap;
+    position: relative;
+}
+
+.phase-step-number {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    font-size: 12px;
+    font-weight: 600;
+    border: 2px solid var(--border);
+    color: var(--text-muted);
+    background: var(--bg-card);
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.phase-step-label {
+    transition: color 0.2s;
+}
+/* Connector line between steps */
+.phase-step-connector {
+    width: 48px;
+    height: 2px;
+    background: var(--border);
+    flex-shrink: 0;
+    transition: background 0.2s;
+}
+/* Active step */
+.phase-step.step-active {
+    cursor: default;
+    color: var(--text-primary);
+}
+.phase-step.step-active .phase-step-number {
+    background: var(--text-primary);
+    border-color: var(--text-primary);
+    color: var(--bg-card);
+}
+/* Completed step */
+.phase-step.step-completed {
+    color: var(--text-primary);
+}
+.phase-step.step-completed:hover {
+    opacity: 0.7;
+}
+.phase-step.step-completed .phase-step-number {
+    background: var(--success, #22c55e);
+    border-color: var(--success, #22c55e);
+    color: #fff;
+}
+/* Completed connector */
+.phase-step-connector.connector-completed {
+    background: var(--success, #22c55e);
+}
+/* Disabled/upcoming step */
+.phase-step.step-disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+.phase-step.step-disabled .phase-step-number {
+    border-style: dashed;
+}
+/* Step tooltip — centered under the step */
+.phase-step-tooltip {
+    left: 50%;
+    transform: translateX(-50%);
+}
+.phase-step-tooltip::before {
+    left: 50%;
+    transform: translateX(-50%);
+}
+.phase-step:hover .tooltip {
+    display: block;
 }
 
 /* --- Agent status pill (replaces separate LEDs + controls) --- */
@@ -233,14 +438,12 @@ html, body {
     background: var(--text-primary);
     color: var(--bg-primary);
 }
-.agent-pill-paused,
 .agent-pill-stopped {
-    background: var(--bg-secondary);
-    color: var(--text-muted);
+    background: var(--agent-accent, #222);
+    color: #fff;
 }
-.agent-pill-paused:hover,
 .agent-pill-stopped:hover {
-    color: var(--text-primary);
+    opacity: 0.85;
 }
 .agent-pill-dot {
     width: 8px;
@@ -250,10 +453,9 @@ html, body {
 .agent-pill-running .agent-pill-dot {
     background: #34D399;
 }
-.agent-pill-paused .agent-pill-dot,
 .agent-pill-stopped .agent-pill-dot {
-    background: var(--text-muted);
-    opacity: 0.4;
+    background: #fff;
+    opacity: 0.6;
 }
 
 /* --- Chat panel (right rail) --- */
@@ -262,18 +464,6 @@ html, body {
     flex-direction: column;
     height: 100%;
     background: var(--bg-card);
-}
-.chat-panel-header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border);
-}
-.chat-panel-title {
-    font-size: 15px;
-    font-weight: 500;
-    color: var(--text-primary);
 }
 
 /* --- Rail sections --- */
@@ -1140,6 +1330,15 @@ html, body {
     display: flex;
     flex-direction: column;
     padding: 12px 0;
+    min-height: 0;
+}
+
+/* Question card wrapper — shrink so it doesn't steal all space from the feed */
+.chat-question-wrap {
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: 50%;
+    overflow-y: auto;
 }
 
 /* Hide general chat input when agent is asking a question */
@@ -1279,9 +1478,7 @@ html, body {
     border-radius: var(--radius-xl);
     background: var(--bg-secondary);
     padding: 20px;
-    flex-shrink: 0;
     overflow-y: auto;
-    max-height: 40%;
 }
 
 .chat-question-body {
@@ -1331,6 +1528,15 @@ html, body {
     display: flex;
     flex-direction: column;
     gap: 8px;
+}
+.chat-else-back {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-decoration: none;
+    align-self: flex-start;
+}
+.chat-else-back:hover {
+    color: var(--text-primary);
 }
 
 /* Reuse .chat-input-row inside question cards */
@@ -1538,52 +1744,154 @@ html, body {
     overflow: hidden;
 }
 
+/* Mobile content/chat tab bar — hidden on desktop */
+.mobile-content-tabs {
+    display: none;
+}
+
 /* --- Responsive: stack on mobile --- */
 @media (max-width: 900px) {
     .app-layout {
         grid-template-columns: 1fr;
-        grid-template-rows: auto 1fr;
+        grid-template-rows: 1fr;
+        max-width: 100vw;
+        overflow-x: hidden;
+    }
+
+    .hamburger {
+        display: flex;
+    }
+
+    /* Clear space for the fixed hamburger button on pages without a command bar */
+    .workspace > :first-child:not(.spec-compositor) {
+        padding-top: 56px;
     }
 
     .nav-rail {
-        border-right: none;
-        border-bottom: 1px solid var(--border-subtle);
-        max-height: 200px;
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: 80vw;
+        max-width: 320px;
+        z-index: 50;
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+        border-right: 1px solid var(--border);
+        border-bottom: none;
+        max-height: none;
+    }
+
+    .app-layout.nav-open .nav-rail {
+        transform: translateX(0);
+    }
+
+    .nav-backdrop {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 49;
+        background: rgba(0, 0, 0, 0.3);
+    }
+
+    .app-layout.nav-open .nav-backdrop {
+        display: block;
+    }
+
+    /* Offset command bar for hamburger button */
+    .command-bar {
+        padding-left: 52px;
     }
 
     .board {
         grid-template-columns: 1fr;
     }
 
-    .command-bar {
-        flex-wrap: wrap;
-        height: auto;
-        padding: var(--spacing-sm) var(--spacing-md);
-    }
-
+    .command-bar-chevron,
     .command-bar-subtitle {
         display: none;
     }
+
+    /* Native select popover mis-anchors on mobile Safari/macOS — hide optional field */
+    .create-spec-form .form-group:has(.form-select) {
+        display: none;
+    }
+
+    /* Brainstorming canvas: remove min-width that causes horizontal overflow */
+    [data-view="brainstorming"] .spec-body > .canvas {
+        min-width: 0;
+    }
+
+
+    /* Mobile content/chat tab switcher */
+    .mobile-content-tabs {
+        display: flex;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-card);
+        flex-shrink: 0;
+    }
+
+    .mobile-tab {
+        flex: 1;
+        padding: 10px;
+        border: none;
+        background: none;
+        font-size: 13px;
+        font-weight: 500;
+        font-family: var(--font-body);
+        color: var(--text-muted);
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        transition: all 0.2s;
+    }
+
+    .mobile-tab.active {
+        color: var(--text-primary);
+        border-bottom-color: var(--text-primary);
+    }
+
+    /* Canvas/chat toggle on mobile */
+    .spec-body .canvas {
+        display: flex;
+    }
+    .spec-body .chat-rail {
+        display: none;
+    }
+    .spec-body.show-chat .canvas {
+        display: none;
+    }
+    .spec-body.show-chat .chat-rail {
+        display: flex;
+        width: 100%;
+        border-left: none;
+    }
+
+    .phase-stepper {
+        gap: 0;
+        padding: 8px 16px;
+    }
+
+    .phase-step-connector {
+        width: 24px;
+    }
+
+    .phase-step {
+        padding: 4px 8px;
+    }
+
+    .phase-step-label {
+        display: none;
+    }
+
+    .phase-step.step-active .phase-step-label {
+        display: inline;
+    }
 }
 
-/* Phase badge */
-.phase-badge {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 12px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
 
-.phase-brainstorming {
-  background: var(--agent-accent);
-  color: #fff;
-}
-
-/* Full-width chat during brainstorming */
-.chat-fullwidth {
+/* Chat panel fills its parent; parent context controls sizing */
+.canvas .chat-panel {
+  width: 100%;
   max-width: 720px;
   margin: 0 auto;
   padding: var(--spacing-md);
@@ -1591,7 +1899,7 @@ html, body {
   flex: 1;
 }
 
-.chat-fullwidth .chat-input-area {
+.canvas .chat-panel .chat-input-area {
   max-width: none;
 }
 
@@ -1611,6 +1919,61 @@ html, body {
   flex: 1;
 }
 
+/* Agents-offline: dim when agents aren't running, but still interactive */
+.spec-compositor.agents-offline .spec-body {
+    opacity: 0.5;
+}
+.agents-offline-banner {
+    display: none;
+}
+.spec-compositor.agents-offline .agents-offline-banner {
+    display: flex;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 10;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 24px 32px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    pointer-events: auto;
+}
+.agents-offline-banner .btn-start-agents {
+    white-space: nowrap;
+    padding: 8px 24px;
+    background: var(--agent-accent, #222);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-weight: 500;
+    cursor: pointer;
+}
+.agents-offline-banner .btn-start-agents:hover {
+    opacity: 0.85;
+}
+.agents-offline-dismiss {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    background: none;
+    border: none;
+    font-size: 1.1rem;
+    line-height: 1;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0 4px;
+}
+.agents-offline-dismiss:hover {
+    color: var(--text-primary);
+}
+
 [data-view="brainstorming"] .spec-body > .canvas {
   flex: 1;
   min-width: 300px;
@@ -1618,4 +1981,121 @@ html, body {
   padding: 0;
   display: flex;
   flex-direction: column;
+}
+
+[data-view="brainstorming"] .spec-body > .canvas.canvas-board {
+  overflow-y: auto;
+  padding: var(--spacing-lg);
+  display: block;
+}
+
+/* Thinking throbber — three bouncing dots */
+.chat-throbber {
+    padding: 8px 20px;
+}
+.thinking-dots {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+    height: 20px;
+}
+.thinking-dots span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    animation: throbberBounce 1.4s ease-in-out infinite;
+}
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes throbberBounce {
+    0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+    40% { opacity: 1; transform: scale(1); }
+}
+
+/* Multi-select checkboxes in question cards */
+.chat-option-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    border-radius: var(--radius-xl);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    padding: 12px 16px;
+    font-size: 14px;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.chat-option-checkbox:hover {
+    border-color: var(--text-muted);
+}
+.chat-option-checkbox:has(input:checked) {
+    border-color: var(--text-primary);
+    background: var(--bg-secondary);
+}
+.chat-option-checkbox input[type="checkbox"] {
+    accent-color: var(--text-primary);
+    width: 16px;
+    height: 16px;
+}
+.chat-option-submit {
+    background: var(--text-primary);
+    color: var(--bg-card);
+    text-align: center;
+    font-weight: 600;
+}
+.chat-option-submit:hover {
+    opacity: 0.85;
+}
+.chat-status-repeat {
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: 0.6;
+    white-space: nowrap;
+}
+
+/* Export button loading indicator */
+.btn-export.htmx-request {
+    opacity: 0.5;
+    pointer-events: none;
+}
+/* Regen confirmation flash */
+.regen-status {
+    font-size: 12px;
+    color: var(--success);
+    font-weight: 500;
+}
+.regen-confirm {
+    animation: regenFlash 3s ease-out forwards;
+}
+@keyframes regenFlash {
+    0% { opacity: 1; }
+    70% { opacity: 1; }
+    100% { opacity: 0; }
+}
+
+/* Streaming message — raw text while tokens arrive */
+.chat-streaming-msg {
+    padding: 8px 20px;
+}
+.chat-streaming-msg .chat-body {
+    white-space: pre-wrap;
+    font-family: inherit;
+    min-height: 20px;
+}
+
+/* Worker activity status line — "tail -n 1" of agent activity */
+.chat-activity-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 20px;
+    font-size: 12px;
+    color: var(--text-muted);
+    opacity: 0.8;
+}
+.chat-activity-status .status-dot {
+    flex-shrink: 0;
 }

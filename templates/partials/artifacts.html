@@ -15,7 +15,7 @@
     <div class="artifact-content" id="artifact-markdown">
         <div class="artifact-toolbar">
             <button class="btn btn-sm btn-copy" data-copy="markdown-source">Copy</button>
-            <a href="/web/specs/{{ spec_id }}/export/markdown" download="spec.md" class="btn btn-sm btn-download">Download</a>
+            <a href="/web/specs/{{ spec_id }}/export/markdown" download="{{ title_slug }}-spec.md" class="btn btn-sm btn-download">Download</a>
         </div>
         <pre class="artifact-source" id="markdown-source"><code>{{ markdown_content }}</code></pre>
     </div>
@@ -23,7 +23,7 @@
     <div class="artifact-content hidden" id="artifact-yaml">
         <div class="artifact-toolbar">
             <button class="btn btn-sm btn-copy" data-copy="yaml-source">Copy</button>
-            <a href="/web/specs/{{ spec_id }}/export/yaml" download="spec.yaml" class="btn btn-sm btn-download">Download</a>
+            <a href="/web/specs/{{ spec_id }}/export/yaml" download="{{ title_slug }}-spec.yaml" class="btn btn-sm btn-download">Download</a>
         </div>
         <pre class="artifact-source" id="yaml-source"><code>{{ yaml_content }}</code></pre>
     </div>
@@ -31,7 +31,7 @@
     <div class="artifact-content hidden" id="artifact-dot">
         <div class="artifact-toolbar">
             <button class="btn btn-sm btn-copy" data-copy="dot-source">Copy</button>
-            <a href="/web/specs/{{ spec_id }}/export/dot" download="spec.dot" class="btn btn-sm btn-download">Download</a>
+            <a href="/web/specs/{{ spec_id }}/export/dot" download="{{ title_slug }}-spec.dot" class="btn btn-sm btn-download">Download</a>
         </div>
         <pre class="artifact-source" id="dot-source"><code>{{ dot_content }}</code></pre>
     </div>

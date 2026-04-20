@@ -1,0 +1,96 @@
+{# ABOUTME: Question card portion of chat transcript, rendered independently for HTMX partial refresh. #}
+{# ABOUTME: Refreshes on question_asked/question_answered SSE events without touching the message feed. #}
+
+<div id="{{ container_id }}-question"
+     class="chat-question-wrap"
+     hx-trigger="sse:question_asked, sse:question_answered"
+     hx-get="/web/specs/{{ spec_id }}/activity/transcript?container_id={{ container_id }}&amp;part=question"
+     hx-target="#{{ container_id }}-question"
+     hx-swap="outerHTML">
+    {% match pending_question %}
+    {% when Some with (q) %}
+    <div class="chat-question-card">
+        <div class="chat-message-header">
+            <div class="chat-avatar avatar-question">?</div>
+            <span class="chat-sender">Quick decision</span>
+        </div>
+        {% match q %}
+        {% when QuestionData::Boolean { question_id, question, default } %}
+        <div class="chat-question-body">{{ question|safe }}</div>
+        <form hx-post="/web/specs/{{ spec_id }}/answer"
+              hx-target="#{{ container_id }}-question"
+              hx-swap="outerHTML"
+              autocomplete="off"
+              class="chat-question-options">
+            <input type="hidden" name="question_id" value="{{ question_id }}" data-1p-ignore>
+            <div class="chat-options-set">
+                <button type="submit" name="answer" value="Yes" class="chat-option-btn">Yes</button>
+                <button type="submit" name="answer" value="No" class="chat-option-btn">No</button>
+                <button type="button" class="chat-option-btn chat-option-else" onclick="toggleElse(this, true)">Something else&hellip;</button>
+            </div>
+            <div class="chat-else-expand" style="display:none;">
+                <div class="chat-input-row">
+                    <textarea placeholder="Describe what you mean..." rows="1" data-1p-ignore></textarea>
+                    <button type="submit" class="btn btn-send" title="Send">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+                    </button>
+                </div>
+                <a href="#" class="chat-else-back" onclick="toggleElse(this, false); return false;">&lsaquo; options</a>
+            </div>
+        </form>
+
+        {% when QuestionData::MultipleChoice { question_id, question, choices, allow_multi } %}
+        <div class="chat-question-body">{{ question|safe }}</div>
+        <form hx-post="/web/specs/{{ spec_id }}/answer"
+              hx-target="#{{ container_id }}-question"
+              hx-swap="outerHTML"
+              autocomplete="off"
+              class="chat-question-options">
+            <input type="hidden" name="question_id" value="{{ question_id }}" data-1p-ignore>
+            <div class="chat-options-set">
+                {% if allow_multi %}
+                {% for choice in choices %}
+                <label class="chat-option-checkbox">
+                    <input type="checkbox" name="answer" value="{{ choice }}">
+                    <span>{{ choice }}</span>
+                </label>
+                {% endfor %}
+                <button type="submit" class="chat-option-btn chat-option-submit" onclick="var f=this.closest('form'); var checked=f.querySelectorAll('input[name=answer]:checked'); if(checked.length===0){event.preventDefault(); return;} var vals=[]; checked.forEach(function(c){vals.push(c.value);}); var h=document.createElement('input'); h.type='hidden'; h.name='answer'; h.value=vals.join(', '); f.appendChild(h); checked.forEach(function(c){c.disabled=true;});">Submit</button>
+                {% else %}
+                {% for choice in choices %}
+                <button type="submit" name="answer" value="{{ choice }}" class="chat-option-btn">{{ choice }}</button>
+                {% endfor %}
+                {% endif %}
+                <button type="button" class="chat-option-btn chat-option-else" onclick="toggleElse(this, true)">Something else&hellip;</button>
+            </div>
+            <div class="chat-else-expand" style="display:none;">
+                <div class="chat-input-row">
+                    <textarea placeholder="Describe what you mean..." rows="1" data-1p-ignore></textarea>
+                    <button type="submit" class="btn btn-send" title="Send">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+                    </button>
+                </div>
+                <a href="#" class="chat-else-back" onclick="toggleElse(this, false); return false;">&lsaquo; options</a>
+            </div>
+        </form>
+
+        {% when QuestionData::Freeform { question_id, question, placeholder } %}
+        <div class="chat-question-body">{{ question|safe }}</div>
+        <form hx-post="/web/specs/{{ spec_id }}/answer"
+              hx-target="#{{ container_id }}-question"
+              hx-swap="outerHTML"
+              autocomplete="off"
+              class="chat-question-options">
+            <input type="hidden" name="question_id" value="{{ question_id }}" data-1p-ignore>
+            <div class="chat-input-row">
+                <textarea name="answer" placeholder="{{ placeholder }}" rows="1" data-1p-ignore required></textarea>
+                <button type="submit" class="btn btn-send" title="Send">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+                </button>
+            </div>
+        </form>
+        {% endmatch %}
+    </div>
+    {% when None %}
+    {% endmatch %}
+</div>

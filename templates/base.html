@@ -25,9 +25,21 @@
 </head>
 <body>
     <div class="app-layout">
+        <button class="hamburger" onclick="document.querySelector('.app-layout').classList.toggle('nav-open')" aria-label="Toggle navigation">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
         <nav class="nav-rail">{% block nav %}{% endblock %}</nav>
+        <div class="nav-backdrop" onclick="document.querySelector('.app-layout').classList.remove('nav-open')"></div>
         <div class="workspace" id="workspace">{% block workspace %}{% endblock %}</div>
     </div>
+    <script>
+        // Close mobile nav drawer when a link or button inside it is clicked
+        document.querySelector('.nav-rail').addEventListener('click', function(e) {
+            if (e.target.closest('a') || e.target.closest('button')) {
+                document.querySelector('.app-layout').classList.remove('nav-open');
+            }
+        });
+    </script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

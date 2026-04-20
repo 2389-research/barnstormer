@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use axum::extract::{Form, Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
 use barnstormer_agent::SwarmOrchestrator;
@@ -249,7 +249,8 @@ pub async fn import_spec(
     let spec_id_str = spec_id.to_string();
     let phase = match spec_state.phase {
         SpecPhase::Brainstorming => "brainstorming".to_string(),
-        SpecPhase::Active => "active".to_string(),
+        SpecPhase::Refining => "refining".to_string(),
+        SpecPhase::Complete => "complete".to_string(),
     };
 
     let has_pending_question = spec_state.pending_question.is_some();
@@ -430,7 +431,8 @@ pub async fn create_spec(
     let spec_id_str = spec_id.to_string();
     let phase = match spec_state.phase {
         SpecPhase::Brainstorming => "brainstorming".to_string(),
-        SpecPhase::Active => "active".to_string(),
+        SpecPhase::Refining => "refining".to_string(),
+        SpecPhase::Complete => "complete".to_string(),
     };
 
     let has_pending_question = spec_state.pending_question.is_some();
@@ -576,6 +578,28 @@ pub struct SpecViewTemplate {
     pub has_pending_question: bool,
 }
 
+impl SpecViewTemplate {
+    /// A phase is "completed" if the current phase is further along in the lifecycle.
+    fn is_completed(&self, phase_id: &str) -> bool {
+        let order = |p: &str| match p {
+            "brainstorming" => 0,
+            "refining" => 1,
+            "complete" => 2,
+            _ => 99,
+        };
+        order(phase_id) < order(&self.phase)
+    }
+
+    /// Tooltip text explaining why a future phase is disabled.
+    fn disabled_tooltip(&self, phase_id: &str) -> &'static str {
+        match phase_id {
+            "refining" => "Complete brainstorming to unlock refining",
+            "complete" => "Refine the spec before finalizing",
+            _ => "",
+        }
+    }
+}
+
 /// Full-page spec view for direct navigation / page reload (non-HTMX requests).
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "spec_page.html")]
@@ -588,6 +612,28 @@ pub struct SpecPageTemplate {
     pub lanes: Vec<LaneData>,
     pub canvas_content: Option<String>,
     pub has_pending_question: bool,
+}
+
+impl SpecPageTemplate {
+    /// A phase is "completed" if the current phase is further along in the lifecycle.
+    fn is_completed(&self, phase_id: &str) -> bool {
+        let order = |p: &str| match p {
+            "brainstorming" => 0,
+            "refining" => 1,
+            "complete" => 2,
+            _ => 99,
+        };
+        order(phase_id) < order(&self.phase)
+    }
+
+    /// Tooltip text explaining why a future phase is disabled.
+    fn disabled_tooltip(&self, phase_id: &str) -> &'static str {
+        match phase_id {
+            "refining" => "Complete brainstorming to unlock refining",
+            "complete" => "Refine the spec before finalizing",
+            _ => "",
+        }
+    }
 }
 
 /// GET /web/specs/{id} - Render the spec compositor (command bar + canvas + chat rail).
@@ -631,7 +677,8 @@ pub async fn spec_view(
     let lanes = cards_by_lane(&spec_state);
     let phase = match spec_state.phase {
         SpecPhase::Brainstorming => "brainstorming".to_string(),
-        SpecPhase::Active => "active".to_string(),
+        SpecPhase::Refining => "refining".to_string(),
+        SpecPhase::Complete => "complete".to_string(),
     };
 
     let has_pending_question = spec_state.pending_question.is_some();
@@ -990,6 +1037,7 @@ pub async fn delete_card(
 pub struct DocumentTemplate {
     pub spec_id: String,
     pub title: String,
+    pub title_slug: String,
     pub one_liner: String,
     pub goal: String,
     pub goal_html: String,
@@ -1044,6 +1092,7 @@ pub async fn document(
 
     DocumentTemplate {
         spec_id: id,
+        title_slug: slugify(&core.title),
         title: core.title.clone(),
         one_liner: core.one_liner.clone(),
         goal: core.goal.clone(),
@@ -1076,11 +1125,43 @@ pub struct TranscriptEntry {
     /// Pre-rendered markdown→HTML for template use with `|safe`.
     pub content_html: String,
     pub timestamp: String,
+    /// Number of consecutive identical step messages collapsed into this one.
+    pub repeat_count: u32,
 }
 
 /// Render markdown content to HTML, stripping raw HTML tags from input
 /// to prevent XSS. Handles paragraphs, bold, italic, lists, code blocks,
 /// and links.
+/// Convert a spec title into a URL/filename-safe slug.
+fn slugify(title: &str) -> String {
+    let slug: String = title
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // Collapse multiple dashes and trim leading/trailing dashes
+    let mut result = String::new();
+    let mut prev_dash = false;
+    for c in slug.chars() {
+        if c == '-' {
+            if !prev_dash && !result.is_empty() {
+                result.push('-');
+            }
+            prev_dash = true;
+        } else {
+            result.push(c);
+            prev_dash = false;
+        }
+    }
+    result.trim_end_matches('-').to_string()
+}
+
 fn render_markdown(content: &str) -> String {
     let options = Options::empty();
     let parser = Parser::new_ext(content, options).filter(|event| {
@@ -1107,6 +1188,7 @@ fn to_transcript_entry(m: &barnstormer_core::TranscriptMessage) -> TranscriptEnt
         content: m.content.clone(),
         content_html,
         timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+        repeat_count: 1,
     }
 }
 
@@ -1119,6 +1201,25 @@ fn mark_continuations(entries: &mut [TranscriptEntry]) {
         if entries[i].sender == entries[i - 1].sender && !entries[i].is_step && !entries[i - 1].is_step {
             entries[i].is_continuation = true;
         }
+    }
+}
+
+/// Collapse consecutive identical step messages into a single entry with
+/// a repeat_count, so the UI can show "(x3)" instead of three identical lines.
+fn collapse_repeated_steps(entries: &mut Vec<TranscriptEntry>) {
+    let mut i = 0;
+    while i < entries.len() {
+        if entries[i].is_step {
+            let mut j = i + 1;
+            while j < entries.len() && entries[j].is_step && entries[j].content == entries[i].content {
+                entries[i].repeat_count += 1;
+                j += 1;
+            }
+            if entries[i].repeat_count > 1 {
+                entries.drain((i + 1)..j);
+            }
+        }
+        i += 1;
     }
 }
 
@@ -1226,17 +1327,26 @@ fn question_to_view_data(q: &barnstormer_core::UserQuestion) -> QuestionData {
 
 /// Query parameters for the transcript endpoint, allowing callers to specify
 /// which container the response should target (activity panel vs chat tab).
+/// The optional `part` field selects a sub-section: "feed" for messages only,
+/// "question" for the question card only, or omitted for the full transcript.
 #[derive(Deserialize)]
 pub struct TranscriptQuery {
     pub container_id: Option<String>,
+    pub part: Option<String>,
 }
 
 /// Validate and sanitize a container_id value. Only known IDs are accepted;
 /// anything else falls back to "chat-transcript" to prevent XSS via
 /// user-controlled values rendered into script tags and HTMX attributes.
+///
+/// Allowed IDs and where they are used:
+/// - "activity-transcript" -- activity panel transcript (default for activity handlers)
+/// - "chat-transcript"     -- chat panel transcript in refining phase
+/// - "brainstorm-chat"     -- chat panel transcript in brainstorming phase
+/// - "mission-ticker"      -- compact ticker strip; also the hx-target for answer forms
 fn sanitize_container_id(raw: &str) -> String {
     match raw {
-        "activity-transcript" | "chat-transcript" | "mission-ticker" | "canvas" | "chat-rail" | "brainstorm-chat" => {
+        "activity-transcript" | "chat-transcript" | "mission-ticker" | "brainstorm-chat" => {
             raw.to_string()
         }
         _ => "chat-transcript".to_string(),
@@ -1290,11 +1400,13 @@ pub async fn activity(
 
     let spec_state = handle.read_state().await;
 
-    let transcript: Vec<TranscriptEntry> = spec_state
+    let mut transcript: Vec<TranscriptEntry> = spec_state
         .transcript
         .iter()
         .map(to_transcript_entry)
         .collect();
+    mark_continuations(&mut transcript);
+    collapse_repeated_steps(&mut transcript);
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
@@ -1339,6 +1451,9 @@ pub async fn activity_transcript(
         query.container_id.as_deref().unwrap_or("activity-transcript"),
     );
 
+    // Chat containers only show human + manager messages (filtered by
+    // is_chat_participant) so the user sees a clean conversation thread.
+    // The activity-transcript and mission-ticker containers show all senders.
     let is_chat = container_id == "chat-transcript" || container_id == "brainstorm-chat";
 
     let mut transcript: Vec<TranscriptEntry> = spec_state
@@ -1348,8 +1463,25 @@ pub async fn activity_transcript(
         .map(to_transcript_entry)
         .collect();
     mark_continuations(&mut transcript);
+    collapse_repeated_steps(&mut transcript);
 
-    if is_chat {
+    let part = query.part.as_deref().unwrap_or("");
+
+    if is_chat && part == "feed" {
+        ChatFeedTemplate {
+            spec_id: id,
+            container_id,
+            transcript,
+        }
+        .into_response()
+    } else if is_chat && part == "question" {
+        ChatQuestionTemplate {
+            spec_id: id,
+            container_id,
+            pending_question,
+        }
+        .into_response()
+    } else if is_chat {
         ChatTranscriptTemplate {
             spec_id: id,
             container_id,
@@ -1379,13 +1511,32 @@ pub struct ChatTranscriptTemplate {
     pub pending_question: Option<QuestionData>,
 }
 
+/// Chat message feed partial — messages, throbber, streaming, empty state.
+/// Rendered independently so transcript refreshes don't disturb the question card.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/chat_feed.html")]
+pub struct ChatFeedTemplate {
+    pub spec_id: String,
+    pub container_id: String,
+    pub transcript: Vec<TranscriptEntry>,
+}
+
+/// Chat question card partial — pending question with answer form.
+/// Rendered independently so question refreshes don't disturb the message feed.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/chat_question.html")]
+pub struct ChatQuestionTemplate {
+    pub spec_id: String,
+    pub container_id: String,
+    pub pending_question: Option<QuestionData>,
+}
+
 /// Chat panel template for the full-width Chat tab.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/chat_panel.html")]
 pub struct ChatPanelTemplate {
     pub spec_id: String,
     pub container_id: String,
-    pub is_fullwidth: bool,
     pub transcript: Vec<TranscriptEntry>,
     pub pending_question: Option<QuestionData>,
 }
@@ -1414,8 +1565,7 @@ pub async fn chat_panel(
 
     let spec_state = handle.read_state().await;
 
-    let is_fullwidth = spec_state.phase == SpecPhase::Brainstorming;
-    let container_id = if is_fullwidth {
+    let container_id = if spec_state.phase == SpecPhase::Brainstorming {
         "brainstorm-chat".to_string()
     } else {
         "chat-transcript".to_string()
@@ -1428,13 +1578,13 @@ pub async fn chat_panel(
         .map(to_transcript_entry)
         .collect();
     mark_continuations(&mut transcript);
+    collapse_repeated_steps(&mut transcript);
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
     ChatPanelTemplate {
         spec_id: id,
         container_id,
-        is_fullwidth,
         transcript,
         pending_question,
     }
@@ -1446,6 +1596,7 @@ pub async fn chat_panel(
 #[template(path = "partials/artifacts.html")]
 pub struct ArtifactsTemplate {
     pub spec_id: String,
+    pub title_slug: String,
     pub markdown_content: String,
     pub yaml_content: String,
     pub dot_content: String,
@@ -1481,8 +1632,15 @@ pub async fn artifacts(
     });
     let dot_content = barnstormer_core::export::export_dot(&spec_state);
 
+    let title_slug = spec_state
+        .core
+        .as_ref()
+        .map(|c| slugify(&c.title))
+        .unwrap_or_else(|| "spec".to_string());
+
     ArtifactsTemplate {
         spec_id: id,
+        title_slug,
         markdown_content,
         yaml_content,
         dot_content,
@@ -1495,6 +1653,7 @@ pub async fn artifacts(
 #[template(path = "partials/spec.html")]
 pub struct SpecTabTemplate {
     pub spec_id: String,
+    pub title_slug: String,
     pub spec_html: String,
     pub spec_markdown: String,
 }
@@ -1522,11 +1681,17 @@ pub async fn spec(
     };
 
     let spec_state = handle.read_state().await;
+    let title_slug = spec_state
+        .core
+        .as_ref()
+        .map(|c| slugify(&c.title))
+        .unwrap_or_else(|| "spec".to_string());
     let spec_markdown = barnstormer_core::export::export_spec(&spec_state);
     let spec_html = render_markdown(&spec_markdown);
 
     SpecTabTemplate {
         spec_id: id,
+        title_slug,
         spec_html,
         spec_markdown,
     }
@@ -1556,11 +1721,19 @@ pub async fn export_markdown(
     };
 
     let spec_state = handle.read_state().await;
+    let slug = spec_state
+        .core
+        .as_ref()
+        .map(|c| slugify(&c.title))
+        .unwrap_or_else(|| "spec".to_string());
     let content = barnstormer_core::export::export_markdown(&spec_state);
 
     Response::builder()
-        .header("content-type", "text/markdown")
-        .header("content-disposition", "attachment; filename=\"spec.md\"")
+        .header("content-type", "text/markdown; charset=utf-8")
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{}-spec.md\"", slug),
+        )
         .body(axum::body::Body::from(content))
         .unwrap()
         .into_response()
@@ -1589,12 +1762,17 @@ pub async fn export_yaml(
     };
 
     let spec_state = handle.read_state().await;
+    let slug = spec_state
+        .core
+        .as_ref()
+        .map(|c| slugify(&c.title))
+        .unwrap_or_else(|| "spec".to_string());
     match barnstormer_core::export::export_yaml(&spec_state) {
         Ok(content) => Response::builder()
-            .header("content-type", "text/yaml")
+            .header("content-type", "text/yaml; charset=utf-8")
             .header(
                 "content-disposition",
-                "attachment; filename=\"spec.yaml\"",
+                format!("attachment; filename=\"{}-spec.yaml\"", slug),
             )
             .body(axum::body::Body::from(content))
             .unwrap()
@@ -1633,11 +1811,19 @@ pub async fn export_dot(
     };
 
     let spec_state = handle.read_state().await;
+    let slug = spec_state
+        .core
+        .as_ref()
+        .map(|c| slugify(&c.title))
+        .unwrap_or_else(|| "spec".to_string());
     let content = barnstormer_core::export::export_dot(&spec_state);
 
     Response::builder()
-        .header("content-type", "text/plain")
-        .header("content-disposition", "attachment; filename=\"spec.dot\"")
+        .header("content-type", "text/plain; charset=utf-8")
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{}-spec.dot\"", slug),
+        )
         .body(axum::body::Body::from(content))
         .unwrap()
         .into_response()
@@ -1666,19 +1852,22 @@ pub async fn export_spec_download(
     };
 
     let spec_state = handle.read_state().await;
+    let slug = spec_state
+        .core
+        .as_ref()
+        .map(|c| slugify(&c.title))
+        .unwrap_or_else(|| "spec".to_string());
     let content = barnstormer_core::export::export_spec(&spec_state);
+    let filename = format!("{}-spec.md", slug);
 
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
-            (
-                header::CONTENT_DISPOSITION,
-                "attachment; filename=\"spec.md\"",
-            ),
-        ],
-        content,
-    )
+    Response::builder()
+        .header("content-type", "text/markdown; charset=utf-8")
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{}\"", filename),
+        )
+        .body(axum::body::Body::from(content))
+        .unwrap()
         .into_response()
 }
 
@@ -1723,22 +1912,11 @@ pub async fn regenerate(
     if let Err(e) = std::fs::create_dir_all(&exports_dir) {
         tracing::error!("failed to create exports directory: {}", e);
     } else {
-        let spec_title = spec_state
+        let slug = spec_state
             .core
             .as_ref()
-            .map(|c| c.title.clone())
+            .map(|c| slugify(&c.title))
             .unwrap_or_else(|| "spec".to_string());
-        let slug: String = spec_title
-            .to_lowercase()
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                    c
-                } else {
-                    '-'
-                }
-            })
-            .collect();
 
         if let Err(e) = std::fs::write(exports_dir.join(format!("{}.md", slug)), &markdown_content) {
             tracing::error!("failed to write markdown export: {}", e);
@@ -1855,22 +2033,42 @@ pub async fn answer_question(
 
     // Determine container_id from HX-Target header so the response replaces
     // the correct transcript container (activity panel vs chat tab).
-    let container_id = sanitize_container_id(
-        headers
-            .get("HX-Target")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.trim_start_matches('#'))
-            .unwrap_or("activity-transcript"),
-    );
+    // If the target ends with "-question", we return only the question card
+    // partial so the message feed is untouched.
+    let raw_target = headers
+        .get("HX-Target")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim_start_matches('#'))
+        .unwrap_or("activity-transcript");
+
+    let is_question_target = raw_target.ends_with("-question");
+    let base_target = if is_question_target {
+        raw_target.trim_end_matches("-question")
+    } else {
+        raw_target
+    };
+    let container_id = sanitize_container_id(base_target);
 
     // Return refreshed transcript partial
     let spec_state = handle.read_state().await;
 
+    // Chat containers only show human + manager messages; see sanitize_container_id docs.
     let is_chat = container_id == "chat-transcript" || container_id == "brainstorm-chat";
     let is_ticker = container_id == "mission-ticker";
 
     // Read actual pending question from state instead of assuming None
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
+
+    // If the answer form targeted the question card directly, return only
+    // the question partial so the message feed and any user input are preserved.
+    if is_question_target && is_chat {
+        return ChatQuestionTemplate {
+            spec_id: id,
+            container_id,
+            pending_question,
+        }
+        .into_response();
+    }
 
     let mut transcript: Vec<TranscriptEntry> = spec_state
         .transcript
@@ -1879,6 +2077,7 @@ pub async fn answer_question(
         .map(to_transcript_entry)
         .collect();
     mark_continuations(&mut transcript);
+    collapse_repeated_steps(&mut transcript);
 
     if is_ticker {
         // For mission ticker, show only last 10 entries
@@ -2023,6 +2222,7 @@ pub async fn chat(
     // Return refreshed transcript partial
     let spec_state = handle.read_state().await;
 
+    // Chat containers only show human + manager messages; see sanitize_container_id docs.
     let is_chat = container_id == "chat-transcript" || container_id == "brainstorm-chat";
     let is_ticker = container_id == "mission-ticker";
 
@@ -2033,6 +2233,7 @@ pub async fn chat(
         .map(to_transcript_entry)
         .collect();
     mark_continuations(&mut transcript);
+    collapse_repeated_steps(&mut transcript);
 
     let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
 
@@ -2129,7 +2330,8 @@ pub async fn transition_phase(
 
     let target = match form.target.as_str() {
         "brainstorming" => SpecPhase::Brainstorming,
-        "active" => SpecPhase::Active,
+        "refining" => SpecPhase::Refining,
+        "complete" => SpecPhase::Complete,
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -2155,15 +2357,9 @@ pub async fn transition_phase(
         .await
     {
         Ok(_) => {
-            let label = match target {
-                SpecPhase::Brainstorming => "Brainstorming",
-                SpecPhase::Active => "Active",
-            };
-            (
-                StatusCode::OK,
-                Html(format!("<span class=\"phase-badge\">{}</span>", label)),
-            )
-                .into_response()
+            // Phase transition triggers SSE phase_transitioned event,
+            // which causes the client to reload the entire workspace.
+            (StatusCode::OK, Html("<span>OK</span>".to_string())).into_response()
         }
         Err(ActorError::AlreadyInPhase) => (
             StatusCode::CONFLICT,
@@ -2176,6 +2372,32 @@ pub async fn transition_phase(
         )
             .into_response(),
     }
+}
+
+/// Returns the current phase as plain text — used by the client-side
+/// polling fallback when SSE might be disconnected.
+pub async fn phase_check(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (StatusCode::NOT_FOUND, "not_found").into_response();
+        }
+    };
+    let spec_state = handle.read_state().await;
+    let phase_str = match spec_state.phase {
+        SpecPhase::Brainstorming => "brainstorming",
+        SpecPhase::Refining => "refining",
+        SpecPhase::Complete => "complete",
+    };
+    phase_str.into_response()
 }
 
 /// Provider status partial template.
@@ -2615,6 +2837,9 @@ pub fn spawn_event_persister(
         loop {
             match rx.recv().await {
                 Ok(event) => {
+                    if event.payload.is_ephemeral() {
+                        continue;
+                    }
                     if let Err(e) = log.append(&event) {
                         tracing::error!(
                             "event persister failed to write event for spec {}: {}",
@@ -2863,6 +3088,7 @@ mod tests {
         let tmpl = DocumentTemplate {
             spec_id: "01HTEST".to_string(),
             title: "Test Doc".to_string(),
+            title_slug: "test-doc".to_string(),
             one_liner: "A test document".to_string(),
             goal: "Verify rendering".to_string(),
             goal_html: "<p>Verify rendering</p>\n".to_string(),
@@ -2917,6 +3143,7 @@ mod tests {
                 content: "Started analysis".to_string(),
                 content_html: "<p>Started analysis</p>\n".to_string(),
                 timestamp: "12:34:56".to_string(),
+                repeat_count: 1,
             }],
             pending_question: None,
         };
@@ -3074,6 +3301,7 @@ mod tests {
                 content: "Started analysis".to_string(),
                 content_html: "<p>Started analysis</p>\n".to_string(),
                 timestamp: "12:34:56".to_string(),
+                repeat_count: 1,
             }],
             pending_question: None,
         };
@@ -3099,6 +3327,7 @@ mod tests {
                 content: "Hello chat".to_string(),
                 content_html: "<p>Hello chat</p>\n".to_string(),
                 timestamp: "12:00:00".to_string(),
+                repeat_count: 1,
             }],
             pending_question: None,
         };
@@ -3145,7 +3374,7 @@ mod tests {
             title: "Test Spec".to_string(),
             one_liner: "A test spec".to_string(),
             goal: "Test goal".to_string(),
-            phase: "active".to_string(),
+            phase: "refining".to_string(),
             lanes: vec![],
             canvas_content: None,
             has_pending_question: false,
@@ -3204,6 +3433,7 @@ mod tests {
                 content: "Analyzing requirements".to_string(),
                 content_html: "<p>Analyzing requirements</p>\n".to_string(),
                 timestamp: "12:34:56".to_string(),
+                repeat_count: 1,
             }],
             pending_question: None,
         };
@@ -3368,7 +3598,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_status_template_renders_paused() {
+    fn agent_status_template_renders_paused_as_stopped() {
         let tmpl = AgentStatusTemplate {
             spec_id: "01HTEST".to_string(),
             running: false,
@@ -3376,9 +3606,10 @@ mod tests {
             agent_count: 4,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("agent-pill-paused"), "should have paused pill class");
-        assert!(rendered.contains("Agents paused"), "should show paused state");
-        assert!(rendered.contains("/agents/resume"), "should have resume action URL");
+        assert!(rendered.contains("agent-pill-stopped"), "paused should render as stopped pill");
+        assert!(rendered.contains("Start agents"), "paused should show start agents text");
+        assert!(rendered.contains("/agents/resume"), "paused should resume on click");
+        assert!(!rendered.contains("agent-pill-paused"), "should not have separate paused state");
     }
 
     #[tokio::test]
@@ -3637,7 +3868,7 @@ mod tests {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
-            is_fullwidth: false,
+
             transcript: vec![],
             pending_question: None,
         };
@@ -3650,7 +3881,7 @@ mod tests {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
-            is_fullwidth: false,
+
             transcript: vec![
                 TranscriptEntry {
                     sender: "human".to_string(),
@@ -3663,6 +3894,7 @@ mod tests {
                     content: "Hello from human".to_string(),
                     content_html: "<p>Hello from human</p>\n".to_string(),
                     timestamp: "12:34:56".to_string(),
+                    repeat_count: 1,
                 },
                 TranscriptEntry {
                     sender: "manager-01HAGENT".to_string(),
@@ -3675,6 +3907,7 @@ mod tests {
                     content: "Agent response here".to_string(),
                     content_html: "<p>Agent response here</p>\n".to_string(),
                     timestamp: "12:35:00".to_string(),
+                    repeat_count: 1,
                 },
             ],
             pending_question: None,
@@ -3693,7 +3926,7 @@ mod tests {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
-            is_fullwidth: false,
+
             transcript: vec![],
             pending_question: None,
         };
@@ -3708,7 +3941,7 @@ mod tests {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
-            is_fullwidth: false,
+
             transcript: vec![],
             pending_question: None,
         };
@@ -3721,18 +3954,18 @@ mod tests {
     }
 
     #[test]
-    fn chat_panel_contains_header_and_transcript() {
+    fn chat_panel_contains_transcript_and_input() {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
-            is_fullwidth: false,
+
             transcript: vec![],
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("chat-panel-header"), "should contain chat panel header");
-        assert!(rendered.contains("Chat"), "should contain Chat title");
+        assert!(rendered.contains("chat-panel"), "should contain chat-panel wrapper");
         assert!(rendered.contains("sse:transcript_appended"), "should listen for transcript_appended event");
+        assert!(rendered.contains("chat-input-area"), "should contain input area");
     }
 
     #[tokio::test]
@@ -3796,13 +4029,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chat_panel_brainstorming_has_fullwidth_class() {
+    async fn chat_panel_brainstorming_targets_brainstorm_chat() {
         let state = test_state();
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Chat+fullwidth+test"))
+                .body(Body::from("description=Chat+brainstorm+test"))
                 .unwrap(),
         )
         .await
@@ -3828,19 +4061,23 @@ mod tests {
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(
-            html.contains("chat-fullwidth"),
-            "should have fullwidth class in brainstorming"
+            html.contains("brainstorm-chat"),
+            "should target brainstorm-chat container in brainstorming"
+        );
+        assert!(
+            !html.contains("chat-fullwidth"),
+            "should not have chat-fullwidth class (removed)"
         );
     }
 
     #[tokio::test]
-    async fn chat_panel_active_no_fullwidth_class() {
+    async fn chat_panel_refining_targets_chat_transcript() {
         let state = test_state();
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Chat+active+test"))
+                .body(Body::from("description=Chat+refining+test"))
                 .unwrap(),
         )
         .await
@@ -3851,12 +4088,12 @@ mod tests {
             *actors.keys().next().unwrap()
         };
 
-        // Transition to Active
+        // Transition to Refining
         let actors = state.actors.read().await;
         let handle = actors.get(&spec_id).unwrap();
         handle
             .send_command(Command::TransitionPhase {
-                target: SpecPhase::Active,
+                target: SpecPhase::Refining,
             })
             .await
             .unwrap();
@@ -3876,8 +4113,12 @@ mod tests {
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(
+            html.contains("chat-transcript"),
+            "should target chat-transcript container in refining"
+        );
+        assert!(
             !html.contains("chat-fullwidth"),
-            "should not have fullwidth class in active"
+            "should not have chat-fullwidth class (removed)"
         );
     }
 
@@ -3887,6 +4128,7 @@ mod tests {
     fn artifacts_template_renders() {
         let tmpl = ArtifactsTemplate {
             spec_id: "01HTEST".to_string(),
+            title_slug: "my-spec".to_string(),
             markdown_content: "# My Spec".to_string(),
             yaml_content: "title: My Spec".to_string(),
             dot_content: "digraph {}".to_string(),
@@ -3899,6 +4141,7 @@ mod tests {
     fn artifacts_template_contains_all_content_sections() {
         let tmpl = ArtifactsTemplate {
             spec_id: "01HTEST".to_string(),
+            title_slug: "my-spec".to_string(),
             markdown_content: "# My Spec".to_string(),
             yaml_content: "title: My Spec".to_string(),
             dot_content: "digraph {}".to_string(),
@@ -3916,6 +4159,7 @@ mod tests {
     fn artifacts_template_contains_download_links() {
         let tmpl = ArtifactsTemplate {
             spec_id: "01HTEST".to_string(),
+            title_slug: "test".to_string(),
             markdown_content: "# Test".to_string(),
             yaml_content: "title: Test".to_string(),
             dot_content: "digraph {}".to_string(),
@@ -3933,15 +4177,16 @@ mod tests {
             rendered.contains("/web/specs/01HTEST/export/dot"),
             "should contain dot download link"
         );
-        assert!(rendered.contains("download=\"spec.md\""), "should have spec.md download attribute");
-        assert!(rendered.contains("download=\"spec.yaml\""), "should have spec.yaml download attribute");
-        assert!(rendered.contains("download=\"spec.dot\""), "should have spec.dot download attribute");
+        assert!(rendered.contains("download=\"test-spec.md\""), "should have slugged .md download attribute");
+        assert!(rendered.contains("download=\"test-spec.yaml\""), "should have slugged .yaml download attribute");
+        assert!(rendered.contains("download=\"test-spec.dot\""), "should have slugged .dot download attribute");
     }
 
     #[test]
     fn artifacts_template_contains_copy_buttons() {
         let tmpl = ArtifactsTemplate {
             spec_id: "01HTEST".to_string(),
+            title_slug: "test".to_string(),
             markdown_content: "# Test".to_string(),
             yaml_content: "title: Test".to_string(),
             dot_content: "digraph {}".to_string(),
@@ -4062,6 +4307,7 @@ mod tests {
     fn spec_template_renders_with_content() {
         let tmpl = SpecTabTemplate {
             spec_id: "01HTEST".to_string(),
+            title_slug: "test".to_string(),
             spec_html: "<h1>Test</h1>".to_string(),
             spec_markdown: "# Test".to_string(),
         };
@@ -4074,6 +4320,7 @@ mod tests {
     fn spec_template_renders_empty_state() {
         let tmpl = SpecTabTemplate {
             spec_id: "01HTEST".to_string(),
+            title_slug: "test".to_string(),
             spec_html: String::new(),
             spec_markdown: String::new(),
         };
@@ -4118,11 +4365,13 @@ mod tests {
         assert_eq!(resp.status(), 200);
         assert_eq!(
             resp.headers().get("content-type").unwrap(),
-            "text/markdown"
+            "text/markdown; charset=utf-8"
         );
-        assert_eq!(
-            resp.headers().get("content-disposition").unwrap(),
-            "attachment; filename=\"spec.md\""
+        let disposition = resp.headers().get("content-disposition").unwrap().to_str().unwrap();
+        assert!(
+            disposition.contains("attachment") && disposition.contains("-spec.md"),
+            "should have slugged filename in content-disposition, got: {}",
+            disposition
         );
     }
 
@@ -4144,11 +4393,13 @@ mod tests {
         assert_eq!(resp.status(), 200);
         assert_eq!(
             resp.headers().get("content-type").unwrap(),
-            "text/yaml"
+            "text/yaml; charset=utf-8"
         );
-        assert_eq!(
-            resp.headers().get("content-disposition").unwrap(),
-            "attachment; filename=\"spec.yaml\""
+        let disposition = resp.headers().get("content-disposition").unwrap().to_str().unwrap();
+        assert!(
+            disposition.contains("attachment") && disposition.contains("-spec.yaml"),
+            "should have slugged filename in content-disposition, got: {}",
+            disposition
         );
     }
 
@@ -4170,11 +4421,13 @@ mod tests {
         assert_eq!(resp.status(), 200);
         assert_eq!(
             resp.headers().get("content-type").unwrap(),
-            "text/plain"
+            "text/plain; charset=utf-8"
         );
-        assert_eq!(
-            resp.headers().get("content-disposition").unwrap(),
-            "attachment; filename=\"spec.dot\""
+        let disposition = resp.headers().get("content-disposition").unwrap().to_str().unwrap();
+        assert!(
+            disposition.contains("attachment") && disposition.contains("-spec.dot"),
+            "should have slugged filename in content-disposition, got: {}",
+            disposition
         );
     }
 
@@ -4383,8 +4636,10 @@ mod tests {
         assert_eq!(sanitize_container_id("activity-transcript"), "activity-transcript");
         assert_eq!(sanitize_container_id("chat-transcript"), "chat-transcript");
         assert_eq!(sanitize_container_id("mission-ticker"), "mission-ticker");
-        assert_eq!(sanitize_container_id("canvas"), "canvas");
-        assert_eq!(sanitize_container_id("chat-rail"), "chat-rail");
+        assert_eq!(sanitize_container_id("brainstorm-chat"), "brainstorm-chat");
+        // IDs that are DOM element IDs but not transcript container_ids should be rejected.
+        assert_eq!(sanitize_container_id("canvas"), "chat-transcript");
+        assert_eq!(sanitize_container_id("chat-rail"), "chat-transcript");
         assert_eq!(sanitize_container_id("'); alert('xss'); //"), "chat-transcript");
         assert_eq!(sanitize_container_id("malicious-id"), "chat-transcript");
         assert_eq!(sanitize_container_id(""), "chat-transcript");
@@ -4603,6 +4858,499 @@ mod tests {
         );
     }
 
+    // ---- Chat feed / question split template tests ----
+
+    #[test]
+    fn chat_feed_template_renders_empty() {
+        let tmpl = ChatFeedTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains(r#"id="chat-transcript-feed""#),
+            "should contain feed container id"
+        );
+        assert!(
+            rendered.contains("No messages yet"),
+            "empty feed should show empty state"
+        );
+        assert!(
+            rendered.contains("sse:transcript_appended"),
+            "feed should trigger on transcript_appended"
+        );
+        assert!(
+            !rendered.contains("chat-question-card"),
+            "feed should not contain question card"
+        );
+    }
+
+    #[test]
+    fn chat_feed_template_renders_with_entries() {
+        let tmpl = ChatFeedTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![TranscriptEntry {
+                sender: "human".to_string(),
+                sender_label: "You".to_string(),
+                initial: "Y".to_string(),
+                is_human: true,
+                is_step: false,
+                is_continuation: false,
+                role_class: "human".to_string(),
+                content: "Hello world".to_string(),
+                content_html: "<p>Hello world</p>\n".to_string(),
+                timestamp: "12:00:00".to_string(),
+                repeat_count: 1,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Hello world"));
+        assert!(rendered.contains("You"), "should contain sender label");
+        assert!(
+            !rendered.contains("No messages yet"),
+            "should not show empty state when entries exist"
+        );
+    }
+
+    #[test]
+    fn chat_feed_template_contains_part_feed_in_hx_get() {
+        let tmpl = ChatFeedTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "brainstorm-chat".to_string(),
+            transcript: vec![],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("part=feed"),
+            "feed hx-get should include part=feed param"
+        );
+        assert!(
+            rendered.contains("container_id=brainstorm-chat"),
+            "feed hx-get should include container_id param"
+        );
+    }
+
+    #[test]
+    fn chat_question_template_renders_no_question() {
+        let tmpl = ChatQuestionTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains(r#"id="chat-transcript-question""#),
+            "should contain question container id"
+        );
+        assert!(
+            !rendered.contains("chat-question-card"),
+            "should not render question card when no question pending"
+        );
+        assert!(
+            rendered.contains("sse:question_asked"),
+            "question container should trigger on question_asked"
+        );
+    }
+
+    #[test]
+    fn chat_question_template_renders_boolean_question() {
+        let tmpl = ChatQuestionTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            pending_question: Some(QuestionData::Boolean {
+                question_id: "01HQID".to_string(),
+                question: "Continue?".to_string(),
+                default: Some(true),
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Continue?"));
+        assert!(rendered.contains("Yes"));
+        assert!(rendered.contains("No"));
+        assert!(
+            rendered.contains("Something else"),
+            "boolean question should have 'Something else' option"
+        );
+    }
+
+    #[test]
+    fn chat_question_template_renders_freeform_question() {
+        let tmpl = ChatQuestionTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            pending_question: Some(QuestionData::Freeform {
+                question_id: "01HQID".to_string(),
+                question: "Describe the goal".to_string(),
+                placeholder: "Enter goal...".to_string(),
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Describe the goal"));
+        assert!(rendered.contains("Enter goal..."));
+    }
+
+    #[test]
+    fn chat_question_template_renders_multiple_choice() {
+        let tmpl = ChatQuestionTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            pending_question: Some(QuestionData::MultipleChoice {
+                question_id: "01HQID".to_string(),
+                question: "Pick a language".to_string(),
+                choices: vec!["Rust".to_string(), "Python".to_string()],
+                allow_multi: false,
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Pick a language"));
+        assert!(rendered.contains("Rust"));
+        assert!(rendered.contains("Python"));
+    }
+
+    #[test]
+    fn chat_question_template_targets_question_container() {
+        let tmpl = ChatQuestionTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            pending_question: Some(QuestionData::Boolean {
+                question_id: "01HQID".to_string(),
+                question: "Proceed?".to_string(),
+                default: None,
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains(r##"hx-target="#chat-transcript-question""##),
+            "answer form should target question container, not full transcript: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn chat_question_template_contains_part_question_in_hx_get() {
+        let tmpl = ChatQuestionTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("part=question"),
+            "question hx-get should include part=question param"
+        );
+    }
+
+    #[test]
+    fn chat_question_boolean_has_options_set_wrapper() {
+        let tmpl = ChatQuestionTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            pending_question: Some(QuestionData::Boolean {
+                question_id: "01HQID".to_string(),
+                question: "Continue?".to_string(),
+                default: None,
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("chat-options-set"),
+            "boolean question should wrap options in chat-options-set: {}",
+            rendered
+        );
+        assert!(
+            rendered.contains("chat-else-back"),
+            "boolean question should have a back button: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn chat_question_multiple_choice_has_options_set_wrapper() {
+        let tmpl = ChatQuestionTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            pending_question: Some(QuestionData::MultipleChoice {
+                question_id: "01HQID".to_string(),
+                question: "Pick one".to_string(),
+                choices: vec!["A".to_string(), "B".to_string()],
+                allow_multi: false,
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("chat-options-set"),
+            "multiple choice question should wrap options in chat-options-set: {}",
+            rendered
+        );
+        assert!(
+            rendered.contains("chat-else-back"),
+            "multiple choice question should have a back button: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn chat_transcript_wrapper_defines_toggle_else_helper() {
+        let tmpl = ChatTranscriptTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("function toggleElse"),
+            "wrapper script should define toggleElse helper function: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn chat_transcript_template_includes_feed_and_question() {
+        let tmpl = ChatTranscriptTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![TranscriptEntry {
+                sender: "human".to_string(),
+                sender_label: "You".to_string(),
+                initial: "Y".to_string(),
+                is_human: true,
+                is_step: false,
+                is_continuation: false,
+                role_class: "human".to_string(),
+                content: "Test message".to_string(),
+                content_html: "<p>Test message</p>\n".to_string(),
+                timestamp: "12:00:00".to_string(),
+                repeat_count: 1,
+            }],
+            pending_question: Some(QuestionData::Boolean {
+                question_id: "01HQID".to_string(),
+                question: "Ready?".to_string(),
+                default: None,
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        // Wrapper container
+        assert!(
+            rendered.contains(r#"id="chat-transcript""#),
+            "should have wrapper container id"
+        );
+        // Feed sub-container
+        assert!(
+            rendered.contains(r#"id="chat-transcript-feed""#),
+            "should include feed sub-container"
+        );
+        // Question sub-container
+        assert!(
+            rendered.contains(r#"id="chat-transcript-question""#),
+            "should include question sub-container"
+        );
+        // Content from both
+        assert!(rendered.contains("Test message"), "should contain transcript entry");
+        assert!(rendered.contains("Ready?"), "should contain question");
+    }
+
+    #[test]
+    fn chat_transcript_template_feed_and_question_have_independent_triggers() {
+        let tmpl = ChatTranscriptTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        // The wrapper div itself should NOT have hx-trigger (only children do)
+        // Feed triggers on transcript_appended only
+        assert!(
+            rendered.contains("sse:transcript_appended"),
+            "feed should have transcript_appended trigger"
+        );
+        // Question triggers on question_asked and question_answered
+        assert!(
+            rendered.contains("sse:question_asked"),
+            "question should have question_asked trigger"
+        );
+        assert!(
+            rendered.contains("sse:question_answered"),
+            "question should have question_answered trigger"
+        );
+    }
+
+    // ---- Handler tests for part=feed and part=question ----
+
+    #[tokio::test]
+    async fn activity_transcript_with_part_feed_returns_feed_only() {
+        let state = test_state();
+
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("description=Feed+part+test"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(format!(
+                    "/web/specs/{}/activity/transcript?container_id=chat-transcript&part=feed",
+                    spec_id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains(r#"id="chat-transcript-feed""#),
+            "should return feed container: {}",
+            html
+        );
+        assert!(
+            !html.contains(r#"id="chat-transcript-question""#),
+            "should not include question container in feed-only response"
+        );
+    }
+
+    #[tokio::test]
+    async fn activity_transcript_with_part_question_returns_question_only() {
+        let state = test_state();
+
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("description=Question+part+test"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(format!(
+                    "/web/specs/{}/activity/transcript?container_id=chat-transcript&part=question",
+                    spec_id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains(r#"id="chat-transcript-question""#),
+            "should return question container: {}",
+            html
+        );
+        assert!(
+            !html.contains(r#"id="chat-transcript-feed""#),
+            "should not include feed container in question-only response"
+        );
+    }
+
+    #[tokio::test]
+    async fn post_answer_targeting_question_container_returns_question_only() {
+        let state = test_state();
+
+        let app = create_router(Arc::clone(&state), None);
+        let resp = app
+            .oneshot(
+                Request::post("/web/specs")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("description=Answer+question+target+test"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().expect("should have a spec")
+        };
+
+        // Ask a question so we can answer it
+        let question_id = ulid::Ulid::new();
+        {
+            let actors = state.actors.read().await;
+            let handle = actors.get(&spec_id).expect("actor should exist");
+            handle
+                .send_command(Command::AskQuestion {
+                    question: barnstormer_core::UserQuestion::Freeform {
+                        question_id,
+                        question: "What color?".to_string(),
+                        placeholder: None,
+                        validation_hint: None,
+                    },
+                })
+                .await
+                .unwrap();
+        }
+
+        // POST to /answer with HX-Target: #chat-transcript-question
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::post(format!("/web/specs/{}/answer", spec_id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("HX-Target", "#chat-transcript-question")
+                    .body(Body::from(format!(
+                        "question_id={}&answer=Blue",
+                        question_id
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains(r#"id="chat-transcript-question""#),
+            "response should be the question container only: {}",
+            html
+        );
+        assert!(
+            !html.contains(r#"id="chat-transcript-feed""#),
+            "response should not include the feed container"
+        );
+    }
+
     // ---- render_markdown tests ----
 
     #[test]
@@ -4649,7 +5397,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn phase_transition_to_active_returns_200() {
+    async fn phase_transition_to_refining_returns_200() {
         let state = test_state();
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
@@ -4671,7 +5419,7 @@ mod tests {
             .oneshot(
                 Request::post(&format!("/web/specs/{}/phase", spec_id))
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("target=active"))
+                    .body(Body::from("target=refining"))
                     .unwrap(),
             )
             .await
@@ -4697,12 +5445,12 @@ mod tests {
             *actors.keys().next().unwrap()
         };
 
-        // First transition to Active
+        // First transition to Refining
         let app2 = create_router(Arc::clone(&state), None);
         app2.oneshot(
             Request::post(&format!("/web/specs/{}/phase", spec_id))
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("target=active"))
+                .body(Body::from("target=refining"))
                 .unwrap(),
         )
         .await
@@ -4771,24 +5519,24 @@ mod tests {
             *actors.keys().next().unwrap()
         };
 
-        // Transition to active first
+        // Transition to refining first
         let app2 = create_router(Arc::clone(&state), None);
         app2.oneshot(
             Request::post(&format!("/web/specs/{}/phase", spec_id))
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("target=active"))
+                .body(Body::from("target=refining"))
                 .unwrap(),
         )
         .await
         .unwrap();
 
-        // Try active again — 409
+        // Try refining again — 409
         let app3 = create_router(Arc::clone(&state), None);
         let resp = app3
             .oneshot(
                 Request::post(&format!("/web/specs/{}/phase", spec_id))
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("target=active"))
+                    .body(Body::from("target=refining"))
                     .unwrap(),
             )
             .await
@@ -4805,7 +5553,7 @@ mod tests {
             .oneshot(
                 Request::post(&format!("/web/specs/{}/phase", fake_id))
                     .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("target=active"))
+                    .body(Body::from("target=refining"))
                     .unwrap(),
             )
             .await
@@ -4883,25 +5631,25 @@ mod tests {
             "should have brainstorming marker"
         );
         assert!(
-            html.contains("phase-brainstorming"),
-            "should have brainstorming badge"
+            html.contains("phase-stepper"),
+            "should have phase stepper"
         );
         assert!(
-            html.contains("View Board"),
-            "should have View Board button"
+            html.contains("step-active"),
+            "should have active stepper step"
         );
         assert!(
             html.contains("agent-canvas"),
             "should have agent-canvas container"
         );
         assert!(
-            !html.contains("Resume Brainstorming"),
-            "should not have Resume button in brainstorming"
+            !html.contains("view-toggles-row"),
+            "brainstorming should not have view toggles row"
         );
     }
 
     #[tokio::test]
-    async fn spec_view_active_contains_tab_toggles() {
+    async fn spec_view_refining_contains_tab_toggles() {
         let state = test_state();
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
@@ -4918,12 +5666,12 @@ mod tests {
             *actors.keys().next().unwrap()
         };
 
-        // Transition to Active
+        // Transition to Refining
         let actors = state.actors.read().await;
         let handle = actors.get(&spec_id).unwrap();
         handle
             .send_command(Command::TransitionPhase {
-                target: SpecPhase::Active,
+                target: SpecPhase::Refining,
             })
             .await
             .unwrap();
@@ -4947,16 +5695,20 @@ mod tests {
             "should have document tab toggle"
         );
         assert!(
-            html.contains("Resume Brainstorming"),
-            "should have Resume button"
+            html.contains("view-toggles-row"),
+            "refining should have view toggles row"
+        );
+        assert!(
+            html.contains("phase-stepper"),
+            "should have phase stepper"
+        );
+        assert!(
+            html.contains("step-completed"),
+            "brainstorming step should be completed in refining phase"
         );
         assert!(
             !html.contains("data-view=\"brainstorming\""),
             "should not have brainstorming marker"
-        );
-        assert!(
-            !html.contains("phase-brainstorming"),
-            "should not have brainstorming badge"
         );
     }
 
