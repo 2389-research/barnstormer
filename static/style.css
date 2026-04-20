@@ -1733,6 +1733,11 @@ html, body {
         display: flex;
     }
 
+    /* Clear space for the fixed hamburger button on pages without a command bar */
+    .workspace > :first-child:not(.spec-compositor) {
+        padding-top: 56px;
+    }
+
     .nav-rail {
         position: fixed;
         top: 0;
