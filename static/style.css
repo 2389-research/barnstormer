@@ -57,6 +57,31 @@
     --font-body: 'DM Sans', system-ui, sans-serif;
 }
 
+/* --- Shared tooltip --- */
+.tooltip {
+    display: none;
+    position: absolute;
+    top: calc(100% + 8px);
+    padding: 6px 12px;
+    background: var(--text-primary);
+    color: var(--bg-card);
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.4;
+    border-radius: 6px;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 20;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+.tooltip::before {
+    content: '';
+    position: absolute;
+    bottom: 100%;
+    border: 5px solid transparent;
+    border-bottom-color: var(--text-primary);
+}
+
 html, body {
     height: 100%;
     font-family: var(--font-body);
@@ -154,6 +179,7 @@ html, body {
     background: var(--bg-card);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    position: relative;
 }
 .command-bar-left {
     flex: 1;
@@ -190,36 +216,15 @@ html, body {
     gap: 12px;
     flex-shrink: 0;
 }
-/* Title tooltip — visible on hover; on mobile replaces the hidden subtitle */
-.command-bar-title {
-    position: relative;
-}
+/* Title tooltip — left-aligned, shown when hovering the title */
 .command-bar-tooltip {
-    display: none;
-    position: absolute;
-    top: calc(100% + 8px);
-    left: 0;
-    padding: 6px 12px;
-    background: var(--text-primary);
-    color: var(--bg-card);
-    font-size: 12px;
-    font-weight: 400;
-    line-height: 1.4;
-    border-radius: 6px;
-    white-space: nowrap;
-    pointer-events: none;
-    z-index: 20;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    left: 20px;
+    top: calc(100% + 4px);
 }
 .command-bar-tooltip::before {
-    content: '';
-    position: absolute;
-    bottom: 100%;
     left: 20px;
-    border: 5px solid transparent;
-    border-bottom-color: var(--text-primary);
 }
-.command-bar-title:hover .command-bar-tooltip {
+.command-bar-left:hover ~ .command-bar-tooltip {
     display: block;
 }
 
@@ -373,35 +378,16 @@ html, body {
 .phase-step.step-disabled .phase-step-number {
     border-style: dashed;
 }
-/* Step tooltip */
+/* Step tooltip — centered under the step */
 .phase-step-tooltip {
-    display: none;
-    position: absolute;
-    top: calc(100% + 8px);
     left: 50%;
     transform: translateX(-50%);
-    padding: 6px 12px;
-    background: var(--text-primary);
-    color: var(--bg-card);
-    font-size: 12px;
-    font-weight: 400;
-    line-height: 1.4;
-    border-radius: 6px;
-    white-space: nowrap;
-    pointer-events: none;
-    z-index: 20;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 .phase-step-tooltip::before {
-    content: '';
-    position: absolute;
-    bottom: 100%;
     left: 50%;
     transform: translateX(-50%);
-    border: 5px solid transparent;
-    border-bottom-color: var(--text-primary);
 }
-.phase-step:hover .phase-step-tooltip {
+.phase-step:hover .tooltip {
     display: block;
 }
 
@@ -1797,6 +1783,7 @@ html, body {
         grid-template-columns: 1fr;
     }
 
+    .command-bar-chevron,
     .command-bar-subtitle {
         display: none;
     }

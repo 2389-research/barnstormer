@@ -8,9 +8,7 @@
 
 <header class="command-bar">
     <div class="command-bar-left">
-        <span class="command-bar-title">{{ title }}
-            <span class="command-bar-tooltip">{{ one_liner }}</span>
-        </span>
+        <span class="command-bar-title">{{ title }}</span>
         <span class="command-bar-chevron">&#8250;</span>
         <span class="command-bar-subtitle">{{ one_liner }}</span>
     </div>
@@ -19,6 +17,7 @@
              hx-trigger="load, sse:agent_step_started, sse:agent_step_finished, refreshAgents from:body"
              hx-swap="innerHTML"></div>
     </div>
+    <span class="tooltip command-bar-tooltip">{{ one_liner }}</span>
 </header>
 {% include "partials/phase_stepper.html" %}
 
@@ -101,9 +100,7 @@
 
 <header class="command-bar">
     <div class="command-bar-left">
-        <span class="command-bar-title">{{ title }}
-            <span class="command-bar-tooltip">{{ one_liner }}</span>
-        </span>
+        <span class="command-bar-title">{{ title }}</span>
         <span class="command-bar-chevron">&#8250;</span>
         <span class="command-bar-subtitle">{{ one_liner }}</span>
     </div>
@@ -112,6 +109,7 @@
              hx-trigger="load, sse:agent_step_started, sse:agent_step_finished, refreshAgents from:body"
              hx-swap="innerHTML"></div>
     </div>
+    <span class="tooltip command-bar-tooltip">{{ one_liner }}</span>
 </header>
 {% include "partials/phase_stepper.html" %}
 <div class="view-toggles-row">
@@ -242,14 +240,13 @@
 
 <header class="command-bar">
     <div class="command-bar-left">
-        <span class="command-bar-title">{{ title }}
-            <span class="command-bar-tooltip">{{ one_liner }}</span>
-        </span>
+        <span class="command-bar-title">{{ title }}</span>
         <span class="command-bar-chevron">&#8250;</span>
         <span class="command-bar-subtitle">{{ one_liner }}</span>
     </div>
     <div class="command-bar-right">
     </div>
+    <span class="tooltip command-bar-tooltip">{{ one_liner }}</span>
 </header>
 {% include "partials/phase_stepper.html" %}
 

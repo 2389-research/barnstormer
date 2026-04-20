@@ -21,13 +21,13 @@
             hx-swap="none">
         <span class="phase-step-number">✓</span>
         <span class="phase-step-label">{{ label }}</span>
-        <span class="phase-step-tooltip">Return to {{ label }}</span>
+        <span class="tooltip phase-step-tooltip">Return to {{ label }}</span>
     </button>
     {% else %}
     <div class="phase-step step-disabled">
         <span class="phase-step-number">{{ number }}</span>
         <span class="phase-step-label">{{ label }}</span>
-        <span class="phase-step-tooltip">{{ self.disabled_tooltip(phase_id) }}</span>
+        <span class="tooltip phase-step-tooltip">{{ self.disabled_tooltip(phase_id) }}</span>
     </div>
     {% endif %}
     {% endfor %}
