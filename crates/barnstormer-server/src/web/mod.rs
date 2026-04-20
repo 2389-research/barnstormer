@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use axum::extract::{Form, Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
 use barnstormer_agent::SwarmOrchestrator;
@@ -1037,6 +1037,7 @@ pub async fn delete_card(
 pub struct DocumentTemplate {
     pub spec_id: String,
     pub title: String,
+    pub title_slug: String,
     pub one_liner: String,
     pub goal: String,
     pub goal_html: String,
@@ -1091,6 +1092,7 @@ pub async fn document(
 
     DocumentTemplate {
         spec_id: id,
+        title_slug: slugify(&core.title),
         title: core.title.clone(),
         one_liner: core.one_liner.clone(),
         goal: core.goal.clone(),
@@ -1130,6 +1132,36 @@ pub struct TranscriptEntry {
 /// Render markdown content to HTML, stripping raw HTML tags from input
 /// to prevent XSS. Handles paragraphs, bold, italic, lists, code blocks,
 /// and links.
+/// Convert a spec title into a URL/filename-safe slug.
+fn slugify(title: &str) -> String {
+    let slug: String = title
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // Collapse multiple dashes and trim leading/trailing dashes
+    let mut result = String::new();
+    let mut prev_dash = false;
+    for c in slug.chars() {
+        if c == '-' {
+            if !prev_dash && !result.is_empty() {
+                result.push('-');
+            }
+            prev_dash = true;
+        } else {
+            result.push(c);
+            prev_dash = false;
+        }
+    }
+    result.trim_end_matches('-').to_string()
+}
+
 fn render_markdown(content: &str) -> String {
     let options = Options::empty();
     let parser = Parser::new_ext(content, options).filter(|event| {
@@ -1564,6 +1596,7 @@ pub async fn chat_panel(
 #[template(path = "partials/artifacts.html")]
 pub struct ArtifactsTemplate {
     pub spec_id: String,
+    pub title_slug: String,
     pub markdown_content: String,
     pub yaml_content: String,
     pub dot_content: String,
@@ -1599,8 +1632,15 @@ pub async fn artifacts(
     });
     let dot_content = barnstormer_core::export::export_dot(&spec_state);
 
+    let title_slug = spec_state
+        .core
+        .as_ref()
+        .map(|c| slugify(&c.title))
+        .unwrap_or_else(|| "spec".to_string());
+
     ArtifactsTemplate {
         spec_id: id,
+        title_slug,
         markdown_content,
         yaml_content,
         dot_content,
@@ -1613,6 +1653,7 @@ pub async fn artifacts(
 #[template(path = "partials/spec.html")]
 pub struct SpecTabTemplate {
     pub spec_id: String,
+    pub title_slug: String,
     pub spec_html: String,
     pub spec_markdown: String,
 }
@@ -1640,11 +1681,17 @@ pub async fn spec(
     };
 
     let spec_state = handle.read_state().await;
+    let title_slug = spec_state
+        .core
+        .as_ref()
+        .map(|c| slugify(&c.title))
+        .unwrap_or_else(|| "spec".to_string());
     let spec_markdown = barnstormer_core::export::export_spec(&spec_state);
     let spec_html = render_markdown(&spec_markdown);
 
     SpecTabTemplate {
         spec_id: id,
+        title_slug,
         spec_html,
         spec_markdown,
     }
@@ -1674,11 +1721,19 @@ pub async fn export_markdown(
     };
 
     let spec_state = handle.read_state().await;
+    let slug = spec_state
+        .core
+        .as_ref()
+        .map(|c| slugify(&c.title))
+        .unwrap_or_else(|| "spec".to_string());
     let content = barnstormer_core::export::export_markdown(&spec_state);
 
     Response::builder()
-        .header("content-type", "text/markdown")
-        .header("content-disposition", "attachment; filename=\"spec.md\"")
+        .header("content-type", "text/markdown; charset=utf-8")
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{}-spec.md\"", slug),
+        )
         .body(axum::body::Body::from(content))
         .unwrap()
         .into_response()
@@ -1707,12 +1762,17 @@ pub async fn export_yaml(
     };
 
     let spec_state = handle.read_state().await;
+    let slug = spec_state
+        .core
+        .as_ref()
+        .map(|c| slugify(&c.title))
+        .unwrap_or_else(|| "spec".to_string());
     match barnstormer_core::export::export_yaml(&spec_state) {
         Ok(content) => Response::builder()
-            .header("content-type", "text/yaml")
+            .header("content-type", "text/yaml; charset=utf-8")
             .header(
                 "content-disposition",
-                "attachment; filename=\"spec.yaml\"",
+                format!("attachment; filename=\"{}-spec.yaml\"", slug),
             )
             .body(axum::body::Body::from(content))
             .unwrap()
@@ -1751,11 +1811,19 @@ pub async fn export_dot(
     };
 
     let spec_state = handle.read_state().await;
+    let slug = spec_state
+        .core
+        .as_ref()
+        .map(|c| slugify(&c.title))
+        .unwrap_or_else(|| "spec".to_string());
     let content = barnstormer_core::export::export_dot(&spec_state);
 
     Response::builder()
-        .header("content-type", "text/plain")
-        .header("content-disposition", "attachment; filename=\"spec.dot\"")
+        .header("content-type", "text/plain; charset=utf-8")
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{}-spec.dot\"", slug),
+        )
         .body(axum::body::Body::from(content))
         .unwrap()
         .into_response()
@@ -1784,19 +1852,22 @@ pub async fn export_spec_download(
     };
 
     let spec_state = handle.read_state().await;
+    let slug = spec_state
+        .core
+        .as_ref()
+        .map(|c| slugify(&c.title))
+        .unwrap_or_else(|| "spec".to_string());
     let content = barnstormer_core::export::export_spec(&spec_state);
+    let filename = format!("{}-spec.md", slug);
 
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
-            (
-                header::CONTENT_DISPOSITION,
-                "attachment; filename=\"spec.md\"",
-            ),
-        ],
-        content,
-    )
+    Response::builder()
+        .header("content-type", "text/markdown; charset=utf-8")
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{}\"", filename),
+        )
+        .body(axum::body::Body::from(content))
+        .unwrap()
         .into_response()
 }
 
@@ -1841,22 +1912,11 @@ pub async fn regenerate(
     if let Err(e) = std::fs::create_dir_all(&exports_dir) {
         tracing::error!("failed to create exports directory: {}", e);
     } else {
-        let spec_title = spec_state
+        let slug = spec_state
             .core
             .as_ref()
-            .map(|c| c.title.clone())
+            .map(|c| slugify(&c.title))
             .unwrap_or_else(|| "spec".to_string());
-        let slug: String = spec_title
-            .to_lowercase()
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                    c
-                } else {
-                    '-'
-                }
-            })
-            .collect();
 
         if let Err(e) = std::fs::write(exports_dir.join(format!("{}.md", slug)), &markdown_content) {
             tracing::error!("failed to write markdown export: {}", e);
@@ -3028,6 +3088,7 @@ mod tests {
         let tmpl = DocumentTemplate {
             spec_id: "01HTEST".to_string(),
             title: "Test Doc".to_string(),
+            title_slug: "test-doc".to_string(),
             one_liner: "A test document".to_string(),
             goal: "Verify rendering".to_string(),
             goal_html: "<p>Verify rendering</p>\n".to_string(),
@@ -4067,6 +4128,7 @@ mod tests {
     fn artifacts_template_renders() {
         let tmpl = ArtifactsTemplate {
             spec_id: "01HTEST".to_string(),
+            title_slug: "my-spec".to_string(),
             markdown_content: "# My Spec".to_string(),
             yaml_content: "title: My Spec".to_string(),
             dot_content: "digraph {}".to_string(),
@@ -4079,6 +4141,7 @@ mod tests {
     fn artifacts_template_contains_all_content_sections() {
         let tmpl = ArtifactsTemplate {
             spec_id: "01HTEST".to_string(),
+            title_slug: "my-spec".to_string(),
             markdown_content: "# My Spec".to_string(),
             yaml_content: "title: My Spec".to_string(),
             dot_content: "digraph {}".to_string(),
@@ -4096,6 +4159,7 @@ mod tests {
     fn artifacts_template_contains_download_links() {
         let tmpl = ArtifactsTemplate {
             spec_id: "01HTEST".to_string(),
+            title_slug: "test".to_string(),
             markdown_content: "# Test".to_string(),
             yaml_content: "title: Test".to_string(),
             dot_content: "digraph {}".to_string(),
@@ -4113,15 +4177,16 @@ mod tests {
             rendered.contains("/web/specs/01HTEST/export/dot"),
             "should contain dot download link"
         );
-        assert!(rendered.contains("download=\"spec.md\""), "should have spec.md download attribute");
-        assert!(rendered.contains("download=\"spec.yaml\""), "should have spec.yaml download attribute");
-        assert!(rendered.contains("download=\"spec.dot\""), "should have spec.dot download attribute");
+        assert!(rendered.contains("download=\"test-spec.md\""), "should have slugged .md download attribute");
+        assert!(rendered.contains("download=\"test-spec.yaml\""), "should have slugged .yaml download attribute");
+        assert!(rendered.contains("download=\"test-spec.dot\""), "should have slugged .dot download attribute");
     }
 
     #[test]
     fn artifacts_template_contains_copy_buttons() {
         let tmpl = ArtifactsTemplate {
             spec_id: "01HTEST".to_string(),
+            title_slug: "test".to_string(),
             markdown_content: "# Test".to_string(),
             yaml_content: "title: Test".to_string(),
             dot_content: "digraph {}".to_string(),
@@ -4242,6 +4307,7 @@ mod tests {
     fn spec_template_renders_with_content() {
         let tmpl = SpecTabTemplate {
             spec_id: "01HTEST".to_string(),
+            title_slug: "test".to_string(),
             spec_html: "<h1>Test</h1>".to_string(),
             spec_markdown: "# Test".to_string(),
         };
@@ -4254,6 +4320,7 @@ mod tests {
     fn spec_template_renders_empty_state() {
         let tmpl = SpecTabTemplate {
             spec_id: "01HTEST".to_string(),
+            title_slug: "test".to_string(),
             spec_html: String::new(),
             spec_markdown: String::new(),
         };
@@ -4298,11 +4365,13 @@ mod tests {
         assert_eq!(resp.status(), 200);
         assert_eq!(
             resp.headers().get("content-type").unwrap(),
-            "text/markdown"
+            "text/markdown; charset=utf-8"
         );
-        assert_eq!(
-            resp.headers().get("content-disposition").unwrap(),
-            "attachment; filename=\"spec.md\""
+        let disposition = resp.headers().get("content-disposition").unwrap().to_str().unwrap();
+        assert!(
+            disposition.contains("attachment") && disposition.contains("-spec.md"),
+            "should have slugged filename in content-disposition, got: {}",
+            disposition
         );
     }
 
@@ -4324,11 +4393,13 @@ mod tests {
         assert_eq!(resp.status(), 200);
         assert_eq!(
             resp.headers().get("content-type").unwrap(),
-            "text/yaml"
+            "text/yaml; charset=utf-8"
         );
-        assert_eq!(
-            resp.headers().get("content-disposition").unwrap(),
-            "attachment; filename=\"spec.yaml\""
+        let disposition = resp.headers().get("content-disposition").unwrap().to_str().unwrap();
+        assert!(
+            disposition.contains("attachment") && disposition.contains("-spec.yaml"),
+            "should have slugged filename in content-disposition, got: {}",
+            disposition
         );
     }
 
@@ -4350,11 +4421,13 @@ mod tests {
         assert_eq!(resp.status(), 200);
         assert_eq!(
             resp.headers().get("content-type").unwrap(),
-            "text/plain"
+            "text/plain; charset=utf-8"
         );
-        assert_eq!(
-            resp.headers().get("content-disposition").unwrap(),
-            "attachment; filename=\"spec.dot\""
+        let disposition = resp.headers().get("content-disposition").unwrap().to_str().unwrap();
+        assert!(
+            disposition.contains("attachment") && disposition.contains("-spec.dot"),
+            "should have slugged filename in content-disposition, got: {}",
+            disposition
         );
     }
 
