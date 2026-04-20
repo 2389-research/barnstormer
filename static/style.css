@@ -84,6 +84,27 @@ html, body {
     overflow: hidden;
 }
 
+/* Hamburger menu — hidden on desktop, shown on mobile */
+.hamburger {
+    display: none;
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 51;
+    border: none;
+    background: var(--bg-card);
+    border-radius: 8px;
+    padding: 8px;
+    cursor: pointer;
+    color: var(--text-primary);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Backdrop for mobile nav drawer */
+.nav-backdrop {
+    display: none;
+}
+
 .workspace {
     display: flex;
     flex-direction: column;
@@ -367,13 +388,6 @@ html, body {
     background: var(--text-primary);
     color: var(--bg-primary);
 }
-.agent-pill-paused {
-    background: var(--bg-secondary);
-    color: var(--text-muted);
-}
-.agent-pill-paused:hover {
-    color: var(--text-primary);
-}
 .agent-pill-stopped {
     background: var(--agent-accent, #222);
     color: #fff;
@@ -388,10 +402,6 @@ html, body {
 }
 .agent-pill-running .agent-pill-dot {
     background: #34D399;
-}
-.agent-pill-paused .agent-pill-dot {
-    background: var(--text-muted);
-    opacity: 0.4;
 }
 .agent-pill-stopped .agent-pill-dot {
     background: #fff;
@@ -1700,23 +1710,51 @@ html, body {
 @media (max-width: 900px) {
     .app-layout {
         grid-template-columns: 1fr;
-        grid-template-rows: auto 1fr;
+        grid-template-rows: 1fr;
+    }
+
+    .hamburger {
+        display: flex;
     }
 
     .nav-rail {
-        border-right: none;
-        border-bottom: 1px solid var(--border-subtle);
-        max-height: 200px;
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: 80vw;
+        max-width: 320px;
+        z-index: 50;
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+        border-right: 1px solid var(--border);
+        border-bottom: none;
+        max-height: none;
+    }
+
+    .app-layout.nav-open .nav-rail {
+        transform: translateX(0);
+    }
+
+    .nav-backdrop {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 49;
+        background: rgba(0, 0, 0, 0.3);
+    }
+
+    .app-layout.nav-open .nav-backdrop {
+        display: block;
+    }
+
+    /* Offset command bar for hamburger button */
+    .command-bar {
+        padding-left: 52px;
     }
 
     .board {
         grid-template-columns: 1fr;
-    }
-
-    .command-bar {
-        flex-wrap: wrap;
-        height: auto;
-        padding: var(--spacing-sm) var(--spacing-md);
     }
 
     .command-bar-subtitle {
