@@ -3893,7 +3893,7 @@ mod tests {
     }
 
     #[test]
-    fn chat_panel_contains_header_and_transcript() {
+    fn chat_panel_contains_transcript_and_input() {
         let tmpl = ChatPanelTemplate {
             spec_id: "01HTEST".to_string(),
             container_id: "chat-transcript".to_string(),
@@ -3902,9 +3902,9 @@ mod tests {
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("chat-panel-header"), "should contain chat panel header");
-        assert!(rendered.contains("Chat"), "should contain Chat title");
+        assert!(rendered.contains("chat-panel"), "should contain chat-panel wrapper");
         assert!(rendered.contains("sse:transcript_appended"), "should listen for transcript_appended event");
+        assert!(rendered.contains("chat-input-area"), "should contain input area");
     }
 
     #[tokio::test]
