@@ -1811,6 +1811,12 @@ html, body {
     .command-bar-subtitle {
         display: none;
     }
+
+    /* Native select popover mis-anchors on mobile Safari/macOS — hide optional field */
+    .create-spec-form .form-group:has(.form-select) {
+        display: none;
+    }
+
     /* Brainstorming canvas: remove min-width that causes horizontal overflow */
     [data-view="brainstorming"] .spec-body > .canvas {
         min-width: 0;
