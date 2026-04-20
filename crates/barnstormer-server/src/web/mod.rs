@@ -3537,7 +3537,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_status_template_renders_paused() {
+    fn agent_status_template_renders_paused_as_stopped() {
         let tmpl = AgentStatusTemplate {
             spec_id: "01HTEST".to_string(),
             running: false,
@@ -3545,9 +3545,10 @@ mod tests {
             agent_count: 4,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("agent-pill-paused"), "should have paused pill class");
-        assert!(rendered.contains("Agents paused"), "should show paused state");
-        assert!(rendered.contains("/agents/resume"), "should have resume action URL");
+        assert!(rendered.contains("agent-pill-stopped"), "paused should render as stopped pill");
+        assert!(rendered.contains("Start agents"), "paused should show start agents text");
+        assert!(rendered.contains("/agents/resume"), "paused should resume on click");
+        assert!(!rendered.contains("agent-pill-paused"), "should not have separate paused state");
     }
 
     #[tokio::test]
