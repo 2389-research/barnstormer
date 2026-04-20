@@ -1737,6 +1737,8 @@ html, body {
     .app-layout {
         grid-template-columns: 1fr;
         grid-template-rows: 1fr;
+        max-width: 100vw;
+        overflow-x: hidden;
     }
 
     .hamburger {
@@ -1786,6 +1788,11 @@ html, body {
     .command-bar-chevron,
     .command-bar-subtitle {
         display: none;
+    }
+
+    /* Brainstorming canvas: remove min-width that causes horizontal overflow */
+    [data-view="brainstorming"] .spec-body > .canvas {
+        min-width: 0;
     }
 
 
@@ -1857,6 +1864,7 @@ html, body {
 
 /* Chat panel fills its parent; parent context controls sizing */
 .canvas .chat-panel {
+  width: 100%;
   max-width: 720px;
   margin: 0 auto;
   padding: var(--spacing-md);
