@@ -1824,13 +1824,6 @@ html, body {
   display: block;
 }
 
-.workflow-placeholder {
-    padding: 24px;
-}
-.workflow-summary {
-    margin-top: 24px;
-}
-
 /* Thinking throbber — three bouncing dots */
 .chat-throbber {
     padding: 8px 20px;
