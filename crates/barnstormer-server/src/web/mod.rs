@@ -3302,6 +3302,84 @@ mod tests {
         assert!(rendered.contains("Green"));
     }
 
+    /// The "Something else..." fallback textarea must NOT start as `required` in the
+    /// rendered HTML — otherwise Chromium refuses to submit the Yes/No buttons because
+    /// the hidden textarea fails form validation ("invalid form control is not focusable").
+    /// The onclick handler is responsible for setting `required=true` when the textarea
+    /// becomes visible.
+    #[test]
+    fn chat_transcript_boolean_question_textarea_is_not_required_initially() {
+        let tmpl = ChatTranscriptTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![],
+            pending_question: Some(QuestionData::Boolean {
+                question_id: "01HQID".to_string(),
+                question: "Proceed with this?".to_string(),
+                default: Some(true),
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+
+        // Locate the "Something else..." fallback textarea by its placeholder.
+        let placeholder = "Describe what you mean...";
+        let idx = rendered
+            .find(placeholder)
+            .expect("rendered HTML should contain the fallback textarea");
+
+        // Find the bounds of the <textarea ...> tag that contains this placeholder.
+        let tag_start = rendered[..idx].rfind("<textarea").expect("<textarea tag");
+        let tag_end_rel = rendered[tag_start..].find('>').expect("closing '>'");
+        let textarea_tag = &rendered[tag_start..tag_start + tag_end_rel + 1];
+
+        assert!(
+            !textarea_tag.contains("required"),
+            "fallback textarea must not have `required` at initial render; got: {textarea_tag}"
+        );
+
+        // The onclick handler must flip required=true when the user clicks "Something else...".
+        assert!(
+            rendered.contains("ta.required=true") || rendered.contains("ta.required = true"),
+            "onclick handler must set textarea.required=true when fallback is revealed"
+        );
+    }
+
+    /// Same guarantee for the MultipleChoice branch of the chat transcript.
+    #[test]
+    fn chat_transcript_multiple_choice_question_textarea_is_not_required_initially() {
+        let tmpl = ChatTranscriptTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![],
+            pending_question: Some(QuestionData::MultipleChoice {
+                question_id: "01HQID".to_string(),
+                question: "Pick a color".to_string(),
+                choices: vec!["Red".to_string(), "Blue".to_string()],
+                allow_multi: false,
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+
+        let placeholder = "Describe what you mean...";
+        let idx = rendered
+            .find(placeholder)
+            .expect("rendered HTML should contain the fallback textarea");
+
+        let tag_start = rendered[..idx].rfind("<textarea").expect("<textarea tag");
+        let tag_end_rel = rendered[tag_start..].find('>').expect("closing '>'");
+        let textarea_tag = &rendered[tag_start..tag_start + tag_end_rel + 1];
+
+        assert!(
+            !textarea_tag.contains("required"),
+            "fallback textarea must not have `required` at initial render; got: {textarea_tag}"
+        );
+
+        assert!(
+            rendered.contains("ta.required=true") || rendered.contains("ta.required = true"),
+            "onclick handler must set textarea.required=true when fallback is revealed"
+        );
+    }
+
     #[tokio::test]
     async fn get_index_returns_html() {
         let state = test_state();
