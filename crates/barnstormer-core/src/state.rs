@@ -359,7 +359,7 @@ impl SpecState {
                             notes: prior,
                         }],
                     });
-                    att.user_notes = Some(notes.clone());
+                    att.user_notes = if notes.is_empty() { None } else { Some(notes.clone()) };
                 }
             }
 
@@ -472,7 +472,7 @@ impl SpecState {
                     .iter_mut()
                     .find(|a| a.attachment_id == *attachment_id)
                 {
-                    att.user_notes = Some(notes.clone());
+                    att.user_notes = if notes.is_empty() { None } else { Some(notes.clone()) };
                 }
             }
             EventPayload::ContextRemoved { attachment_id } => {
@@ -1193,5 +1193,34 @@ mod tests {
         }));
         assert_eq!(state.undo_stack.len(), undo_len_after_attach,
             "summarization should not push an undo entry");
+    }
+
+    #[test]
+    fn undo_context_notes_updated_restores_none_when_prior_was_none() {
+        let mut state = SpecState::new();
+        let attachment_id = Ulid::new();
+        // Attach (no notes)
+        state.apply(&make_event(1, make_spec_id(), EventPayload::ContextAttached {
+            attachment: ContextAttachment {
+                attachment_id, filename: "a".into(), mime_type: "text/plain".into(),
+                size_bytes: 1, summary: None, user_notes: None,
+                added_at: Utc::now(), removed: false,
+            },
+        }));
+        // Add notes
+        state.apply(&make_event(2, make_spec_id(), EventPayload::ContextNotesUpdated {
+            attachment_id, notes: "hello".into(),
+        }));
+        assert_eq!(state.context_attachments[0].user_notes.as_deref(), Some("hello"));
+
+        // Undo
+        let inverse = state.undo_stack.last().unwrap().inverse.clone();
+        state.apply(&make_event(3, make_spec_id(), EventPayload::UndoApplied {
+            target_event_id: 2,
+            inverse_events: inverse,
+        }));
+
+        // Prior was None — should be restored to None, not Some("")
+        assert_eq!(state.context_attachments[0].user_notes, None);
     }
 }
