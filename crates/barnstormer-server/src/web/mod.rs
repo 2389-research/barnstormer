@@ -275,12 +275,6 @@ pub async fn import_spec(
     response
 }
 
-/// Form data for creating a new spec.
-#[derive(Deserialize)]
-pub struct CreateSpecForm {
-    pub description: String,
-}
-
 /// Extract a placeholder title from free-text description.
 /// Takes the first sentence (ending in . ! ?) or first 60 chars, whichever is shorter.
 fn extract_placeholder_title(description: &str) -> String {
@@ -306,11 +300,105 @@ fn extract_placeholder_title(description: &str) -> String {
     title
 }
 
-/// POST /web/specs - Create a spec from free-text description, return spec view.
+/// POST /web/specs - Create a spec from free-text description plus optional
+/// context files, return spec view.
+///
+/// Body is `multipart/form-data` with one required `description` field and
+/// zero-or-more `files` parts. Each file is validated (UTF-8, max 20MB)
+/// before any spec is created so we fail fast without leaving a half-wired
+/// spec behind. Accepted files are written to disk, attached via
+/// `Command::AttachContext`, and handed to the async summarizer.
 pub async fn create_spec(
     State(state): State<SharedState>,
-    Form(form): Form<CreateSpecForm>,
+    mut multipart: axum::extract::Multipart,
 ) -> Response {
+    // 1. Parse fields: description (required) + zero-or-more `files`.
+    let mut description: Option<String> = None;
+    let mut files: Vec<(String, String, Vec<u8>)> = Vec::new(); // (filename, mime, bytes)
+
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => match field.name() {
+                Some("description") => {
+                    match field.text().await {
+                        Ok(t) => description = Some(t),
+                        Err(e) => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                format!("failed to read description: {e}"),
+                            )
+                                .into_response();
+                        }
+                    }
+                }
+                Some("files") => {
+                    let filename = field
+                        .file_name()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| "file".into());
+                    let mime = field
+                        .content_type()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| "text/plain".into());
+                    let bytes = match field.bytes().await {
+                        Ok(b) => b.to_vec(),
+                        Err(e) => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                format!("failed to read file '{filename}': {e}"),
+                            )
+                                .into_response();
+                        }
+                    };
+                    // Browsers send an empty `files` part when no file is
+                    // selected — skip so the no-files case keeps working.
+                    if bytes.is_empty() {
+                        continue;
+                    }
+                    files.push((filename, mime, bytes));
+                }
+                _ => {} // ignore unknown fields
+            },
+            Ok(None) => break,
+            Err(e) => {
+                return (StatusCode::BAD_REQUEST, format!("multipart parse error: {e}"))
+                    .into_response();
+            }
+        }
+    }
+
+    let description = match description {
+        Some(d) if !d.trim().is_empty() => d,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Html("<p class=\"error-msg\">Description is required.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    // 2. Validate files upfront so we fail before creating the spec. Better
+    // UX than writing a spec then bouncing on file #3.
+    const MAX_FILE_BYTES: usize = 20 * 1024 * 1024;
+    for (filename, _, bytes) in &files {
+        if bytes.len() > MAX_FILE_BYTES {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                format!("'{filename}' exceeds 20MB"),
+            )
+                .into_response();
+        }
+        if !crate::context_storage::is_utf8_text(bytes) {
+            return (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                format!("'{filename}' is binary — text files only for now"),
+            )
+                .into_response();
+        }
+    }
+
+    // 3. Create the spec.
     let spec_id = Ulid::new();
     let spec_dir = state.barnstormer_home.join("specs").join(spec_id.to_string());
     if let Err(e) = std::fs::create_dir_all(&spec_dir) {
@@ -338,7 +426,7 @@ pub async fn create_spec(
     let handle = spawn(spec_id, SpecState::new());
     let events = match handle
         .send_command(Command::CreateSpec {
-            title: extract_placeholder_title(&form.description),
+            title: extract_placeholder_title(&description),
             one_liner: String::new(),
             goal: String::new(),
         })
@@ -369,7 +457,7 @@ pub async fn create_spec(
     let transcript_events = match handle
         .send_command(Command::AppendTranscript {
             sender: "human".to_string(),
-            content: form.description,
+            content: description,
         })
         .await
     {
@@ -385,9 +473,58 @@ pub async fn create_spec(
         }
     }
 
+    // 4. Attach any uploaded context files. Validation ran above, so from
+    // here on we treat per-file errors as soft failures — the spec itself
+    // is already live, we just skip the file and log.
+    //
+    // Note: events produced here are persisted inline via `log.append`,
+    // same as the CreateSpec and AppendTranscript events above, because
+    // the event persister task hasn't been subscribed yet.
+    for (filename, mime, bytes) in files {
+        let attachment_id = Ulid::new();
+        let filename = crate::context_storage::sanitize_filename(&filename);
+        let path = crate::context_storage::attachment_path(
+            &state.barnstormer_home,
+            spec_id,
+            attachment_id,
+            &filename,
+        );
+        if let Err(e) = crate::context_storage::write_bytes(&path, &bytes) {
+            tracing::error!("failed to write context file {filename}: {e}");
+            continue;
+        }
+        let size_bytes = bytes.len() as u64;
+        let cmd = Command::AttachContext {
+            attachment_id,
+            filename: filename.clone(),
+            mime_type: mime,
+            size_bytes,
+        };
+        let attach_events = match handle.send_command(cmd).await {
+            Ok(events) => events,
+            Err(e) => {
+                tracing::error!("failed to attach context {filename}: {e}");
+                continue;
+            }
+        };
+        for event in &attach_events {
+            if let Err(e) = log.append(event) {
+                tracing::error!("failed to persist attach event: {}", e);
+            }
+        }
+        // Fire-and-forget summarizer — summary will land via SSE when ready.
+        let content = String::from_utf8(bytes).expect("utf-8 verified above");
+        crate::summarizer::spawn_summarize(
+            handle.clone(),
+            attachment_id,
+            filename,
+            content,
+        );
+    }
+
     // Subscribe the event persister BEFORE inserting the actor and starting
     // agents so it catches all subsequent events (agent-produced, etc.).
-    // The CreateSpec events above were already persisted inline.
+    // The events produced above were already persisted inline.
     let persister_handle = spawn_event_persister(&handle, spec_id, &state.barnstormer_home);
     state.event_persisters.write().await.insert(spec_id, persister_handle);
 
@@ -3047,6 +3184,28 @@ mod tests {
         Arc::new(AppState::new(dir.keep(), provider_status))
     }
 
+    /// Test multipart boundary used by `mp_description_body`. Tests that
+    /// POST to `/web/specs` use this to construct the request body, since
+    /// the endpoint switched from form-encoded to multipart in Task 18.
+    const MP_BOUNDARY: &str = "----BarnstormerInlineTest";
+
+    /// Build a `Body` containing a multipart/form-data payload with just a
+    /// `description` field. Pair with `MP_CONTENT_TYPE` as the
+    /// `content-type` header. The description is embedded verbatim — do
+    /// not URL-encode it.
+    fn mp_description_body(description: &str) -> Body {
+        let payload = format!(
+            "--{MP_BOUNDARY}\r\n\
+             Content-Disposition: form-data; name=\"description\"\r\n\r\n\
+             {description}\r\n\
+             --{MP_BOUNDARY}--\r\n"
+        );
+        Body::from(payload)
+    }
+
+    /// Content-type header value matching `mp_description_body`.
+    const MP_CONTENT_TYPE: &str = "multipart/form-data; boundary=----BarnstormerInlineTest";
+
     #[test]
     fn index_template_renders() {
         let tmpl = IndexTemplate {};
@@ -3395,8 +3554,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+test+spec+for+testing"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build a test spec for testing"))
                     .unwrap(),
             )
             .await
@@ -3648,8 +3807,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+chat+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build a chat testing system"))
                     .unwrap(),
             )
             .await
@@ -3760,8 +3919,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+an+agent+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build an agent testing system"))
                     .unwrap(),
             )
             .await
@@ -3801,8 +3960,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+pause+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build a pause testing system"))
                     .unwrap(),
             )
             .await
@@ -3842,8 +4001,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+resume+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build a resume testing system"))
                     .unwrap(),
             )
             .await
@@ -3968,8 +4127,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+system+without+agents"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build a system without agents"))
                     .unwrap(),
             )
             .await
@@ -4114,8 +4273,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+chat+panel+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build a chat panel testing system"))
                     .unwrap(),
             )
             .await
@@ -4171,8 +4330,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Chat+fullwidth+test"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Chat fullwidth test"))
                 .unwrap(),
         )
         .await
@@ -4209,8 +4368,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Chat+active+test"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Chat active test"))
                 .unwrap(),
         )
         .await
@@ -4332,8 +4491,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+an+artifacts+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build an artifacts testing system"))
                     .unwrap(),
             )
             .await
@@ -4459,8 +4618,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+an+export+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build an export testing system"))
                     .unwrap(),
             )
             .await
@@ -4662,8 +4821,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+container+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build a container testing system"))
                     .unwrap(),
             )
             .await
@@ -4706,8 +4865,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+container+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build a container testing system"))
                     .unwrap(),
             )
             .await
@@ -4862,8 +5021,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+an+HX+chat+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build an HX chat testing system"))
                     .unwrap(),
             )
             .await
@@ -4914,8 +5073,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+an+answer+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build an answer testing system"))
                     .unwrap(),
             )
             .await
@@ -5024,8 +5183,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Phase+test+spec"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Phase test spec"))
                 .unwrap(),
         )
         .await
@@ -5055,8 +5214,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Phase+test+spec"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Phase test spec"))
                 .unwrap(),
         )
         .await
@@ -5098,8 +5257,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Phase+test+spec"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Phase test spec"))
                 .unwrap(),
         )
         .await
@@ -5129,8 +5288,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Phase+test+spec"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Phase test spec"))
                 .unwrap(),
         )
         .await
@@ -5189,8 +5348,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Phase+test+spec"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Phase test spec"))
                 .unwrap(),
         )
         .await
@@ -5223,8 +5382,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Brainstorming+UI+test"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Brainstorming UI test"))
                 .unwrap(),
         )
         .await
@@ -5276,8 +5435,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Active+UI+test"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Active UI test"))
                 .unwrap(),
         )
         .await
@@ -5336,8 +5495,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Board+peek+test"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Board peek test"))
                 .unwrap(),
         )
         .await
@@ -5367,8 +5526,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Canvas+listener+test"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Canvas listener test"))
                 .unwrap(),
         )
         .await
@@ -5408,8 +5567,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Canvas+prepopulate+test"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Canvas prepopulate test"))
                 .unwrap(),
         )
         .await
@@ -5471,8 +5630,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Canvas+state+test"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Canvas state test"))
                 .unwrap(),
         )
         .await

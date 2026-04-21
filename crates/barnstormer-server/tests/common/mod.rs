@@ -45,15 +45,33 @@ fn make_state() -> (SharedState, TempDir) {
     (state, tmp)
 }
 
+/// Build a `multipart/form-data` body containing just a `description`
+/// field — enough for tests that only need a spec created, without any
+/// context files attached. Returns `(content_type_header, body_bytes)`.
+pub fn multipart_description_body(description: &str) -> (String, Vec<u8>) {
+    let boundary = "----BarnstormerCommonBoundary";
+    let body = format!(
+        "--{boundary}\r\n\
+         Content-Disposition: form-data; name=\"description\"\r\n\r\n\
+         {description}\r\n\
+         --{boundary}--\r\n"
+    );
+    (
+        format!("multipart/form-data; boundary={boundary}"),
+        body.into_bytes(),
+    )
+}
+
 /// Create a spec via `POST /web/specs` and return its ULID. Uses the web
 /// form handler so the spec is fully wired (actor registered, etc.), matching
 /// how production routes create specs.
 async fn create_spec_via_web(router: Router) -> () {
+    let (ct, body) = multipart_description_body("Context upload test");
     let resp = router
         .oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Context+upload+test"))
+                .header("content-type", ct)
+                .body(Body::from(body))
                 .unwrap(),
         )
         .await

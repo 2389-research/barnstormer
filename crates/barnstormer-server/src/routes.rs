@@ -37,7 +37,14 @@ pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
         .route("/api/specs/import", post(api::import::import_spec))
         // Web UI routes (HTML)
         .route("/", get(web::index))
-        .route("/web/specs", get(web::spec_list).post(web::create_spec))
+        .route(
+            "/web/specs",
+            get(web::spec_list).post(web::create_spec)
+                // Creation accepts optional file uploads (up to 20MB each).
+                // 100MB caps the combined multipart body — roughly five max
+                // files at once. Raise if we see users hitting this.
+                .layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
+        )
         .route("/web/specs/new", get(web::create_spec_form))
         .route(
             "/web/specs/import",
