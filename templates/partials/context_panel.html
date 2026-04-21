@@ -7,6 +7,7 @@
         <form id="context-upload-form"
               hx-post="/web/specs/{{ spec_id }}/context"
               hx-encoding="multipart/form-data"
+              enctype="multipart/form-data"
               hx-target="#context-panel"
               hx-swap="outerHTML"
               style="margin-left: auto;">
