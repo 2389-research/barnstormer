@@ -41,6 +41,10 @@
     {% else %}
     <div id="agent-canvas" style="display:none;"></div>
     {% endif %}
+    <aside class="chat-rail" id="context-rail"
+           hx-get="/web/specs/{{ spec_id }}/context-panel"
+           hx-trigger="load" hx-swap="innerHTML">
+    </aside>
 </div>
 
 </div>
@@ -89,6 +93,18 @@
                     canvas.style.display = 'none';
                 }
             });
+
+            // Re-fetch the context rail partial whenever context changes.
+            ['context_attached', 'context_summarized', 'context_notes_updated', 'context_removed']
+                .forEach(function(evt) {
+                    compositor.addEventListener('sse:' + evt, function() {
+                        htmx.ajax(
+                            'GET',
+                            '/web/specs/{{ spec_id }}/context-panel',
+                            { target: '#context-rail', swap: 'innerHTML' }
+                        );
+                    });
+                });
         }
     })();
 </script>
