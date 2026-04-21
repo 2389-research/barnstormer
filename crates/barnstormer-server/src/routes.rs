@@ -63,6 +63,10 @@ pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
             post(web::upload_context).layer(DefaultBodyLimit::max(25 * 1024 * 1024)),
         )
         .route(
+            "/web/specs/{id}/context-panel",
+            get(web::context_panel),
+        )
+        .route(
             "/web/specs/{id}/context/{att_id}/notes",
             axum::routing::patch(web::update_context_notes),
         )

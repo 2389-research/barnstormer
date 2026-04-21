@@ -2178,6 +2178,98 @@ pub async fn transition_phase(
     }
 }
 
+/// Context panel partial template — rendered HTML for the brainstorming
+/// right-rail panel showing all live (non-removed) context attachments.
+#[derive(Template)]
+#[template(path = "partials/context_panel.html")]
+struct ContextPanelTemplate {
+    spec_id: String,
+    attachments: Vec<ContextPanelItem>,
+}
+
+/// View model for a single context attachment row in the panel.
+struct ContextPanelItem {
+    attachment_id: String,
+    filename: String,
+    extension: String,
+    size_display: String,
+    added_display: String,
+    summary: Option<String>,
+    user_notes: Option<String>,
+}
+
+/// Human-readable file size (B / KB / MB) for display in the context panel.
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+/// Shared helper: builds the context panel HTML for a given spec. Returns
+/// 404 if the spec is unknown, 500 on render failure. All four context
+/// handlers (upload/notes/delete/GET panel) route through this helper so
+/// they return identical HTML on success.
+async fn render_context_panel_for(state: &SharedState, spec_id: Ulid) -> Response {
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h.clone(),
+        None => return (StatusCode::NOT_FOUND, "spec not found").into_response(),
+    };
+    drop(actors);
+
+    let spec_state = handle.read_state().await;
+    let attachments: Vec<ContextPanelItem> = spec_state
+        .context_attachments
+        .iter()
+        .filter(|a| !a.removed)
+        .map(|a| ContextPanelItem {
+            attachment_id: a.attachment_id.to_string(),
+            filename: a.filename.clone(),
+            extension: std::path::Path::new(&a.filename)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("txt")
+                .to_string(),
+            size_display: format_size(a.size_bytes),
+            added_display: a.added_at.format("%H:%M").to_string(),
+            summary: a.summary.clone(),
+            user_notes: a.user_notes.clone(),
+        })
+        .collect();
+    drop(spec_state);
+
+    let tmpl = ContextPanelTemplate {
+        spec_id: spec_id.to_string(),
+        attachments,
+    };
+    match tmpl.render() {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => {
+            tracing::error!("context_panel render failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "render failed").into_response()
+        }
+    }
+}
+
+/// GET /web/specs/{id}/context-panel - Render the context panel partial.
+///
+/// Returns the full `<div id="context-panel">` partial; the brainstorming
+/// view and Task 16 SSE wiring swap this element via HTMX.
+pub async fn context_panel(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    render_context_panel_for(&state, spec_id).await
+}
+
 /// POST /web/specs/{id}/context - Upload a context file during brainstorming.
 ///
 /// Accepts `multipart/form-data` with a single `file` part. Writes the file
@@ -2307,9 +2399,8 @@ pub async fn upload_context(
         content,
     );
 
-    // Task 15: return the rendered context panel partial
-
-    (StatusCode::OK, "ok").into_response()
+    // Return the re-rendered panel partial so HTMX can swap it in place.
+    render_context_panel_for(&state, spec_id).await
 }
 
 /// Form body for PATCH notes — HTMX submits form-encoded by default.
@@ -2348,7 +2439,7 @@ pub async fn update_context_notes(
         notes: form.notes,
     };
     match handle.send_command(cmd).await {
-        Ok(_) => (StatusCode::OK, "ok").into_response(),
+        Ok(_) => render_context_panel_for(&state, spec_id).await,
         Err(ActorError::AttachmentNotFound(_)) => {
             (StatusCode::NOT_FOUND, "attachment not found").into_response()
         }
@@ -2387,7 +2478,7 @@ pub async fn remove_context(
         .send_command(Command::RemoveContext { attachment_id })
         .await
     {
-        Ok(_) => (StatusCode::OK, "ok").into_response(),
+        Ok(_) => render_context_panel_for(&state, spec_id).await,
         Err(ActorError::AttachmentNotFound(_)) => {
             (StatusCode::NOT_FOUND, "attachment not found").into_response()
         }

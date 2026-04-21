@@ -33,6 +33,15 @@ async fn upload_text_file_emits_attached_event() {
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
+    // Response body is now the re-rendered context panel partial — it should
+    // contain the uploaded filename and the panel's container class.
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let body_str = std::str::from_utf8(&body).expect("utf-8 body");
+    assert!(body_str.contains("chat-panel"), "expected panel container in response body");
+    assert!(body_str.contains("notes.md"), "expected filename in response body");
+
     // Verify the event landed in state.
     let actors = ctx.state.actors.read().await;
     let handle = actors.get(&ctx.spec_id).unwrap();

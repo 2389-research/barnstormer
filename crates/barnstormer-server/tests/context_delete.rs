@@ -39,6 +39,18 @@ async fn delete_context_soft_removes_attachment() {
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
+    // Body: re-rendered context panel — attachment was the only one, so the
+    // panel should now show the empty-state message.
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let body_str = std::str::from_utf8(&body).expect("utf-8 body");
+    assert!(body_str.contains("chat-panel"), "expected panel container in response body");
+    assert!(
+        body_str.contains("No context files yet"),
+        "expected empty-state message in response body"
+    );
+
     // State: attachment still present (soft-removed), removed=true.
     let actors = ctx.state.actors.read().await;
     let handle = actors.get(&ctx.spec_id).unwrap();

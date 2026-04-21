@@ -1,0 +1,64 @@
+{# ABOUTME: Context panel — right rail of brainstorming view. #}
+{# ABOUTME: Reuses .chat-panel, .card, and .form-group primitives; no new CSS. #}
+
+<div class="chat-panel" id="context-panel">
+    <div class="chat-panel-header">
+        <span class="chat-panel-title">Context</span>
+        <form id="context-upload-form"
+              hx-post="/web/specs/{{ spec_id }}/context"
+              hx-encoding="multipart/form-data"
+              hx-target="#context-panel"
+              hx-swap="outerHTML"
+              style="margin-left: auto;">
+            <label class="btn btn-sm" style="cursor:pointer; margin: 0;">
+                + Add
+                <input type="file" name="file" style="display: none;"
+                       onchange="this.form.requestSubmit()">
+            </label>
+        </form>
+    </div>
+
+    <div class="chat-transcript" style="overflow-y: auto; flex: 1; padding: var(--spacing-md);">
+        {% for att in attachments %}
+        <div class="card" id="att-{{ att.attachment_id }}" style="margin-bottom: var(--spacing-sm);">
+            <div style="display: flex; align-items: center; gap: var(--spacing-sm); margin-bottom: var(--spacing-xs);">
+                <span class="card-type badge-note">{{ att.extension }}</span>
+                <span style="flex: 1; font-weight: 500; word-break: break-word;">{{ att.filename }}</span>
+                <button class="btn btn-sm btn-danger"
+                        hx-delete="/web/specs/{{ spec_id }}/context/{{ att.attachment_id }}"
+                        hx-target="#context-panel"
+                        hx-swap="outerHTML"
+                        hx-confirm="Remove this file?"
+                        title="Remove">&times;</button>
+            </div>
+            <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: var(--spacing-sm);">
+                {{ att.size_display }} &middot; added {{ att.added_display }}
+            </div>
+            {% match att.summary %}
+            {% when Some with (s) %}
+                <div style="font-size: 0.82rem; color: var(--text-secondary); margin-bottom: var(--spacing-sm);">
+                    {{ s }}
+                </div>
+            {% when None %}
+                <div style="font-size: 0.82rem; color: var(--text-muted); font-style: italic; margin-bottom: var(--spacing-sm);">
+                    Summarizing&hellip;
+                </div>
+            {% endmatch %}
+            <form hx-patch="/web/specs/{{ spec_id }}/context/{{ att.attachment_id }}/notes"
+                  hx-trigger="change from:find textarea, blur from:find textarea"
+                  hx-swap="none">
+                <div class="form-group" style="margin: 0;">
+                    <textarea name="notes" rows="2"
+                              placeholder="Add notes about this file&hellip;"
+                              style="font-size: 0.82rem;">{% match att.user_notes %}{% when Some with (n) %}{{ n }}{% when None %}{% endmatch %}</textarea>
+                </div>
+            </form>
+        </div>
+        {% endfor %}
+        {% if attachments.is_empty() %}
+        <div style="color: var(--text-muted); font-size: 0.82rem; text-align: center; padding: var(--spacing-lg);">
+            No context files yet. Drop a file above to get started.
+        </div>
+        {% endif %}
+    </div>
+</div>
