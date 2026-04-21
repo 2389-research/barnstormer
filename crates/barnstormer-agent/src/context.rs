@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
 use barnstormer_core::event::{Event, EventPayload};
+use barnstormer_core::state::ContextAttachment;
 use barnstormer_core::transcript::TranscriptMessage;
 
 /// The maximum character length for a rolling summary before compaction triggers.
@@ -58,6 +59,11 @@ pub struct AgentContext {
     pub rolling_summary: String,
     pub key_decisions: Vec<String>,
     pub last_event_seen: u64,
+    /// Non-removed context file attachments for the spec. Populated when
+    /// the context is refreshed from actor state; used by the task-prompt
+    /// builder to inject a "## Context Files" section.
+    #[serde(default)]
+    pub context_attachments: Vec<ContextAttachment>,
 }
 
 impl AgentContext {
@@ -73,6 +79,7 @@ impl AgentContext {
             rolling_summary: String::new(),
             key_decisions: Vec::new(),
             last_event_seen: 0,
+            context_attachments: Vec::new(),
         }
     }
 
@@ -223,6 +230,18 @@ fn describe_event_payload(payload: &EventPayload) -> String {
             } else {
                 "canvas updated with new content".to_string()
             }
+        }
+        EventPayload::ContextAttached { attachment } => {
+            format!("context file attached: '{}'", attachment.filename)
+        }
+        EventPayload::ContextSummarized { attachment_id, .. } => {
+            format!("context attachment {} summarized", attachment_id)
+        }
+        EventPayload::ContextNotesUpdated { attachment_id, .. } => {
+            format!("context attachment {} notes updated", attachment_id)
+        }
+        EventPayload::ContextRemoved { attachment_id } => {
+            format!("context attachment {} removed", attachment_id)
         }
     }
 }

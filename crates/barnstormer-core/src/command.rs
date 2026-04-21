@@ -76,6 +76,23 @@ pub enum Command {
     UpdateCanvas {
         content: String,
     },
+    AttachContext {
+        attachment_id: Ulid,
+        filename: String,
+        mime_type: String,
+        size_bytes: u64,
+    },
+    SummarizeContext {
+        attachment_id: Ulid,
+        summary: String,
+    },
+    UpdateContextNotes {
+        attachment_id: Ulid,
+        notes: String,
+    },
+    RemoveContext {
+        attachment_id: Ulid,
+    },
     Undo,
 }
 
@@ -197,5 +214,48 @@ mod tests {
             Command::UpdateCanvas { content } => assert_eq!(content, "<h1>Test</h1>"),
             _ => panic!("wrong variant"),
         }
+    }
+
+    #[test]
+    fn attach_context_command_serializes() {
+        let id = Ulid::new();
+        let cmd = Command::AttachContext {
+            attachment_id: id,
+            filename: "notes.md".to_string(),
+            mime_type: "text/markdown".to_string(),
+            size_bytes: 1024,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"AttachContext\""));
+        assert!(json.contains("\"filename\":\"notes.md\""));
+    }
+
+    #[test]
+    fn summarize_context_command_serializes() {
+        let cmd = Command::SummarizeContext {
+            attachment_id: Ulid::new(),
+            summary: "Key points...".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"SummarizeContext\""));
+    }
+
+    #[test]
+    fn update_context_notes_command_serializes() {
+        let cmd = Command::UpdateContextNotes {
+            attachment_id: Ulid::new(),
+            notes: "From the kickoff".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"UpdateContextNotes\""));
+    }
+
+    #[test]
+    fn remove_context_command_serializes() {
+        let cmd = Command::RemoveContext {
+            attachment_id: Ulid::new(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"RemoveContext\""));
     }
 }

@@ -2178,6 +2178,277 @@ pub async fn transition_phase(
     }
 }
 
+/// POST /web/specs/{id}/context - Upload a context file during brainstorming.
+///
+/// Accepts `multipart/form-data` with a single `file` part. Writes the file
+/// to disk under the spec's context directory and emits a `ContextAttached`
+/// event via `Command::AttachContext`. Gated to `SpecPhase::Brainstorming`;
+/// outside that phase returns 409 CONFLICT. Binary (non-UTF-8) content is
+/// rejected with 415, and uploads over 20MB are rejected with 413.
+pub async fn upload_context(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h.clone(),
+        None => {
+            return (StatusCode::NOT_FOUND, "spec not found").into_response();
+        }
+    };
+    drop(actors);
+
+    // Gate: brainstorming only.
+    let phase = handle.read_state().await.phase.clone();
+    if phase != SpecPhase::Brainstorming {
+        return (
+            StatusCode::CONFLICT,
+            "context files can only be attached during brainstorming",
+        )
+            .into_response();
+    }
+
+    // Extract first `file` part.
+    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut filename: Option<String> = None;
+    let mut mime: Option<String> = None;
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                if field.name() == Some("file") {
+                    filename = field.file_name().map(str::to_string);
+                    mime = field.content_type().map(str::to_string);
+                    let bytes = match field.bytes().await {
+                        Ok(b) => b,
+                        Err(e) => {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                format!("read error: {e}"),
+                            )
+                                .into_response();
+                        }
+                    };
+                    file_bytes = Some(bytes.to_vec());
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("multipart parse error: {e}"),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    let Some(bytes) = file_bytes else {
+        return (StatusCode::BAD_REQUEST, "missing file part").into_response();
+    };
+
+    const MAX_BYTES: usize = 20 * 1024 * 1024;
+    if bytes.len() > MAX_BYTES {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "file exceeds 20MB").into_response();
+    }
+
+    if !crate::context_storage::is_utf8_text(&bytes) {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "binary files not yet supported — text files only for now",
+        )
+            .into_response();
+    }
+
+    let filename = crate::context_storage::sanitize_filename(
+        filename.as_deref().unwrap_or("file"),
+    );
+    let mime = mime.unwrap_or_else(|| "text/plain".to_string());
+    let attachment_id = Ulid::new();
+
+    let path = crate::context_storage::attachment_path(
+        &state.barnstormer_home,
+        spec_id,
+        attachment_id,
+        &filename,
+    );
+    if let Err(e) = crate::context_storage::write_bytes(&path, &bytes) {
+        tracing::error!("failed to write attachment: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+
+    let size_bytes = bytes.len() as u64;
+    let cmd = Command::AttachContext {
+        attachment_id,
+        filename: filename.clone(),
+        mime_type: mime,
+        size_bytes,
+    };
+    if let Err(e) = handle.send_command(cmd).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("command failed: {e}"),
+        )
+            .into_response();
+    }
+
+    // Spawn summarizer — fire-and-forget. Summary will land via SSE when done.
+    let content = String::from_utf8(bytes).expect("utf-8 verified above");
+    crate::summarizer::spawn_summarize(
+        handle.clone(),
+        attachment_id,
+        filename.clone(),
+        content,
+    );
+
+    // Task 15: return the rendered context panel partial
+
+    (StatusCode::OK, "ok").into_response()
+}
+
+/// Form body for PATCH notes — HTMX submits form-encoded by default.
+#[derive(Debug, Deserialize)]
+pub struct NotesForm {
+    pub notes: String,
+}
+
+/// PATCH /web/specs/{id}/context/{att_id}/notes - Update user-authored notes
+/// for a context attachment. Sends `Command::UpdateContextNotes` to the actor;
+/// returns 404 if the attachment is unknown, 409 if it has already been
+/// removed (soft-delete tombstone).
+pub async fn update_context_notes(
+    State(state): State<SharedState>,
+    Path((id, att_id)): Path<(String, String)>,
+    Form(form): Form<NotesForm>,
+) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    let attachment_id = match att_id.parse::<Ulid>() {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad attachment id").into_response(),
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h.clone(),
+        None => return (StatusCode::NOT_FOUND, "spec not found").into_response(),
+    };
+    drop(actors);
+
+    let cmd = Command::UpdateContextNotes {
+        attachment_id,
+        notes: form.notes,
+    };
+    match handle.send_command(cmd).await {
+        Ok(_) => (StatusCode::OK, "ok").into_response(),
+        Err(ActorError::AttachmentNotFound(_)) => {
+            (StatusCode::NOT_FOUND, "attachment not found").into_response()
+        }
+        Err(ActorError::AttachmentAlreadyRemoved(_)) => {
+            (StatusCode::CONFLICT, "attachment is removed").into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    }
+}
+
+/// DELETE /web/specs/{id}/context/{att_id} - Soft-remove a context attachment.
+/// Emits `Command::RemoveContext`; the on-disk file is preserved so undo can
+/// restore it. Returns 404 for unknown ids and 409 when the attachment has
+/// already been removed.
+pub async fn remove_context(
+    State(state): State<SharedState>,
+    Path((id, att_id)): Path<(String, String)>,
+) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    let attachment_id = match att_id.parse::<Ulid>() {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad attachment id").into_response(),
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h.clone(),
+        None => return (StatusCode::NOT_FOUND, "spec not found").into_response(),
+    };
+    drop(actors);
+
+    match handle
+        .send_command(Command::RemoveContext { attachment_id })
+        .await
+    {
+        Ok(_) => (StatusCode::OK, "ok").into_response(),
+        Err(ActorError::AttachmentNotFound(_)) => {
+            (StatusCode::NOT_FOUND, "attachment not found").into_response()
+        }
+        Err(ActorError::AttachmentAlreadyRemoved(_)) => {
+            (StatusCode::CONFLICT, "attachment already removed").into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    }
+}
+
+/// GET /web/specs/{id}/context/{att_id}/raw - Stream the raw text content of
+/// a context attachment. Only live (non-removed) attachments are served; both
+/// "unknown" and "soft-removed" cases return 404 so callers can't distinguish
+/// them. The response `Content-Type` mirrors the stored `mime_type`.
+pub async fn download_context(
+    State(state): State<SharedState>,
+    Path((id, att_id)): Path<(String, String)>,
+) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    let attachment_id = match att_id.parse::<Ulid>() {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad attachment id").into_response(),
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h.clone(),
+        None => return (StatusCode::NOT_FOUND, "spec not found").into_response(),
+    };
+    drop(actors);
+
+    let spec_state = handle.read_state().await;
+    let att = match spec_state
+        .context_attachments
+        .iter()
+        .find(|a| a.attachment_id == attachment_id && !a.removed)
+    {
+        Some(a) => a.clone(),
+        None => return (StatusCode::NOT_FOUND, "attachment not found").into_response(),
+    };
+    drop(spec_state);
+
+    let path = crate::context_storage::attachment_path(
+        &state.barnstormer_home,
+        spec_id,
+        attachment_id,
+        &att.filename,
+    );
+    match crate::context_storage::read_text(&path) {
+        Ok(text) => (
+            [(axum::http::header::CONTENT_TYPE, att.mime_type.clone())],
+            text,
+        )
+            .into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "file not found on disk").into_response(),
+    }
+}
+
 /// Provider status partial template.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/provider_status.html")]
@@ -2362,7 +2633,11 @@ pub async fn start_agents(
     }
 
     // Create swarm (sync operation, safe to hold write lock)
-    let swarm = match SwarmOrchestrator::with_defaults(spec_id, swarm_actor_handle) {
+    let swarm = match SwarmOrchestrator::with_defaults(
+        spec_id,
+        swarm_actor_handle,
+        state.barnstormer_home.clone(),
+    ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {
             return (
@@ -2523,7 +2798,11 @@ pub async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_handle: 
     }
 
     // Create swarm (sync operation, safe to hold write lock)
-    let swarm = match SwarmOrchestrator::with_defaults(spec_id, swarm_actor_handle) {
+    let swarm = match SwarmOrchestrator::with_defaults(
+        spec_id,
+        swarm_actor_handle,
+        state.barnstormer_home.clone(),
+    ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {
             tracing::warn!("failed to auto-start agents for spec {}: {}", spec_id, e);

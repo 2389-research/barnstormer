@@ -30,6 +30,10 @@ fn event_type_name(payload: &barnstormer_core::EventPayload) -> &'static str {
         barnstormer_core::EventPayload::SnapshotWritten { .. } => "snapshot_written",
         barnstormer_core::EventPayload::PhaseTransitioned { .. } => "phase_transitioned",
         barnstormer_core::EventPayload::CanvasUpdated { .. } => "canvas_updated",
+        barnstormer_core::EventPayload::ContextAttached { .. } => "context_attached",
+        barnstormer_core::EventPayload::ContextSummarized { .. } => "context_summarized",
+        barnstormer_core::EventPayload::ContextNotesUpdated { .. } => "context_notes_updated",
+        barnstormer_core::EventPayload::ContextRemoved { .. } => "context_removed",
     }
 }
 

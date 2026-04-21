@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
 use crate::card::Card;
+use crate::state::ContextAttachment;
 use crate::transcript::{TranscriptMessage, UserQuestion};
 
 /// An event envelope wrapping a timestamped, sequenced payload for a given spec.
@@ -85,6 +86,20 @@ pub enum EventPayload {
     },
     CanvasUpdated {
         content: String,
+    },
+    ContextAttached {
+        attachment: ContextAttachment,
+    },
+    ContextSummarized {
+        attachment_id: Ulid,
+        summary: String,
+    },
+    ContextNotesUpdated {
+        attachment_id: Ulid,
+        notes: String,
+    },
+    ContextRemoved {
+        attachment_id: Ulid,
     },
 }
 
@@ -232,5 +247,52 @@ mod tests {
         round_trip_event(EventPayload::CanvasUpdated {
             content: "<h1>Test</h1>".to_string(),
         });
+    }
+
+    #[test]
+    fn context_attached_event_serializes() {
+        let payload = EventPayload::ContextAttached {
+            attachment: ContextAttachment {
+                attachment_id: Ulid::new(),
+                filename: "a.md".to_string(),
+                mime_type: "text/markdown".to_string(),
+                size_bytes: 10,
+                summary: None,
+                user_notes: None,
+                added_at: Utc::now(),
+                removed: false,
+            },
+        };
+        let s = serde_json::to_string(&payload).unwrap();
+        assert!(s.contains("\"type\":\"ContextAttached\""));
+    }
+
+    #[test]
+    fn context_summarized_event_serializes() {
+        let payload = EventPayload::ContextSummarized {
+            attachment_id: Ulid::new(),
+            summary: "sum".to_string(),
+        };
+        let s = serde_json::to_string(&payload).unwrap();
+        assert!(s.contains("\"type\":\"ContextSummarized\""));
+    }
+
+    #[test]
+    fn context_notes_updated_event_serializes() {
+        let payload = EventPayload::ContextNotesUpdated {
+            attachment_id: Ulid::new(),
+            notes: "n".to_string(),
+        };
+        let s = serde_json::to_string(&payload).unwrap();
+        assert!(s.contains("\"type\":\"ContextNotesUpdated\""));
+    }
+
+    #[test]
+    fn context_removed_event_serializes() {
+        let payload = EventPayload::ContextRemoved {
+            attachment_id: Ulid::new(),
+        };
+        let s = serde_json::to_string(&payload).unwrap();
+        assert!(s.contains("\"type\":\"ContextRemoved\""));
     }
 }

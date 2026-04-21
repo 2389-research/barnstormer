@@ -1,6 +1,7 @@
 // ABOUTME: SwarmOrchestrator manages multiple agents per spec, using mux SubAgent for LLM execution.
 // ABOUTME: Each agent runs as a mux SubAgent with domain tools, coordinated by pause/resume flags and event subscriptions.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -191,12 +192,22 @@ pub struct SwarmOrchestrator {
     /// Tracks the question ID of a pending transition question so the swarm
     /// can watch for its answer and trigger a phase transition automatically.
     pub pending_transition_question: Arc<Mutex<Option<Ulid>>>,
+    /// Barnstormer data directory (home). Passed to tool registries so the
+    /// retrieve_context tool can resolve attachment file paths.
+    pub home: PathBuf,
 }
 
 impl SwarmOrchestrator {
     /// Create a new orchestrator with default agents for the given spec.
     /// Uses the default provider (from env or "anthropic") and model.
-    pub fn with_defaults(spec_id: Ulid, actor: SpecActorHandle) -> Result<Self, anyhow::Error> {
+    ///
+    /// `home` is the barnstormer data directory; it is passed to tool
+    /// registries so tools like `retrieve_context` can resolve attachment files.
+    pub fn with_defaults(
+        spec_id: Ulid,
+        actor: SpecActorHandle,
+        home: PathBuf,
+    ) -> Result<Self, anyhow::Error> {
         let provider =
             std::env::var("BARNSTORMER_DEFAULT_PROVIDER").unwrap_or_else(|_| "anthropic".to_string());
         let model_override = std::env::var("BARNSTORMER_DEFAULT_MODEL").ok();
@@ -233,6 +244,7 @@ impl SwarmOrchestrator {
             model: resolved_model,
             human_message_notify: Arc::new(Notify::new()),
             pending_transition_question: Arc::new(Mutex::new(None)),
+            home,
         })
     }
 
@@ -243,6 +255,7 @@ impl SwarmOrchestrator {
         agents: Vec<AgentRunner>,
         client: Arc<dyn LlmClient>,
         model: String,
+        home: PathBuf,
     ) -> Self {
         let actor = Arc::new(actor);
         let event_receivers = agents.iter().map(|_| actor.subscribe()).collect();
@@ -258,6 +271,7 @@ impl SwarmOrchestrator {
             model,
             human_message_notify: Arc::new(Notify::new()),
             pending_transition_question: Arc::new(Mutex::new(None)),
+            home,
         }
     }
 
@@ -354,6 +368,7 @@ impl SwarmOrchestrator {
     /// Creates a fresh SubAgent with the domain tool registry, sends it the
     /// agent's context as a task prompt, and lets mux handle the think-act loop.
     /// Returns true if the agent produced useful work, false if idle/error.
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_agent_step(
         runner: &mut AgentRunner,
         actor: &Arc<SpecActorHandle>,
@@ -362,6 +377,7 @@ impl SwarmOrchestrator {
         client: &Arc<dyn LlmClient>,
         model: &str,
         phase: &SpecPhase,
+        home: &Path,
     ) -> bool {
         // Start agent step
         let start_cmd = Command::StartAgentStep {
@@ -382,6 +398,7 @@ impl SwarmOrchestrator {
             Arc::clone(question_pending),
             Arc::clone(pending_transition_question),
             runner.agent_id.clone(),
+            home.to_path_buf(),
         )
         .await;
 
@@ -489,6 +506,15 @@ impl SwarmOrchestrator {
         let transcript_len = state.transcript.len();
         let start = transcript_len.saturating_sub(10);
         runner.context.recent_transcript = state.transcript[start..].to_vec();
+
+        // Copy non-removed context attachments so build_task_prompt can
+        // render them into the "## Context Files" section.
+        runner.context.context_attachments = state
+            .context_attachments
+            .iter()
+            .filter(|a| !a.removed)
+            .cloned()
+            .collect();
     }
 }
 
@@ -506,13 +532,14 @@ async fn run_agent_by_index(
         let pending_transition_question = Arc::clone(&s.pending_transition_question);
         let client = Arc::clone(&s.client);
         let model = s.model.clone();
+        let home = s.home.clone();
         match s.agents[index].take() {
             Some(runner) => {
                 // Swap out the receiver with a fresh one; the old one keeps its
                 // buffered events so we drain them below.
                 let event_rx =
                     std::mem::replace(&mut s.event_receivers[index], actor_ref.subscribe());
-                Some((runner, event_rx, actor_ref, question_pending, pending_transition_question, client, model))
+                Some((runner, event_rx, actor_ref, question_pending, pending_transition_question, client, model, home))
             }
             None => {
                 tracing::warn!(agent_index = index, "agent runner slot is empty, skipping");
@@ -520,7 +547,7 @@ async fn run_agent_by_index(
             }
         }
     };
-    let Some((mut runner, mut event_rx, actor_ref, question_pending, pending_transition_question, client, model)) = extracted
+    let Some((mut runner, mut event_rx, actor_ref, question_pending, pending_transition_question, client, model, home)) = extracted
     else {
         return false;
     };
@@ -543,6 +570,7 @@ async fn run_agent_by_index(
         &client,
         &model,
         &phase,
+        &home,
     )
     .await;
 
@@ -757,6 +785,37 @@ fn build_task_prompt(ctx: &AgentContext) -> String {
         ));
     }
 
+    if !ctx.context_attachments.is_empty() {
+        let mut section = String::from("## Context Files\n\n");
+        section.push_str(
+            "The user has attached the following reference materials. \
+             Use these to inform your work. If a summary isn't enough, \
+             call the `retrieve_context` tool with the attachment ID to read the full text.\n\n",
+        );
+        for (i, att) in ctx.context_attachments.iter().enumerate() {
+            let size_kb = att.size_bytes as f64 / 1024.0;
+            section.push_str(&format!(
+                "### {}. {} ({:.0}KB)\n**attachment_id:** `{}`\n",
+                i + 1,
+                att.filename,
+                size_kb,
+                att.attachment_id
+            ));
+            if let Some(notes) = &att.user_notes
+                && !notes.is_empty()
+            {
+                section.push_str(&format!("**User notes:** {}\n", notes));
+            }
+            match &att.summary {
+                Some(s) if !s.is_empty() => {
+                    section.push_str(&format!("**Summary:** {}\n\n", s));
+                }
+                _ => section.push_str("**Summary:** _(being summarized...)_\n\n"),
+            }
+        }
+        parts.push(section.trim_end().to_string());
+    }
+
     if parts.is_empty() {
         "The spec was just created. Begin your work by reading the current state and taking appropriate action for your role.".to_string()
     } else {
@@ -804,6 +863,7 @@ mod tests {
             agents,
             make_test_client(),
             "stub-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
         );
 
         assert_eq!(swarm.agents.len(), 4);
@@ -825,6 +885,7 @@ mod tests {
             Vec::new(),
             make_test_client(),
             "stub-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
         );
 
         assert!(!swarm.is_paused());
@@ -846,6 +907,7 @@ mod tests {
         let mut runner = AgentRunner::new(spec_id, AgentRole::Brainstormer);
         let pending_transition = Arc::new(Mutex::new(None));
 
+        let home = PathBuf::from("/tmp/barnstormer-test");
         let did_work = SwarmOrchestrator::run_agent_step(
             &mut runner,
             &actor_arc,
@@ -854,6 +916,7 @@ mod tests {
             &client,
             "stub-model",
             &SpecPhase::Active,
+            &home,
         )
         .await;
 
@@ -932,6 +995,156 @@ mod tests {
         assert!(prompt.contains("take the next appropriate action"));
     }
 
+    #[test]
+    fn task_prompt_includes_context_files_section_when_present() {
+        use barnstormer_core::state::ContextAttachment;
+        use chrono::Utc;
+
+        let mut ctx = AgentContext::new(Ulid::new(), "test-agent".to_string(), AgentRole::Manager);
+        ctx.context_attachments = vec![ContextAttachment {
+            attachment_id: Ulid::new(),
+            filename: "requirements.md".to_string(),
+            mime_type: "text/markdown".to_string(),
+            size_bytes: 12_000,
+            summary: Some("three core requirements".to_string()),
+            user_notes: Some("from kickoff".to_string()),
+            added_at: Utc::now(),
+            removed: false,
+        }];
+
+        let prompt = build_task_prompt(&ctx);
+        assert!(prompt.contains("## Context Files"));
+        assert!(prompt.contains("requirements.md"));
+        assert!(prompt.contains("three core requirements"));
+        assert!(prompt.contains("from kickoff"));
+        assert!(prompt.contains("retrieve_context"));
+    }
+
+    #[test]
+    fn task_prompt_omits_context_section_when_empty() {
+        let ctx = AgentContext::new(Ulid::new(), "test-agent".to_string(), AgentRole::Manager);
+        let prompt = build_task_prompt(&ctx);
+        assert!(!prompt.contains("## Context Files"));
+    }
+
+    #[test]
+    fn task_prompt_shows_placeholder_when_summary_pending() {
+        use barnstormer_core::state::ContextAttachment;
+        use chrono::Utc;
+
+        let mut ctx = AgentContext::new(Ulid::new(), "test-agent".to_string(), AgentRole::Manager);
+        ctx.context_attachments = vec![ContextAttachment {
+            attachment_id: Ulid::new(),
+            filename: "pending.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            size_bytes: 100,
+            summary: None,
+            user_notes: None,
+            added_at: Utc::now(),
+            removed: false,
+        }];
+
+        let prompt = build_task_prompt(&ctx);
+        assert!(prompt.contains("## Context Files"));
+        assert!(prompt.contains("pending.txt"));
+        assert!(prompt.contains("being summarized"));
+    }
+
+    #[test]
+    fn task_prompt_omits_user_notes_when_empty_string() {
+        use barnstormer_core::state::ContextAttachment;
+        use chrono::Utc;
+
+        let mut ctx = AgentContext::new(Ulid::new(), "test-agent".to_string(), AgentRole::Manager);
+        ctx.context_attachments = vec![ContextAttachment {
+            attachment_id: Ulid::new(),
+            filename: "notes.md".to_string(),
+            mime_type: "text/markdown".to_string(),
+            size_bytes: 500,
+            summary: Some("a summary".to_string()),
+            user_notes: Some(String::new()),
+            added_at: Utc::now(),
+            removed: false,
+        }];
+
+        let prompt = build_task_prompt(&ctx);
+        assert!(prompt.contains("## Context Files"));
+        assert!(!prompt.contains("**User notes:**"));
+    }
+
+    #[tokio::test]
+    async fn refresh_context_populates_context_attachments() {
+        let (spec_id, actor) = make_test_actor();
+        let mut event_rx = actor.subscribe();
+
+        actor
+            .send_command(Command::CreateSpec {
+                title: "Ctx Attach Test".to_string(),
+                one_liner: "test".to_string(),
+                goal: "goal".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let attachment_id = Ulid::new();
+        actor
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "notes.md".to_string(),
+                mime_type: "text/markdown".to_string(),
+                size_bytes: 1024,
+            })
+            .await
+            .unwrap();
+
+        let mut runner = AgentRunner::new(spec_id, AgentRole::Manager);
+        SwarmOrchestrator::refresh_context(&mut runner, &actor, &mut event_rx).await;
+
+        assert_eq!(runner.context.context_attachments.len(), 1);
+        assert_eq!(
+            runner.context.context_attachments[0].attachment_id,
+            attachment_id
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_context_filters_removed_attachments() {
+        let (spec_id, actor) = make_test_actor();
+        let mut event_rx = actor.subscribe();
+
+        actor
+            .send_command(Command::CreateSpec {
+                title: "Ctx Removed Test".to_string(),
+                one_liner: "test".to_string(),
+                goal: "goal".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let attachment_id = Ulid::new();
+        actor
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "gone.md".to_string(),
+                mime_type: "text/markdown".to_string(),
+                size_bytes: 256,
+            })
+            .await
+            .unwrap();
+        actor
+            .send_command(Command::RemoveContext { attachment_id })
+            .await
+            .unwrap();
+
+        let mut runner = AgentRunner::new(spec_id, AgentRole::Manager);
+        SwarmOrchestrator::refresh_context(&mut runner, &actor, &mut event_rx).await;
+
+        assert!(
+            runner.context.context_attachments.is_empty(),
+            "removed attachments should be filtered out"
+        );
+    }
+
     #[tokio::test]
     async fn question_pending_cleared_after_answer() {
         let (spec_id, actor) = make_test_actor();
@@ -992,6 +1205,7 @@ mod tests {
             Vec::new(),
             make_test_client(),
             "stub-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
         );
         let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
 
@@ -1020,6 +1234,7 @@ mod tests {
             agents,
             make_test_client(),
             "stub-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
         );
         assert_eq!(swarm.agent_count(), 2);
     }
@@ -1037,6 +1252,7 @@ mod tests {
             agents,
             make_test_client(),
             "stub-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
         );
         // Each agent should have a dedicated event receiver
         assert_eq!(
@@ -1073,6 +1289,7 @@ mod tests {
             vec![manager, brainstormer, planner],
             make_test_client(),
             "stub-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
         );
 
         let map = swarm.collect_agent_contexts();
@@ -1112,6 +1329,7 @@ mod tests {
             agents,
             make_test_client(),
             "stub-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
         );
 
         // Collect contexts
@@ -1184,6 +1402,7 @@ mod tests {
             vec![new_manager, new_planner],
             make_test_client(),
             "stub-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
         );
 
         // Restore the old contexts onto the new agents
@@ -1216,6 +1435,7 @@ mod tests {
             Vec::new(),
             make_test_client(),
             "stub-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
         );
         let notify = Arc::clone(&swarm.human_message_notify);
         let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
@@ -1250,6 +1470,7 @@ mod tests {
             agents,
             make_test_client(),
             "stub-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
         );
         assert_eq!(find_manager_index(&swarm), Some(1));
     }
@@ -1267,6 +1488,7 @@ mod tests {
             agents,
             make_test_client(),
             "stub-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
         );
         assert_eq!(find_manager_index(&swarm), None);
     }
@@ -1313,6 +1535,7 @@ mod tests {
             agents,
             make_test_client(),
             "test-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
         );
 
         // Verify: only Manager should run during brainstorming
@@ -1356,6 +1579,7 @@ mod tests {
             agents,
             make_test_client(),
             "test-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
         );
 
         // All 3 agents should be present and none skipped in Active

@@ -187,6 +187,7 @@ mod tests {
             lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
             phase: SpecPhase::Active,
             canvas_content: None,
+            context_attachments: Vec::new(),
         }
     }
 

@@ -11,7 +11,7 @@ use ulid::Ulid;
 use crate::card::Card;
 use crate::command::Command;
 use crate::event::{Event, EventPayload};
-use crate::state::{SpecPhase, SpecState};
+use crate::state::{ContextAttachment, SpecPhase, SpecState};
 use crate::transcript::TranscriptMessage;
 
 /// Errors that can occur when processing commands in the actor.
@@ -22,6 +22,12 @@ pub enum ActorError {
 
     #[error("card not found: {0}")]
     CardNotFound(Ulid),
+
+    #[error("attachment not found: {0}")]
+    AttachmentNotFound(Ulid),
+
+    #[error("attachment already removed: {0}")]
+    AttachmentAlreadyRemoved(Ulid),
 
     #[error("a question is already pending")]
     QuestionAlreadyPending,
@@ -326,6 +332,82 @@ impl SpecActor {
 
             Command::UpdateCanvas { content } => {
                 vec![EventPayload::CanvasUpdated { content }]
+            }
+
+            Command::AttachContext {
+                attachment_id,
+                filename,
+                mime_type,
+                size_bytes,
+            } => {
+                if state.core.is_none() {
+                    return Err(ActorError::SpecNotCreated);
+                }
+                let attachment = ContextAttachment {
+                    attachment_id,
+                    filename,
+                    mime_type,
+                    size_bytes,
+                    summary: None,
+                    user_notes: None,
+                    added_at: Utc::now(),
+                    removed: false,
+                };
+                vec![EventPayload::ContextAttached { attachment }]
+            }
+
+            Command::SummarizeContext {
+                attachment_id,
+                summary,
+            } => {
+                let Some(att) = state
+                    .context_attachments
+                    .iter()
+                    .find(|a| a.attachment_id == attachment_id)
+                else {
+                    return Err(ActorError::AttachmentNotFound(attachment_id));
+                };
+                if att.removed {
+                    return Err(ActorError::AttachmentAlreadyRemoved(attachment_id));
+                }
+                vec![EventPayload::ContextSummarized {
+                    attachment_id,
+                    summary,
+                }]
+            }
+
+            Command::UpdateContextNotes {
+                attachment_id,
+                notes,
+            } => {
+                let Some(att) = state
+                    .context_attachments
+                    .iter()
+                    .find(|a| a.attachment_id == attachment_id)
+                else {
+                    return Err(ActorError::AttachmentNotFound(attachment_id));
+                };
+                if att.removed {
+                    return Err(ActorError::AttachmentAlreadyRemoved(attachment_id));
+                }
+                vec![EventPayload::ContextNotesUpdated {
+                    attachment_id,
+                    notes,
+                }]
+            }
+
+            Command::RemoveContext { attachment_id } => {
+                let Some(att) = state
+                    .context_attachments
+                    .iter()
+                    .find(|a| a.attachment_id == attachment_id)
+                else {
+                    return Err(ActorError::AttachmentNotFound(attachment_id));
+                };
+                if att.removed {
+                    return Err(ActorError::AttachmentAlreadyRemoved(attachment_id));
+                }
+                vec![EventPayload::ContextRemoved { attachment_id }]
             }
 
             Command::Undo => {
@@ -773,6 +855,323 @@ mod tests {
             .unwrap();
         let state = handle.read_state().await;
         assert_eq!(state.phase, SpecPhase::Brainstorming);
+    }
+
+    #[tokio::test]
+    async fn actor_processes_attach_context() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            })
+            .await
+            .unwrap();
+
+        let attachment_id = Ulid::new();
+        let events = handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "notes.md".into(),
+                mime_type: "text/markdown".into(),
+                size_bytes: 42,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        match &events[0].payload {
+            EventPayload::ContextAttached { attachment } => {
+                assert_eq!(attachment.attachment_id, attachment_id);
+                assert_eq!(attachment.filename, "notes.md");
+                assert_eq!(attachment.mime_type, "text/markdown");
+                assert_eq!(attachment.size_bytes, 42);
+                assert!(attachment.summary.is_none());
+                assert!(attachment.user_notes.is_none());
+                assert!(!attachment.removed);
+            }
+            _ => panic!("expected ContextAttached"),
+        }
+
+        let state = handle.read_state().await;
+        assert_eq!(state.context_attachments.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn actor_processes_summarize_context() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            })
+            .await
+            .unwrap();
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "a".into(),
+                mime_type: "text/plain".into(),
+                size_bytes: 1,
+            })
+            .await
+            .unwrap();
+
+        let events = handle
+            .send_command(Command::SummarizeContext {
+                attachment_id,
+                summary: "brief".into(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        match &events[0].payload {
+            EventPayload::ContextSummarized {
+                attachment_id: a,
+                summary,
+            } => {
+                assert_eq!(*a, attachment_id);
+                assert_eq!(summary, "brief");
+            }
+            _ => panic!("expected ContextSummarized"),
+        }
+    }
+
+    #[tokio::test]
+    async fn actor_processes_update_context_notes() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            })
+            .await
+            .unwrap();
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "a".into(),
+                mime_type: "text/plain".into(),
+                size_bytes: 1,
+            })
+            .await
+            .unwrap();
+
+        let events = handle
+            .send_command(Command::UpdateContextNotes {
+                attachment_id,
+                notes: "my note".into(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        match &events[0].payload {
+            EventPayload::ContextNotesUpdated {
+                attachment_id: a,
+                notes,
+            } => {
+                assert_eq!(*a, attachment_id);
+                assert_eq!(notes, "my note");
+            }
+            _ => panic!("expected ContextNotesUpdated"),
+        }
+    }
+
+    #[tokio::test]
+    async fn actor_processes_remove_context() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            })
+            .await
+            .unwrap();
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "a".into(),
+                mime_type: "text/plain".into(),
+                size_bytes: 1,
+            })
+            .await
+            .unwrap();
+
+        let events = handle
+            .send_command(Command::RemoveContext { attachment_id })
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        match &events[0].payload {
+            EventPayload::ContextRemoved { attachment_id: a } => {
+                assert_eq!(*a, attachment_id);
+            }
+            _ => panic!("expected ContextRemoved"),
+        }
+
+        let state = handle.read_state().await;
+        assert!(state.context_attachments[0].removed);
+    }
+
+    #[tokio::test]
+    async fn actor_rejects_summarize_on_unknown_attachment() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            })
+            .await
+            .unwrap();
+
+        let bad_id = Ulid::new();
+        let result = handle
+            .send_command(Command::SummarizeContext {
+                attachment_id: bad_id,
+                summary: "brief".into(),
+            })
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, ActorError::AttachmentNotFound(id) if id == bad_id),
+            "expected AttachmentNotFound, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn actor_rejects_remove_on_already_removed_attachment() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            })
+            .await
+            .unwrap();
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "a".into(),
+                mime_type: "text/plain".into(),
+                size_bytes: 1,
+            })
+            .await
+            .unwrap();
+
+        // First remove succeeds
+        handle
+            .send_command(Command::RemoveContext { attachment_id })
+            .await
+            .unwrap();
+
+        // Second remove should fail
+        let result = handle
+            .send_command(Command::RemoveContext { attachment_id })
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, ActorError::AttachmentAlreadyRemoved(id) if id == attachment_id),
+            "expected AttachmentAlreadyRemoved, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn actor_rejects_summarize_removed_attachment() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            })
+            .await
+            .unwrap();
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "a".into(),
+                mime_type: "text/plain".into(),
+                size_bytes: 1,
+            })
+            .await
+            .unwrap();
+        handle
+            .send_command(Command::RemoveContext { attachment_id })
+            .await
+            .unwrap();
+        let result = handle
+            .send_command(Command::SummarizeContext {
+                attachment_id,
+                summary: "late".into(),
+            })
+            .await;
+        assert!(
+            matches!(result, Err(ActorError::AttachmentAlreadyRemoved(id)) if id == attachment_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn actor_rejects_update_notes_on_removed_attachment() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            })
+            .await
+            .unwrap();
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "a".into(),
+                mime_type: "text/plain".into(),
+                size_bytes: 1,
+            })
+            .await
+            .unwrap();
+        handle
+            .send_command(Command::RemoveContext { attachment_id })
+            .await
+            .unwrap();
+        let result = handle
+            .send_command(Command::UpdateContextNotes {
+                attachment_id,
+                notes: "late".into(),
+            })
+            .await;
+        assert!(
+            matches!(result, Err(ActorError::AttachmentAlreadyRemoved(id)) if id == attachment_id)
+        );
     }
 
     #[tokio::test]

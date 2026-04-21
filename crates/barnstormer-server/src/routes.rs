@@ -2,6 +2,7 @@
 // ABOUTME: Assembles all API routes, web UI routes, and static file serving into a single Axum Router.
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post, put};
 use tower_http::services::ServeDir;
 
@@ -57,6 +58,22 @@ pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
         .route("/web/specs/{id}/export/dot", get(web::export_dot))
         .route("/web/specs/{id}/export/spec", get(web::export_spec_download))
         .route("/web/specs/{id}/phase", post(web::transition_phase))
+        .route(
+            "/web/specs/{id}/context",
+            post(web::upload_context).layer(DefaultBodyLimit::max(25 * 1024 * 1024)),
+        )
+        .route(
+            "/web/specs/{id}/context/{att_id}/notes",
+            axum::routing::patch(web::update_context_notes),
+        )
+        .route(
+            "/web/specs/{id}/context/{att_id}",
+            axum::routing::delete(web::remove_context),
+        )
+        .route(
+            "/web/specs/{id}/context/{att_id}/raw",
+            get(web::download_context),
+        )
         .route("/web/specs/{id}/undo", post(web::undo))
         .route("/web/specs/{id}/regenerate", post(web::regenerate))
         .route("/web/provider-status", get(web::provider_status))
