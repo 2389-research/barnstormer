@@ -20,6 +20,12 @@
         <button id="btn-back-to-chat" class="btn btn-sm" style="display:none;"
                 hx-get="/web/specs/{{ spec_id }}/chat-panel"
                 hx-target="#canvas" hx-swap="innerHTML">Back to Chat</button>
+        <button id="btn-toggle-context" class="btn btn-sm"
+                onclick="
+                    var rail = document.getElementById('context-rail');
+                    rail.classList.toggle('hidden');
+                    this.textContent = rail.classList.contains('hidden') ? 'Show context' : 'Hide context';
+                ">Hide context</button>
         <div id="agent-controls" hx-get="/web/specs/{{ spec_id }}/agents/status"
              hx-trigger="load, sse:agent_step_started, sse:agent_step_finished, refreshAgents from:body"
              hx-swap="innerHTML"></div>
