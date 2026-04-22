@@ -2200,6 +2200,71 @@ pub async fn context_panel(
     render_context_panel_for(&state, spec_id).await
 }
 
+/// GET /web/specs/{id}/context-preview - Render a read-only preview of the
+/// "## Context Files" section of the agent's current task prompt.
+///
+/// Uses `barnstormer_agent::render_context_files_section` so what the user
+/// sees exactly matches what the Manager is being told about attached files.
+/// Non-removed attachments only. Returns a small `.card` wrapper for drop-in
+/// swap into the panel; empty state shows "No context files attached."
+pub async fn context_preview(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h.clone(),
+        None => return (StatusCode::NOT_FOUND, "spec not found").into_response(),
+    };
+    drop(actors);
+
+    let spec_state = handle.read_state().await;
+    let live: Vec<barnstormer_core::state::ContextAttachment> = spec_state
+        .context_attachments
+        .iter()
+        .filter(|a| !a.removed)
+        .cloned()
+        .collect();
+    drop(spec_state);
+
+    let rendered = barnstormer_agent::render_context_files_section(&live);
+
+    // Minimal HTML: escape the rendered markdown so the preview is read-only
+    // and can't inject markup through attachment fields.
+    let inner = if rendered.is_empty() {
+        "No context files attached.".to_string()
+    } else {
+        html_escape(&rendered)
+    };
+    let body = format!(
+        r#"<div class="card" style="margin: var(--spacing-md); white-space: pre-wrap; font-family: monospace; font-size: 0.78rem;">{inner}</div>"#,
+    );
+    Html(body).into_response()
+}
+
+/// Minimal HTML-escape for the context preview body. Only escapes the five
+/// characters that matter for HTML text content; the wrapper uses
+/// `white-space: pre-wrap` so newlines and spaces are preserved as-is.
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// POST /web/specs/{id}/context - Upload a context file during brainstorming.
 ///
 /// Accepts `multipart/form-data` with a single `file` part. Writes the file

@@ -69,6 +69,10 @@ pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
             get(web::context_panel),
         )
         .route(
+            "/web/specs/{id}/context-preview",
+            get(web::context_preview),
+        )
+        .route(
             "/web/specs/{id}/context/{att_id}/notes",
             axum::routing::patch(web::update_context_notes),
         )

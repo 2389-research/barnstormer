@@ -4,13 +4,19 @@
 <div class="chat-panel" id="context-panel">
     <div class="chat-panel-header">
         <span class="chat-panel-title">Context</span>
+        <button class="btn btn-sm" style="margin-left: auto; margin-right: var(--spacing-xs);"
+                hx-get="/web/specs/{{ spec_id }}/context-preview"
+                hx-target="#context-preview"
+                hx-swap="innerHTML"
+                onclick="document.getElementById('context-preview').classList.toggle('hidden');">
+            Preview context
+        </button>
         <form id="context-upload-form"
               hx-post="/web/specs/{{ spec_id }}/context"
               hx-encoding="multipart/form-data"
               enctype="multipart/form-data"
               hx-target="#context-panel"
-              hx-swap="outerHTML"
-              style="margin-left: auto;">
+              hx-swap="outerHTML">
             <label class="btn btn-sm" style="cursor:pointer; margin: 0;">
                 + Add
                 <input type="file" name="file" style="display: none;"
@@ -68,4 +74,5 @@
         </div>
         {% endif %}
     </div>
+    <div id="context-preview" class="hidden" style="padding: var(--spacing-sm); border-top: 1px solid var(--border);"></div>
 </div>
