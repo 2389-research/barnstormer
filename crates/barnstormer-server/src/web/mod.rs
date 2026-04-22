@@ -3604,6 +3604,45 @@ mod tests {
     }
 
     #[test]
+    fn context_panel_shows_in_context_badge_when_summary_present() {
+        // An attachment that has a summary should render the "in context" pill —
+        // signalling to the user that it's been included in the agent's prompt.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "notes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "1.2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("a short summary".to_string()),
+                user_notes: None,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("in context"), "summary present should show 'in context' pill");
+    }
+
+    #[test]
+    fn context_panel_shows_summarizing_badge_when_summary_pending() {
+        // An attachment without a summary yet should render the "summarizing…" pill.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "pending.txt".to_string(),
+                extension: "txt".to_string(),
+                size_display: "500 B".to_string(),
+                added_display: "12:35".to_string(),
+                summary: None,
+                user_notes: None,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("summarizing"), "summary pending should show 'summarizing' pill");
+    }
+
+    #[test]
     fn mission_ticker_template_renders_empty() {
         let tmpl = MissionTickerTemplate {
             spec_id: "01HTEST".to_string(),

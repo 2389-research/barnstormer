@@ -25,6 +25,12 @@
             <div style="display: flex; align-items: center; gap: var(--spacing-sm); margin-bottom: var(--spacing-xs);">
                 <span class="card-type badge-note">{{ att.extension }}</span>
                 <span style="flex: 1; font-weight: 500; word-break: break-word;">{{ att.filename }}</span>
+                {% match att.summary %}
+                {% when Some with (_) %}
+                    <span class="card-type badge-plan" title="Included in agent context">in context</span>
+                {% when None %}
+                    <span class="card-type badge-note" title="Summary in progress">summarizing&hellip;</span>
+                {% endmatch %}
                 <button class="btn btn-sm btn-danger"
                         hx-delete="/web/specs/{{ spec_id }}/context/{{ att.attachment_id }}"
                         hx-target="#context-panel"
