@@ -1623,3 +1623,25 @@ html, body {
 .hidden {
     display: none;
 }
+
+/* Context panel: collapsible attachment cards (native <details>/<summary>). */
+.context-card-head {
+  cursor: pointer;
+  list-style: none;
+  outline: none;
+}
+.context-card-head::-webkit-details-marker {
+  display: none;
+}
+.context-card-head::before {
+  content: "\25B8"; /* right-pointing small triangle */
+  display: inline-block;
+  width: 1em;
+  color: var(--text-muted);
+}
+details[open] > .context-card-head::before {
+  content: "\25BE"; /* down-pointing small triangle */
+}
+details[open] > .context-card-head .collapsed-notes {
+  display: none;
+}

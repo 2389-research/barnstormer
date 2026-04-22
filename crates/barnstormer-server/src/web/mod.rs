@@ -2118,6 +2118,12 @@ struct ContextPanelTemplate {
 }
 
 /// View model for a single context attachment row in the panel.
+///
+/// `summary` holds the raw (plain-text) summary used for the collapsed-state
+/// tooltip (the native `title` attribute on the `<summary>` element). It's
+/// also used as the presence flag for rendering the "in context" pill.
+/// `summary_html` holds the pre-rendered HTML produced by `render_markdown`,
+/// displayed only when the card is expanded.
 struct ContextPanelItem {
     attachment_id: String,
     filename: String,
@@ -2125,6 +2131,7 @@ struct ContextPanelItem {
     size_display: String,
     added_display: String,
     summary: Option<String>,
+    summary_html: Option<String>,
     user_notes: Option<String>,
 }
 
@@ -2167,6 +2174,7 @@ async fn render_context_panel_for(state: &SharedState, spec_id: Ulid) -> Respons
             size_display: format_size(a.size_bytes),
             added_display: a.added_at.format("%H:%M").to_string(),
             summary: a.summary.clone(),
+            summary_html: a.summary.as_deref().map(render_markdown),
             user_notes: a.user_notes.clone(),
         })
         .collect();
@@ -3681,6 +3689,7 @@ mod tests {
                 size_display: "1.2 KB".to_string(),
                 added_display: "12:34".to_string(),
                 summary: Some("a short summary".to_string()),
+                summary_html: Some("<p>a short summary</p>\n".to_string()),
                 user_notes: None,
             }],
         };
@@ -3700,11 +3709,133 @@ mod tests {
                 size_display: "500 B".to_string(),
                 added_display: "12:35".to_string(),
                 summary: None,
+                summary_html: None,
                 user_notes: None,
             }],
         };
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("summarizing"), "summary pending should show 'summarizing' pill");
+    }
+
+    #[test]
+    fn context_panel_uses_details_summary_for_collapsible_card() {
+        // Each attachment card must use native <details>/<summary> so users can
+        // click the header to expand/collapse without any JS.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "notes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "1.2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("a short summary".to_string()),
+                summary_html: Some("<p>a short summary</p>\n".to_string()),
+                user_notes: None,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("<details"), "card must use <details>");
+        assert!(rendered.contains("<summary"), "card must use <summary>");
+    }
+
+    #[test]
+    fn context_panel_summary_title_attribute_contains_raw_plain_text() {
+        // The collapsed-state tooltip is the native `title` attribute on the
+        // <summary> element. Its contents should be the raw summary text
+        // (browsers render `title` as plain text, so no markup needed).
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "notes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "1.2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("plain-text tooltip body".to_string()),
+                summary_html: Some("<p>plain-text tooltip body</p>\n".to_string()),
+                user_notes: None,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains(r#"title="plain-text tooltip body""#),
+            "summary element should carry title attribute with raw summary text, got: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn context_panel_expanded_renders_markdown_summary_as_html() {
+        // When the card is open, the summary should be rendered as HTML
+        // from the `summary_html` field (bold, etc.), not as plain text.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "notes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "1.2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("**bold**".to_string()),
+                summary_html: Some(render_markdown("**bold**")),
+                user_notes: None,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("<strong>bold</strong>"),
+            "expanded card should contain rendered HTML, got: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn context_panel_delete_button_is_outside_summary() {
+        // The delete button should live in the expanded section so clicking it
+        // doesn't toggle the card. Concretely: the `hx-delete` attribute must
+        // appear AFTER the closing `</summary>` tag.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "notes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "1.2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("a summary".to_string()),
+                summary_html: Some("<p>a summary</p>\n".to_string()),
+                user_notes: None,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        let delete_idx = rendered.find("hx-delete").expect("should have delete button");
+        let summary_close_idx = rendered
+            .find("</summary>")
+            .expect("should have </summary> tag");
+        assert!(
+            delete_idx > summary_close_idx,
+            "delete button (hx-delete) must appear after </summary>, got delete at {} vs </summary> at {}",
+            delete_idx,
+            summary_close_idx,
+        );
+    }
+
+    #[test]
+    fn render_markdown_does_not_passthrough_raw_script_tag() {
+        // Explicit safety test: pulldown-cmark is configured so raw HTML in
+        // markdown input does NOT reach the output as HTML tags.
+        let out = render_markdown("<script>x</script>");
+        assert!(!out.contains("<script>"), "raw <script> must not pass through: {}", out);
+    }
+
+    #[test]
+    fn render_markdown_headers_list_and_paragraph() {
+        // Smoke-cover a few markdown features the summary panel will rely on.
+        assert!(render_markdown("# Heading").contains("<h1>Heading</h1>"));
+        let list = render_markdown("- a\n- b");
+        assert!(list.contains("<ul>") && list.contains("<li>a</li>"));
+        assert!(render_markdown("plain").contains("<p>plain</p>"));
     }
 
     #[test]
