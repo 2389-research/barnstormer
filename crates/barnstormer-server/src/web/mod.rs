@@ -3578,6 +3578,32 @@ mod tests {
     }
 
     #[test]
+    fn spec_view_brainstorming_wires_context_sse_via_hx_trigger() {
+        // The context rail must rely on the declarative `hx-trigger="sse:..."` pattern
+        // (which htmx-ext-sse 2.2.2 actually supports) rather than a JS listener on
+        // `sse:<event>` DOM events, which that extension does NOT dispatch.
+        let tmpl = SpecViewTemplate {
+            spec_id: "01HTEST".to_string(),
+            title: "Brainstorm Spec".to_string(),
+            one_liner: "A brainstorming spec".to_string(),
+            goal: "Think big".to_string(),
+            phase: "brainstorming".to_string(),
+            lanes: vec![],
+            canvas_content: None,
+            has_pending_question: false,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains(r#"hx-trigger="load, sse:context_attached, sse:context_summarized, sse:context_notes_updated, sse:context_removed""#),
+            "context rail must declare SSE triggers"
+        );
+        assert!(
+            !rendered.contains("'sse:' + evt"),
+            "dead JS listener pattern for context events must be removed"
+        );
+    }
+
+    #[test]
     fn mission_ticker_template_renders_empty() {
         let tmpl = MissionTickerTemplate {
             spec_id: "01HTEST".to_string(),
