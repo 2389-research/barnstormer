@@ -46,6 +46,7 @@ Binary entrypoint: `src/main.rs`
 - IDs use ULID (universally unique lexicographically sortable identifiers)
 - Event sourcing: all mutations go through Command -> Event -> State
 - State is materialized by replaying events through a reducer
+- **SSE event handling in templates**: use the declarative `hx-trigger="sse:<event_name>"` attribute on the element that should react — `htmx-ext-sse@2.2.2` does NOT dispatch `sse:<event_name>` DOM events to element listeners, so `element.addEventListener('sse:foo', ...)` in JS is dead code. Working example: `templates/partials/chat_transcript.html` line 6.
 - Port: **7331**
 - Environment config via dotenv (see `.env.example`)
 
