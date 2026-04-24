@@ -1,11 +1,11 @@
 {# ABOUTME: Form for creating a new spec from a free-text description plus optional context files. #}
 {# ABOUTME: The manager agent will parse the description into structured fields; files become context attachments. #}
 
-<div class="create-spec-form" style="padding: var(--spacing-lg); max-width: 500px; margin: 0 auto;">
+<div class="create-spec-form">
     <h2>What do you want to build?</h2>
-    <p style="color: var(--text-secondary); margin-bottom: var(--spacing-md); font-size: 0.85rem;">
+    <p class="form-hint">
         Describe your idea in your own words. You can also attach any notes, docs, or snippets
-        you want the agents to read — they'll show up as context during brainstorming.
+        you want the agents to read &mdash; they'll show up as context during brainstorming.
     </p>
     <form hx-post="/web/specs" hx-target="#workspace" hx-swap="innerHTML" hx-push-url="true"
           hx-encoding="multipart/form-data" enctype="multipart/form-data">
@@ -14,12 +14,9 @@
                 placeholder="e.g. I want to build a mobile app that helps dog owners find nearby pet-friendly restaurants. It should have user reviews, real-time availability, and a map view..."></textarea>
         </div>
         <div class="form-group">
-            <label for="files" style="font-size: 0.8rem; color: var(--text-secondary);">
-                Context files (optional)
-            </label>
-            <input type="file" id="files" name="files" multiple
-                   style="margin-top: var(--spacing-xs);">
-            <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: var(--spacing-xs);">
+            <label for="files" class="form-label">Context files (optional)</label>
+            <input type="file" id="files" name="files" multiple>
+            <div class="form-hint form-hint-small">
                 Text files only for now (markdown, code, notes). Images and PDFs coming later.
             </div>
         </div>

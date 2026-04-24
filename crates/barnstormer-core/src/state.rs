@@ -37,14 +37,15 @@ pub struct ContextAttachment {
 
 /// Tracks which lifecycle phase a spec is in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum SpecPhase {
     Brainstorming,
-    Active,
+    #[serde(alias = "Active")]
+    Refining,
+    Complete,
 }
 
-fn default_phase_active() -> SpecPhase {
-    SpecPhase::Active
+fn default_phase_refining() -> SpecPhase {
+    SpecPhase::Refining
 }
 
 /// The full materialized state of a spec, built by replaying events.
@@ -57,7 +58,7 @@ pub struct SpecState {
     pub undo_stack: Vec<UndoEntry>,
     pub last_event_id: u64,
     pub lanes: Vec<String>,
-    #[serde(default = "default_phase_active")]
+    #[serde(default = "default_phase_refining")]
     pub phase: SpecPhase,
     #[serde(default)]
     pub canvas_content: Option<String>,
@@ -75,7 +76,7 @@ impl Default for SpecState {
             undo_stack: Vec::new(),
             last_event_id: 0,
             lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
-            phase: SpecPhase::Active,
+            phase: SpecPhase::Refining,
             canvas_content: None,
             context_attachments: Vec::new(),
         }
@@ -381,6 +382,14 @@ impl SpecState {
                     att.removed = true;
                 }
             }
+
+            EventPayload::StreamingDelta { .. } => {
+                // Ephemeral — no state mutation
+            }
+
+            EventPayload::StreamingToolActivity { .. } => {
+                // Ephemeral — no state mutation
+            }
         }
     }
 
@@ -483,6 +492,12 @@ impl SpecState {
                 {
                     att.removed = true;
                 }
+            }
+            EventPayload::StreamingDelta { .. } => {
+                // Ephemeral — no state mutation
+            }
+            EventPayload::StreamingToolActivity { .. } => {
+                // Ephemeral — no state mutation
             }
             // Other event types during undo are applied normally
             _ => {
@@ -918,30 +933,37 @@ mod tests {
     fn spec_phase_serde_brainstorming() {
         let phase = SpecPhase::Brainstorming;
         let json = serde_json::to_string(&phase).unwrap();
-        assert_eq!(json, "\"brainstorming\"");
+        assert_eq!(json, "\"Brainstorming\"");
         let back: SpecPhase = serde_json::from_str(&json).unwrap();
         assert_eq!(back, SpecPhase::Brainstorming);
     }
 
     #[test]
-    fn spec_phase_serde_active() {
-        let phase = SpecPhase::Active;
+    fn spec_phase_serde_refining() {
+        let phase = SpecPhase::Refining;
         let json = serde_json::to_string(&phase).unwrap();
-        assert_eq!(json, "\"active\"");
+        assert_eq!(json, "\"Refining\"");
         let back: SpecPhase = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, SpecPhase::Active);
+        assert_eq!(back, SpecPhase::Refining);
     }
 
     #[test]
-    fn spec_state_new_defaults_to_active() {
+    fn spec_phase_serde_active_alias_deserializes_as_refining() {
+        // Backwards compat: persisted events with "Active" should deserialize as Refining
+        let back: SpecPhase = serde_json::from_str("\"Active\"").unwrap();
+        assert_eq!(back, SpecPhase::Refining);
+    }
+
+    #[test]
+    fn spec_state_new_defaults_to_refining() {
         let state = SpecState::new();
-        assert_eq!(state.phase, SpecPhase::Active);
+        assert_eq!(state.phase, SpecPhase::Refining);
     }
 
     #[test]
     fn phase_transitioned_updates_state() {
         let mut state = SpecState::new();
-        assert_eq!(state.phase, SpecPhase::Active);
+        assert_eq!(state.phase, SpecPhase::Refining);
 
         let event = Event {
             event_id: 1,
@@ -1050,11 +1072,39 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_without_phase_deserializes_as_active() {
+    fn apply_streaming_delta_is_noop() {
+        let mut state = SpecState::new();
+        let spec_id = make_spec_id();
+        let before_cards = state.cards.len();
+        let before_transcript = state.transcript.len();
+        state.apply(&make_event(
+            1,
+            spec_id,
+            EventPayload::StreamingDelta {
+                agent_id: "manager-1".to_string(),
+                text: "Hello".to_string(),
+            },
+        ));
+        assert_eq!(state.cards.len(), before_cards);
+        assert_eq!(state.transcript.len(), before_transcript);
+        assert!(state.core.is_none());
+    }
+
+    #[test]
+    fn spec_phase_serde_complete() {
+        let phase = SpecPhase::Complete;
+        let json = serde_json::to_string(&phase).unwrap();
+        assert_eq!(json, "\"Complete\"");
+        let back: SpecPhase = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, SpecPhase::Complete);
+    }
+
+    #[test]
+    fn snapshot_without_phase_deserializes_as_refining() {
         // Simulate an old snapshot JSON without a "phase" field
         let json = r#"{"core":null,"cards":{},"transcript":[],"pending_question":null,"undo_stack":[],"last_event_id":0,"lanes":["Ideas","Plan","Spec"]}"#;
         let state: SpecState = serde_json::from_str(json).unwrap();
-        assert_eq!(state.phase, SpecPhase::Active);
+        assert_eq!(state.phase, SpecPhase::Refining);
     }
 
     #[test]

@@ -18,6 +18,20 @@ pub enum ConfigError {
     RemoteWithoutToken,
 }
 
+/// Expand a leading `~` in a path string to the user's home directory.
+fn expand_tilde(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    } else if path == "~" {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home);
+        }
+    }
+    PathBuf::from(path)
+}
+
 /// Server configuration loaded from environment variables.
 #[derive(Debug, Clone)]
 pub struct BarnstormerConfig {
@@ -43,7 +57,7 @@ impl BarnstormerConfig {
     /// - BARNSTORMER_PUBLIC_BASE_URL: public URL for the server (default: http://localhost:7331)
     pub fn from_env() -> Result<Self, ConfigError> {
         let home = std::env::var("BARNSTORMER_HOME")
-            .map(PathBuf::from)
+            .map(|v| expand_tilde(&v))
             .unwrap_or_else(|_| {
                 std::env::var("HOME")
                     .map(PathBuf::from)
@@ -132,6 +146,15 @@ mod tests {
         assert_eq!(config.default_provider, "anthropic");
         assert!(config.default_model.is_none());
         assert!(config.home.to_string_lossy().contains(".barnstormer"));
+    }
+
+    #[test]
+    fn expand_tilde_expands_home() {
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(expand_tilde("~/.barnstormer"), PathBuf::from(&home).join(".barnstormer"));
+        assert_eq!(expand_tilde("~"), PathBuf::from(&home));
+        assert_eq!(expand_tilde("/absolute/path"), PathBuf::from("/absolute/path"));
+        assert_eq!(expand_tilde("relative/path"), PathBuf::from("relative/path"));
     }
 
     #[test]

@@ -107,7 +107,7 @@ pub async fn setup_with_spec_in_brainstorming() -> TestCtx {
     }
 }
 
-/// Build a `TestCtx` with a spec transitioned into `SpecPhase::Active`.
+/// Build a `TestCtx` with a spec transitioned into `SpecPhase::Refining`.
 pub async fn setup_with_spec_in_active() -> TestCtx {
     let ctx = setup_with_spec_in_brainstorming().await;
 
@@ -117,10 +117,10 @@ pub async fn setup_with_spec_in_active() -> TestCtx {
         let handle = actors.get(&ctx.spec_id).expect("actor present");
         handle
             .send_command(Command::TransitionPhase {
-                target: SpecPhase::Active,
+                target: SpecPhase::Refining,
             })
             .await
-            .expect("transition to active");
+            .expect("transition to refining");
     }
 
     // Rebuild the router with the same state so each test gets a fresh service.

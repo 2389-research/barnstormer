@@ -60,6 +60,7 @@ pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
         .route("/web/specs/{id}/export/dot", get(web::export_dot))
         .route("/web/specs/{id}/export/spec", get(web::export_spec_download))
         .route("/web/specs/{id}/phase", post(web::transition_phase))
+        .route("/web/specs/{id}/phase-check", get(web::phase_check))
         .route(
             "/web/specs/{id}/context",
             post(web::upload_context).layer(DefaultBodyLimit::max(25 * 1024 * 1024)),

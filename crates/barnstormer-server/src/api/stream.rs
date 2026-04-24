@@ -30,6 +30,8 @@ fn event_type_name(payload: &barnstormer_core::EventPayload) -> &'static str {
         barnstormer_core::EventPayload::SnapshotWritten { .. } => "snapshot_written",
         barnstormer_core::EventPayload::PhaseTransitioned { .. } => "phase_transitioned",
         barnstormer_core::EventPayload::CanvasUpdated { .. } => "canvas_updated",
+        barnstormer_core::EventPayload::StreamingDelta { .. } => "streaming_delta",
+        barnstormer_core::EventPayload::StreamingToolActivity { .. } => "streaming_tool_activity",
         barnstormer_core::EventPayload::ContextAttached { .. } => "context_attached",
         barnstormer_core::EventPayload::ContextSummarized { .. } => "context_summarized",
         barnstormer_core::EventPayload::ContextNotesUpdated { .. } => "context_notes_updated",
@@ -158,6 +160,26 @@ mod tests {
             .expect("item should be Ok");
 
         let _ = sse_event;
+    }
+
+    #[test]
+    fn event_type_names_streaming() {
+        use barnstormer_core::EventPayload;
+
+        assert_eq!(
+            event_type_name(&EventPayload::StreamingDelta {
+                agent_id: String::new(),
+                text: String::new(),
+            }),
+            "streaming_delta"
+        );
+        assert_eq!(
+            event_type_name(&EventPayload::StreamingToolActivity {
+                agent_id: String::new(),
+                activity: String::new(),
+            }),
+            "streaming_tool_activity"
+        );
     }
 
     #[test]

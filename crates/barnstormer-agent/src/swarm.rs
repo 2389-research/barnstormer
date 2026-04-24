@@ -11,7 +11,10 @@ use tracing;
 use ulid::Ulid;
 
 use mux::agent::{AgentDefinition, SubAgent};
+use mux::hook::HookRegistry;
 use mux::llm::LlmClient;
+
+use crate::streaming_hook::StreamingHook;
 
 use std::collections::HashMap;
 
@@ -402,13 +405,19 @@ impl SwarmOrchestrator {
         )
         .await;
 
+        let is_manager = runner.role == AgentRole::Manager;
+
         // Create agent definition with role-specific system prompt + tool guide
-        let definition = AgentDefinition::new(
+        let mut definition = AgentDefinition::new(
             runner.role.label(),
             full_system_prompt(&runner.role, &runner.agent_id, phase),
         )
         .model(model)
         .max_iterations(10);
+
+        if is_manager {
+            definition = definition.streaming(true);
+        }
 
         // Create a fresh SubAgent
         let mut sub_agent = SubAgent::new(
@@ -416,6 +425,16 @@ impl SwarmOrchestrator {
             Arc::clone(client),
             registry,
         );
+
+        // Attach streaming hook for real-time event forwarding
+        let hook_registry = Arc::new(HookRegistry::new());
+        let hook = StreamingHook::new(
+            Arc::clone(actor),
+            runner.agent_id.clone(),
+            is_manager,
+        );
+        hook_registry.register(hook).await;
+        sub_agent = sub_agent.with_hooks(hook_registry);
 
         // Build task prompt from context
         let task_prompt = build_task_prompt(&runner.context);
@@ -444,10 +463,19 @@ impl SwarmOrchestrator {
                     "agent step failed"
                 );
                 // Show a sanitized, user-friendly message in the transcript
-                // without exposing internal error details.
+                // with a short error summary for debugging context.
+                let error_text = e.to_string();
+                let error_summary: String = error_text
+                    .chars()
+                    .filter(|c| *c != '\n' && *c != '\r')
+                    .take(100)
+                    .collect::<String>()
+                    .trim()
+                    .to_string();
                 let user_msg = format!(
-                    "[{}] encountered an issue and will retry on the next cycle.",
+                    "[{}] encountered an issue ({}). Will retry next cycle.",
                     runner.role.label(),
+                    error_summary,
                 );
                 let _ = actor
                     .send_command(Command::AppendTranscript {
@@ -559,6 +587,21 @@ async fn run_agent_by_index(
         Some(&question_pending),
     )
     .await;
+
+    // Skip the LLM call if nothing has changed since the last step.
+    // The agent only needs to run when there are new events to react to.
+    // First run (last_event_seen == 0) always proceeds.
+    if runner.context.recent_events.is_empty() && runner.context.last_event_seen > 0 {
+        tracing::debug!(
+            agent = %runner.agent_id,
+            "no new events, skipping agent step"
+        );
+        // Put the runner back without calling the LLM
+        let mut s = swarm.lock().await;
+        s.agents[index] = Some(runner);
+        s.event_receivers[index] = event_rx;
+        return false;
+    }
 
     let phase = actor_ref.read_state().await.phase.clone();
 
@@ -690,8 +733,14 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
             if let EventPayload::QuestionAnswered { question_id, answer } = &event.payload {
                 let s = swarm.lock().await;
                 if should_transition_on_answer(&s.pending_transition_question, *question_id, answer) {
+                    let current_phase = s.actor.read_state().await.phase.clone();
+                    let target = match current_phase {
+                        SpecPhase::Brainstorming => SpecPhase::Refining,
+                        SpecPhase::Refining => SpecPhase::Complete,
+                        SpecPhase::Complete => continue,
+                    };
                     let _ = s.actor.send_command(Command::TransitionPhase {
-                        target: SpecPhase::Active,
+                        target,
                     }).await;
                 }
             }
@@ -933,7 +982,7 @@ mod tests {
             &pending_transition,
             &client,
             "stub-model",
-            &SpecPhase::Active,
+            &SpecPhase::Refining,
             &home,
         )
         .await;
@@ -1602,17 +1651,17 @@ mod tests {
             })
             .await
             .unwrap();
-        // Transition to Active
+        // Transition to Refining
         handle
             .send_command(Command::TransitionPhase {
-                target: SpecPhase::Active,
+                target: SpecPhase::Refining,
             })
             .await
             .unwrap();
 
         {
             let state = handle.read_state().await;
-            assert_eq!(state.phase, SpecPhase::Active);
+            assert_eq!(state.phase, SpecPhase::Refining);
         }
 
         let agents = vec![
@@ -1680,15 +1729,15 @@ mod tests {
     }
 
     #[test]
-    fn manager_gets_standard_prompt_in_active() {
-        let prompt = full_system_prompt(&AgentRole::Manager, "agent-123", &SpecPhase::Active);
+    fn manager_gets_standard_prompt_in_refining() {
+        let prompt = full_system_prompt(&AgentRole::Manager, "agent-123", &SpecPhase::Refining);
         assert!(!prompt.contains("ONE question at a time"));
         assert!(prompt.contains("manager agent for a product specification"));
     }
 
     #[test]
     fn non_manager_gets_same_prompt_regardless_of_phase() {
-        let active = full_system_prompt(&AgentRole::Brainstormer, "agent-123", &SpecPhase::Active);
+        let active = full_system_prompt(&AgentRole::Brainstormer, "agent-123", &SpecPhase::Refining);
         let brainstorming = full_system_prompt(&AgentRole::Brainstormer, "agent-123", &SpecPhase::Brainstorming);
         assert_eq!(active, brainstorming);
     }

@@ -27,6 +27,9 @@ cargo run -- start --no-open
 
 # Check if running
 cargo run -- status
+
+# Dev mode: auto-rebuild and restart on file changes (requires cargo-watch)
+cargo watch -x 'run -- start --no-open' -w crates -w templates -w static -w src
 ```
 
 ## Architecture

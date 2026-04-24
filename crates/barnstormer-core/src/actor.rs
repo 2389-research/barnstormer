@@ -410,6 +410,14 @@ impl SpecActor {
                 vec![EventPayload::ContextRemoved { attachment_id }]
             }
 
+            Command::StreamDelta { agent_id, text } => {
+                vec![EventPayload::StreamingDelta { agent_id, text }]
+            }
+
+            Command::StreamToolActivity { agent_id, activity } => {
+                vec![EventPayload::StreamingToolActivity { agent_id, activity }]
+            }
+
             Command::Undo => {
                 if state.undo_stack.is_empty() {
                     return Err(ActorError::NothingToUndo);
@@ -431,8 +439,16 @@ impl SpecActor {
         let events = payloads
             .into_iter()
             .map(|payload| {
-                let event_id = self.next_event_id;
-                self.next_event_id += 1;
+                // Ephemeral events (streaming deltas, tool activity) get event_id 0
+                // and do not consume a monotonic ID. This avoids gaps in the
+                // persisted JSONL log since ephemeral events are never written.
+                let event_id = if payload.is_ephemeral() {
+                    0
+                } else {
+                    let id = self.next_event_id;
+                    self.next_event_id += 1;
+                    id
+                };
                 Event {
                     event_id,
                     spec_id: self.spec_id,
@@ -783,14 +799,14 @@ mod tests {
 
         let events = handle
             .send_command(Command::TransitionPhase {
-                target: SpecPhase::Active,
+                target: SpecPhase::Refining,
             })
             .await
             .unwrap();
         assert_eq!(events.len(), 1);
         match &events[0].payload {
             EventPayload::PhaseTransitioned { phase } => {
-                assert_eq!(*phase, SpecPhase::Active);
+                assert_eq!(*phase, SpecPhase::Refining);
             }
             _ => panic!("wrong event"),
         }
@@ -809,18 +825,18 @@ mod tests {
             .await
             .unwrap();
 
-        // Brainstorming -> Active
+        // Brainstorming -> Refining
         handle
             .send_command(Command::TransitionPhase {
-                target: SpecPhase::Active,
+                target: SpecPhase::Refining,
             })
             .await
             .unwrap();
 
-        // Active -> Active should fail
+        // Refining -> Refining should fail
         let err = handle
             .send_command(Command::TransitionPhase {
-                target: SpecPhase::Active,
+                target: SpecPhase::Refining,
             })
             .await
             .unwrap_err();
@@ -828,7 +844,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transition_phase_brainstorming_active_brainstorming() {
+    async fn transition_phase_brainstorming_refining_brainstorming() {
         let spec_id = Ulid::new();
         let handle = spawn(spec_id, SpecState::new());
         handle
@@ -840,10 +856,10 @@ mod tests {
             .await
             .unwrap();
 
-        // Brainstorming -> Active -> Brainstorming
+        // Brainstorming -> Refining -> Brainstorming
         handle
             .send_command(Command::TransitionPhase {
-                target: SpecPhase::Active,
+                target: SpecPhase::Refining,
             })
             .await
             .unwrap();
@@ -1172,6 +1188,72 @@ mod tests {
         assert!(
             matches!(result, Err(ActorError::AttachmentAlreadyRemoved(id)) if id == attachment_id)
         );
+    }
+
+    #[tokio::test]
+    async fn actor_broadcasts_streaming_delta() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        let mut rx = handle.subscribe();
+
+        let events = handle
+            .send_command(Command::StreamDelta {
+                agent_id: "manager-1".to_string(),
+                text: "Hi".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        match &events[0].payload {
+            EventPayload::StreamingDelta { agent_id, text } => {
+                assert_eq!(agent_id, "manager-1");
+                assert_eq!(text, "Hi");
+            }
+            _ => panic!("expected StreamingDelta"),
+        }
+
+        let broadcast = rx.recv().await.unwrap();
+        match &broadcast.payload {
+            EventPayload::StreamingDelta { .. } => {}
+            _ => panic!("expected StreamingDelta broadcast"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ephemeral_events_get_zero_event_id() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+
+        // Create spec first (uses event IDs 1 and 2)
+        handle
+            .send_command(Command::CreateSpec {
+                title: "Ephemeral Test".to_string(),
+                one_liner: "t".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        // Send a streaming delta — ephemeral, should get event_id 0
+        let events = handle
+            .send_command(Command::StreamDelta {
+                agent_id: "manager-1".to_string(),
+                text: "Hello".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, 0, "ephemeral events should get event_id 0");
+
+        // Send a durable event — should get event_id 3 (no gap from ephemeral)
+        let events = handle
+            .send_command(Command::UpdateCanvas {
+                content: "<p>test</p>".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(events[0].event_id, 3, "durable event ID should not be affected by ephemeral events");
     }
 
     #[tokio::test]

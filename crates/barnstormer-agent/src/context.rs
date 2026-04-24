@@ -243,6 +243,12 @@ fn describe_event_payload(payload: &EventPayload) -> String {
         EventPayload::ContextRemoved { attachment_id } => {
             format!("context attachment {} removed", attachment_id)
         }
+        EventPayload::StreamingDelta { agent_id, .. } => {
+            format!("streaming delta from {}", agent_id)
+        }
+        EventPayload::StreamingToolActivity { agent_id, activity } => {
+            format!("{}: {}", agent_id, activity)
+        }
     }
 }
 
