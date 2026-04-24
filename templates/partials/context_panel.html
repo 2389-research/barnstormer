@@ -3,14 +3,14 @@
 
 <div class="chat-panel" id="context-panel">
     <div class="chat-panel-header">
-        <span class="chat-panel-title">Context</span>
-        <button class="btn btn-sm" id="context-preview-toggle" style="margin-left: auto;"
+        <button class="btn btn-sm" id="context-preview-toggle"
                 hx-get="/web/specs/{{ spec_id }}/context-preview"
                 hx-target="#context-preview"
                 hx-swap="innerHTML"
                 onclick="var p=document.getElementById('context-preview'); p.classList.toggle('hidden'); this.textContent = p.classList.contains('hidden') ? 'Preview context' : 'Hide preview';">
             Preview context
         </button>
+        <span class="chat-panel-title" style="margin-left: auto;">Context</span>
     </div>
 
     <div class="chat-transcript" style="overflow-y: auto; flex: 1; padding: var(--spacing-md);">
