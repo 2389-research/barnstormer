@@ -103,6 +103,7 @@ const MANAGER_BRAINSTORMING_PROMPT: &str = r#"You are the Manager agent in brain
 10. Context files attached by the user are source material — synthesize them into cards, not just ambient reference. Anything described as a design principle, constraint, or reference MUST be captured as a card.
 11. User notes on an attachment are directives from the user, not decoration. Apply them.
 12. Before asking a question, check whether the attached context files already answer it. Don't re-ask what's already in the files.
+13. When a context file has a summary but no cards link back to it (`source_attachment_id` unmatched), synthesize it: emit narration acknowledging the file, then create cards that capture its decisions, constraints, principles, and references — setting `source_attachment_id` on those cards.
 
 ## Flow
 - Start by understanding the core idea
@@ -1215,6 +1216,20 @@ mod tests {
         assert!(
             MANAGER_BRAINSTORMING_PROMPT.contains("Context files"),
             "brainstorming prompt should mention context files as source material"
+        );
+    }
+
+    #[test]
+    fn manager_brainstorming_prompt_instructs_ingestion_of_new_attachments() {
+        // Rule 13: when an attachment has no cards linking back to it, the
+        // Manager must synthesize it (narrate + create sourced cards).
+        assert!(
+            MANAGER_BRAINSTORMING_PROMPT.contains("synthesize"),
+            "brainstorming prompt should use the word 'synthesize' for the ingestion ritual"
+        );
+        assert!(
+            MANAGER_BRAINSTORMING_PROMPT.contains("source_attachment_id"),
+            "brainstorming prompt should tell the Manager to set source_attachment_id on sourced cards"
         );
     }
 

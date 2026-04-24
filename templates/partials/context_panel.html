@@ -44,6 +44,9 @@
                     <span class="collapsed-notes" style="display: block; font-size: 0.78rem; color: var(--text-muted); font-style: italic; margin-top: var(--spacing-xs); word-break: break-word;">{{ n }}</span>
                 {% when None %}
                 {% endmatch %}
+                {% if att.summary.is_some() && att.card_count == 0 %}
+                <span class="context-card-awaiting" style="display: block; font-size: 0.78rem; color: var(--text-muted); margin-top: var(--spacing-xs);">Not yet synthesized</span>
+                {% endif %}
             </summary>
 
             <div class="context-card-body" style="margin-top: var(--spacing-sm);">

@@ -4112,6 +4112,81 @@ mod tests {
     }
 
     #[test]
+    fn context_panel_shows_not_yet_synthesized_when_summarized_but_no_cards() {
+        // An attachment that has a summary but hasn't been ingested yet should
+        // display a subtle hint so the user knows the Manager is expected to
+        // process it.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "vibes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("design vibes".to_string()),
+                summary_html: Some("<p>design vibes</p>\n".to_string()),
+                user_notes: None,
+                card_count: 0,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("Not yet synthesized"),
+            "panel should show 'Not yet synthesized' when summary is Some and card_count is 0"
+        );
+    }
+
+    #[test]
+    fn context_panel_hides_not_yet_synthesized_when_summary_pending() {
+        // Before a summary exists, the hint would be confusing — hide it.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "pending.txt".to_string(),
+                extension: "txt".to_string(),
+                size_display: "500 B".to_string(),
+                added_display: "12:35".to_string(),
+                summary: None,
+                summary_html: None,
+                user_notes: None,
+                card_count: 0,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            !rendered.contains("Not yet synthesized"),
+            "panel should not show the synthesis hint before a summary exists"
+        );
+    }
+
+    #[test]
+    fn context_panel_hides_not_yet_synthesized_when_cards_present() {
+        // Once the Manager has sourced cards from the attachment, the hint
+        // should disappear.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "vibes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("design vibes".to_string()),
+                summary_html: Some("<p>design vibes</p>\n".to_string()),
+                user_notes: None,
+                card_count: 2,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            !rendered.contains("Not yet synthesized"),
+            "panel should not show the synthesis hint once cards reference the attachment"
+        );
+    }
+
+    #[test]
     fn context_panel_hides_card_count_when_zero() {
         // Don't clutter the collapsed header with "0 cards" — just omit the
         // pill entirely when no cards reference the attachment.
