@@ -2118,6 +2118,30 @@ details[open] > .context-card-head .collapsed-notes {
   display: none;
 }
 
+/* Context panel footer: full-width "+ Add file" affordance. */
+.context-panel-footer {
+  padding: var(--spacing-sm);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.context-add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+
+/* Scrollable preview overlay — bounded height, scrolls internally. */
+.context-preview-overlay {
+  padding: var(--spacing-sm);
+  border-top: 1px solid var(--border);
+  max-height: 40vh;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
 /* Tooltip trigger — wraps an inline target; shows a nested .tooltip on hover. */
 .has-tooltip {
   position: relative;

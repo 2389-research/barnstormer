@@ -4044,6 +4044,44 @@ mod tests {
     }
 
     #[test]
+    fn context_panel_upload_form_lives_in_footer_not_header() {
+        // The "+ Add file" upload form belongs in the panel footer (under the
+        // attachment list), not in the header. Structural check: the upload
+        // form must appear after </div> that closes the chat-panel-header, AND
+        // must be inside a .context-panel-footer element.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![],
+        };
+        let rendered = tmpl.render().unwrap();
+        let form_idx = rendered.find(r#"id="context-upload-form""#).expect("upload form exists");
+        let footer_idx = rendered.find(r#"class="context-panel-footer""#).expect("footer exists");
+        let header_end = rendered.find("chat-panel-header").and_then(|i|
+            rendered[i..].find("</div>").map(|e| i + e + "</div>".len())
+        ).expect("header exists and closes");
+        assert!(form_idx > header_end, "upload form must be after the header");
+        assert!(form_idx > footer_idx, "upload form must be inside the footer");
+    }
+
+    #[test]
+    fn context_panel_preview_toggle_updates_button_text() {
+        // The preview toggle's onclick handler must also update the button's
+        // text so the label matches its state ("Preview context" / "Hide preview").
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![],
+        };
+        let rendered = tmpl.render().unwrap();
+        // Find the preview toggle button's onclick attribute.
+        assert!(rendered.contains("id=\"context-preview-toggle\""),
+            "preview toggle should have a stable id");
+        assert!(rendered.contains("this.textContent ="),
+            "preview toggle onclick must update textContent");
+        assert!(rendered.contains("'Hide preview'"),
+            "preview toggle onclick must include the open-state label");
+    }
+
+    #[test]
     fn render_markdown_does_not_passthrough_raw_script_tag() {
         // Explicit safety test: pulldown-cmark is configured so raw HTML in
         // markdown input does NOT reach the output as HTML tags.
