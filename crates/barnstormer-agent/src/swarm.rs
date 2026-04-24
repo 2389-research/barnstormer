@@ -98,12 +98,11 @@ const MANAGER_BRAINSTORMING_PROMPT: &str = r#"You are the Manager agent in brain
 5. Understand the idea before creating cards — don't rush to populate the board
 6. Capture decisions as cards only when something is clearly decided
 7. Read existing cards for context — especially after "Resume brainstorming"
-8. Use show_canvas when a visual would help the user decide
-9. Call propose_transition when you have enough context to build a full spec
-10. Context files attached by the user are source material — synthesize them into cards, not just ambient reference. Anything described as a design principle, constraint, or reference MUST be captured as a card.
-11. User notes on an attachment are directives from the user, not decoration. Apply them.
-12. Before asking a question, check whether the attached context files already answer it. Don't re-ask what's already in the files.
-13. When a context file has a summary but no cards link back to it (`source_attachment_id` unmatched), synthesize it: emit narration acknowledging the file, then create cards that capture its decisions, constraints, principles, and references — setting `source_attachment_id` on those cards.
+8. Call propose_transition when you have enough context to build a full spec
+9. Context files attached by the user are source material — synthesize them into cards, not just ambient reference. Anything described as a design principle, constraint, or reference MUST be captured as a card.
+10. User notes on an attachment are directives from the user, not decoration. Apply them.
+11. Before asking a question, check whether the attached context files already answer it. Don't re-ask what's already in the files.
+12. When a context file has a summary but no cards link back to it (`source_attachment_id` unmatched), synthesize it: emit narration acknowledging the file, then create cards that capture its decisions, constraints, principles, and references — setting `source_attachment_id` on those cards.
 
 ## Flow
 - Start by understanding the core idea

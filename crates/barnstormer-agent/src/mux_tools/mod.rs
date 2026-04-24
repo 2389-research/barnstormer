@@ -1,5 +1,5 @@
 // ABOUTME: Module for domain-specific tools implementing the mux Tool trait.
-// ABOUTME: Provides a registry factory that creates and registers all 9 spec tools.
+// ABOUTME: Provides a registry factory that creates and registers all spec tools.
 
 mod ask_user;
 mod emit_diff_summary;
@@ -7,7 +7,6 @@ mod emit_narration;
 mod propose_transition;
 mod read_state;
 mod retrieve_context;
-mod show_canvas;
 mod write_commands;
 
 pub use ask_user::{AskUserBooleanTool, AskUserFreeformTool, AskUserMultipleChoiceTool};
@@ -16,7 +15,6 @@ pub use emit_narration::EmitNarrationTool;
 pub use propose_transition::ProposeTransitionTool;
 pub use read_state::ReadStateTool;
 pub use retrieve_context::RetrieveContextTool;
-pub use show_canvas::ShowCanvasTool;
 pub use write_commands::WriteCommandsTool;
 
 use std::path::PathBuf;
@@ -32,7 +30,7 @@ use barnstormer_core::actor::SpecActorHandle;
 ///
 /// The returned registry contains: read_state, write_commands, emit_narration,
 /// emit_diff_summary, ask_user_boolean, ask_user_multiple_choice, ask_user_freeform,
-/// show_canvas, propose_transition, retrieve_context.
+/// propose_transition, retrieve_context.
 pub async fn build_registry(
     actor: Arc<SpecActorHandle>,
     question_pending: Arc<AtomicBool>,
@@ -94,12 +92,6 @@ pub async fn build_registry(
         .await;
 
     registry
-        .register(show_canvas::ShowCanvasTool {
-            actor: Arc::clone(&actor),
-        })
-        .await;
-
-    registry
         .register(propose_transition::ProposeTransitionTool {
             actor: Arc::clone(&actor),
             question_pending: Arc::clone(&question_pending),
@@ -131,7 +123,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_registry_registers_all_10_tools() {
+    async fn build_registry_registers_all_9_tools() {
         let (_id, handle) = make_test_actor();
         let registry = build_registry(
             Arc::new(handle),
@@ -142,7 +134,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(registry.count().await, 10);
+        assert_eq!(registry.count().await, 9);
 
         let names = registry.list().await;
         assert!(names.contains(&"read_state".to_string()));
@@ -152,7 +144,6 @@ mod tests {
         assert!(names.contains(&"ask_user_boolean".to_string()));
         assert!(names.contains(&"ask_user_multiple_choice".to_string()));
         assert!(names.contains(&"ask_user_freeform".to_string()));
-        assert!(names.contains(&"show_canvas".to_string()));
         assert!(names.contains(&"propose_transition".to_string()));
         assert!(names.contains(&"retrieve_context".to_string()));
     }
@@ -177,7 +168,6 @@ mod tests {
             "ask_user_boolean",
             "ask_user_multiple_choice",
             "ask_user_freeform",
-            "show_canvas",
             "propose_transition",
             "retrieve_context",
         ] {
