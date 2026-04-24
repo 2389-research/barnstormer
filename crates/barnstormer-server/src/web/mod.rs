@@ -7101,4 +7101,22 @@ mod tests {
             "newest card must render first (reverse chrono)"
         );
     }
+
+    #[tokio::test]
+    async fn brainstorming_layout_has_sidebar_tabs_and_no_canvas() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(Request::post("/web/specs").header("content-type", MP_CONTENT_TYPE).body(mp_description_body("Sidebar tabs test")).unwrap()).await.unwrap();
+        let spec_id = { let actors = state.actors.read().await; *actors.keys().next().unwrap() };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2.oneshot(Request::get(&format!("/web/specs/{}", spec_id)).header("HX-Request", "true").body(Body::empty()).unwrap()).await.unwrap();
+        let html = String::from_utf8(axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
+
+        assert!(html.contains("sidebar-tab-toggle"), "must render tab toggles");
+        assert!(html.contains("data-tab=\"cards\""), "must have cards tab button");
+        assert!(html.contains("data-tab=\"context\""), "must have context tab button");
+        assert!(html.contains("cards-feed"), "cards panel must load feed");
+        assert!(!html.contains("agent-canvas"), "canvas is deleted — element must not render");
+    }
 }

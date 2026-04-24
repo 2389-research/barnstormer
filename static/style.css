@@ -2176,3 +2176,70 @@ details[open] > .context-card-head .collapsed-notes {
     color: var(--text-muted);
     margin-top: var(--spacing-xs);
 }
+
+/* ============================================================
+   Brainstorming sidebar tabs (Task 2 of IA redesign)
+   ============================================================ */
+
+.sidebar-tabs {
+    display: flex;
+    flex-direction: column;
+    min-width: 320px;
+    max-width: 380px;
+    border-left: 1px solid var(--border);
+    background: var(--bg-surface);
+}
+
+.sidebar-tab-toggles {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+}
+
+.sidebar-tab-toggle {
+    flex: 1;
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-xs);
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+
+.sidebar-tab-toggle.active {
+    color: var(--text-primary);
+    border-bottom-color: var(--text-primary);
+}
+
+.sidebar-tab-badge {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: transparent;
+    transition: background 120ms ease;
+}
+
+.sidebar-tab-toggle.has-notification .sidebar-tab-badge {
+    background: var(--text-primary);
+}
+
+.sidebar-tab-panel {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+/* Cards feed items */
+.cards-feed { padding: var(--spacing-md); }
+.cards-feed-empty { text-align: center; color: var(--text-muted); padding: var(--spacing-lg); }
+.cards-feed-empty-hint { font-size: 0.82rem; margin-top: var(--spacing-sm); }
+.card-feed-item { margin-bottom: var(--spacing-sm); padding: var(--spacing-sm); border-radius: 4px; background: var(--bg-card); }
+.card-feed-head { display: flex; align-items: center; gap: var(--spacing-sm); cursor: pointer; }
+.card-feed-title { flex: 1; font-weight: 500; word-break: break-word; }
+.card-feed-body { margin-top: var(--spacing-sm); font-size: 0.9rem; }
+.card-feed-meta { margin-top: var(--spacing-xs); font-size: 0.75rem; color: var(--text-muted); }

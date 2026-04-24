@@ -2,12 +2,11 @@
 {# ABOUTME: Loaded into #workspace when a spec is selected; layout varies by phase. #}
 
 {% if phase == "brainstorming" %}
-{# Brainstorming layout: command bar + stepper + full-width chat #}
+{# Brainstorming layout: chat dominant, right sidebar with Cards | Context tabs. #}
 <div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream"
      data-view="brainstorming">
 {# Hidden sentinel: re-fetches the whole workspace when the phase changes.
-   Kept as a separate element so hx-target="#workspace" does not inherit onto
-   siblings like #agent-controls and #canvas (which need to target themselves). #}
+   Kept separate so hx-target="#workspace" does not inherit onto siblings. #}
 <span id="sse-phase-sub" style="display:none"
       hx-trigger="sse:phase_transitioned"
       hx-get="/web/specs/{{ spec_id }}"
@@ -21,12 +20,6 @@
         <span class="command-bar-subtitle">{{ one_liner }}</span>
     </div>
     <div class="command-bar-right">
-        <button id="btn-toggle-context" class="btn btn-sm"
-                onclick="
-                    var rail = document.getElementById('context-rail');
-                    rail.classList.toggle('hidden');
-                    this.textContent = rail.classList.contains('hidden') ? 'Show context' : 'Hide context';
-                ">Hide context</button>
         <div id="agent-controls" hx-get="/web/specs/{{ spec_id }}/agents/status"
              hx-trigger="load, sse:agent_step_started, sse:agent_step_finished, refreshAgents from:body"
              hx-swap="innerHTML"></div>
@@ -40,11 +33,25 @@
           hx-get="/web/specs/{{ spec_id }}/chat-panel"
           hx-trigger="load" hx-swap="innerHTML">
     </main>
-    {% include "partials/agent_canvas.html" %}
-    <aside class="chat-rail" id="context-rail"
-           hx-get="/web/specs/{{ spec_id }}/context-panel"
-           hx-trigger="load, sse:context_attached, sse:context_summarized, sse:context_notes_updated, sse:context_removed"
-           hx-swap="innerHTML">
+    <aside class="sidebar-tabs" id="brainstorm-sidebar">
+        <div class="sidebar-tab-toggles" role="tablist">
+            <button type="button" class="sidebar-tab-toggle active" data-tab="cards" role="tab" aria-selected="true">
+                <span class="sidebar-tab-label">Cards</span>
+                <span class="sidebar-tab-badge" aria-hidden="true"></span>
+            </button>
+            <button type="button" class="sidebar-tab-toggle" data-tab="context" role="tab" aria-selected="false">
+                <span class="sidebar-tab-label">Context</span>
+                <span class="sidebar-tab-badge" aria-hidden="true"></span>
+            </button>
+        </div>
+        <div class="sidebar-tab-panel" data-panel="cards"
+             hx-get="/web/specs/{{ spec_id }}/cards-feed"
+             hx-trigger="load" hx-swap="innerHTML">
+        </div>
+        <div class="sidebar-tab-panel" data-panel="context" style="display:none;"
+             hx-get="/web/specs/{{ spec_id }}/context-panel"
+             hx-trigger="load" hx-swap="innerHTML">
+        </div>
     </aside>
 </div>
 <div id="agents-offline-banner" class="agents-offline-banner">
@@ -59,7 +66,8 @@
 </div>
 
 <script>
-    // Polling fallback: if SSE drops, check phase every 15 seconds
+    // Polling fallback: if SSE drops, check phase every 15 seconds.
+    // Tab switching + notification JS is added in Task 3.
     (function() {
         var currentPhase = '{{ phase }}';
         setInterval(function() {
@@ -70,7 +78,7 @@
                         htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
                     }
                 })
-                .catch(function() {}); // silently ignore network errors
+                .catch(function() {});
         }, 15000);
     })();
 </script>
