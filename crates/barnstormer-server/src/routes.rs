@@ -65,6 +65,7 @@ pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
             "/web/specs/{id}/canvas-fragment",
             get(web::canvas_fragment),
         )
+        .route("/web/specs/{id}/cards-feed", get(web::cards_feed))
         .route(
             "/web/specs/{id}/context",
             post(web::upload_context).layer(DefaultBodyLimit::max(25 * 1024 * 1024)),

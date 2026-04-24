@@ -1001,6 +1001,52 @@ pub async fn canvas_fragment(
     .into_response()
 }
 
+/// Cards feed partial: reverse-chronological list of all captured cards for the
+/// brainstorming sidebar. Self-refreshes on card SSE events.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/cards_feed.html")]
+pub struct CardsFeedTemplate {
+    pub spec_id: String,
+    pub cards: Vec<CardData>,
+}
+
+/// GET /web/specs/{id}/cards-feed - Render the flat card list for the brainstorm sidebar.
+pub async fn cards_feed(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    let spec_state = handle.read_state().await;
+    // Newest-first: sort by updated_at descending. Break ties with card_id
+    // (ULID) descending so ordering is deterministic even when cards created
+    // in the same clock tick share a formatted updated_at string.
+    let mut sorted: Vec<&barnstormer_core::Card> = spec_state.cards.values().collect();
+    sorted.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then_with(|| b.card_id.cmp(&a.card_id))
+    });
+    let cards: Vec<CardData> = sorted.into_iter().map(CardData::from_card).collect();
+
+    CardsFeedTemplate { spec_id: id, cards }.into_response()
+}
+
 /// Document view template.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/document.html")]
@@ -6949,6 +6995,110 @@ mod tests {
         assert_eq!(
             json.get("canvas_content").and_then(|v| v.as_str()),
             Some("<p>Check</p>")
+        );
+    }
+
+    #[tokio::test]
+    async fn cards_feed_returns_empty_state_when_no_cards() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Cards feed empty"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}/cards-feed", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let html = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(
+            html.contains("No cards captured yet"),
+            "empty state must hint at expected behavior: {}",
+            html
+        );
+        assert!(
+            html.contains("sse:card_created"),
+            "must re-trigger on card SSE events"
+        );
+    }
+
+    #[tokio::test]
+    async fn cards_feed_renders_cards_newest_first() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Cards feed ordering"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        {
+            let actors = state.actors.read().await;
+            let handle = actors.get(&spec_id).unwrap();
+            for title in ["First", "Second", "Third"] {
+                handle
+                    .send_command(Command::CreateCard {
+                        card_type: "idea".to_string(),
+                        title: title.to_string(),
+                        body: None,
+                        lane: None,
+                        created_by: "manager".to_string(),
+                        source_attachment_id: None,
+                    })
+                    .await
+                    .unwrap();
+            }
+        }
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}/cards-feed", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        let third_pos = html.find("Third").expect("Third missing");
+        let first_pos = html.find("First").expect("First missing");
+        assert!(
+            third_pos < first_pos,
+            "newest card must render first (reverse chrono)"
         );
     }
 }
