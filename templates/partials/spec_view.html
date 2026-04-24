@@ -68,9 +68,50 @@
 </div>
 
 <script>
-    // Polling fallback: if SSE drops, check phase every 15 seconds.
-    // Tab switching + notification JS is added in Task 3.
     (function() {
+        var sidebar = document.getElementById('brainstorm-sidebar');
+        if (!sidebar) return;
+
+        var toggles = sidebar.querySelectorAll('.sidebar-tab-toggle');
+        var panels = sidebar.querySelectorAll('.sidebar-tab-panel');
+
+        function activate(tabName) {
+            toggles.forEach(function(t) {
+                var on = t.getAttribute('data-tab') === tabName;
+                t.classList.toggle('active', on);
+                t.setAttribute('aria-selected', on ? 'true' : 'false');
+                if (on) t.classList.remove('has-notification');
+            });
+            panels.forEach(function(p) {
+                p.style.display = p.getAttribute('data-panel') === tabName ? '' : 'none';
+            });
+        }
+
+        function notify(tabName) {
+            toggles.forEach(function(t) {
+                if (t.getAttribute('data-tab') === tabName && !t.classList.contains('active')) {
+                    t.classList.add('has-notification');
+                }
+            });
+        }
+
+        toggles.forEach(function(t) {
+            t.addEventListener('click', function() { activate(t.getAttribute('data-tab')); });
+        });
+
+        // SSE notification wiring — the sidebar panels' hx-trigger wakes up these event
+        // names on the EventSource (see Task 2 fix), so bubbled CustomEvents reach us here.
+        var compositor = document.querySelector('.spec-compositor');
+        if (compositor) {
+            ['card_created', 'card_updated', 'card_moved', 'card_deleted'].forEach(function(e) {
+                compositor.addEventListener('sse:' + e, function() { notify('cards'); });
+            });
+            ['context_attached', 'context_summarized', 'context_notes_updated', 'context_removed'].forEach(function(e) {
+                compositor.addEventListener('sse:' + e, function() { notify('context'); });
+            });
+        }
+
+        // Polling fallback: if SSE drops, check phase every 15 seconds.
         var currentPhase = '{{ phase }}';
         setInterval(function() {
             fetch('/web/specs/{{ spec_id }}/phase-check')

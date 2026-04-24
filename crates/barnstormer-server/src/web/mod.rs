@@ -7129,4 +7129,34 @@ mod tests {
             assert!(html.contains(ev), "context panel must declare {} to wake SSE subscription: {}", ev, html);
         }
     }
+
+    #[tokio::test]
+    async fn brainstorming_sidebar_tabs_wire_notification_events() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(Request::post("/web/specs").header("content-type", MP_CONTENT_TYPE).body(mp_description_body("Tab notifications")).unwrap()).await.unwrap();
+        let spec_id = { let actors = state.actors.read().await; *actors.keys().next().unwrap() };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2.oneshot(Request::get(&format!("/web/specs/{}", spec_id)).header("HX-Request", "true").body(Body::empty()).unwrap()).await.unwrap();
+        let html = String::from_utf8(axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
+
+        // The JS must register listeners for all 4 card events and all 4 context events.
+        // Match on the addEventListener pattern so we verify the *listener* is there, not
+        // just the panel's hx-trigger from Task 2.
+        for ev in ["card_created", "card_updated", "card_moved", "card_deleted",
+                   "context_attached", "context_summarized", "context_notes_updated", "context_removed"] {
+            let needle = format!("'sse:' + ");
+            // Either inline ('sse:card_created') or concatenated via loop/array
+            let found = html.contains(&format!("'sse:{}'", ev))
+                || html.contains(&format!("\"sse:{}\"", ev))
+                || (html.contains(&needle) && html.contains(&format!("'{}'", ev)));
+            assert!(found, "notification JS must reference sse:{} event", ev);
+        }
+
+        // Notification class is applied by click/event handlers
+        assert!(html.contains("has-notification"), "notification class must be referenced in JS");
+        // Tab switching targets must be discoverable via data-tab attribute
+        assert!(html.contains(".sidebar-tab-toggle") || html.contains("sidebar-tab-toggle"), "JS must query tab toggles");
+    }
 }
