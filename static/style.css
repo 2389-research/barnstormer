@@ -2118,6 +2118,23 @@ details[open] > .context-card-head .collapsed-notes {
   display: none;
 }
 
+/* Tooltip trigger — wraps an inline target; shows a nested .tooltip on hover. */
+.has-tooltip {
+  position: relative;
+  display: inline-flex;
+}
+.has-tooltip:hover > .tooltip {
+  display: block;
+}
+.context-pill-tooltip {
+  left: 50%;
+  transform: translateX(-50%);
+}
+.context-pill-tooltip::before {
+  left: 50%;
+  margin-left: -5px;
+}
+
 /* Small variant of .form-hint used under the context-file input. */
 .form-hint-small {
     font-size: 0.72rem;

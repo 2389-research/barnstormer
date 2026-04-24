@@ -3923,6 +3923,14 @@ mod tests {
         };
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("in context"), "summary present should show 'in context' pill");
+        // The hover hint must use the shared .tooltip component rather than a
+        // native `title=` attribute, so it renders as a styled popover.
+        assert!(rendered.contains(r#"class="has-tooltip""#),
+            "in-context pill must be wrapped in .has-tooltip");
+        assert!(rendered.contains(r#"class="tooltip context-pill-tooltip""#),
+            "in-context hint must use the .tooltip component");
+        assert!(rendered.contains("Included in agent context"),
+            "tooltip text must be present");
     }
 
     #[test]
@@ -3943,6 +3951,8 @@ mod tests {
         };
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("summarizing"), "summary pending should show 'summarizing' pill");
+        assert!(rendered.contains("Summary in progress"),
+            "tooltip text must be present on the summarizing pill");
     }
 
     #[test]
@@ -3975,32 +3985,6 @@ mod tests {
         let summary_block = &rendered[summary_start..summary_end];
         assert!(!summary_block.contains("<div"),
             "<summary> must not contain <div> (block content breaks the toggle); got:\n{summary_block}");
-    }
-
-    #[test]
-    fn context_panel_summary_title_attribute_contains_raw_plain_text() {
-        // The collapsed-state tooltip is the native `title` attribute on the
-        // <summary> element. Its contents should be the raw summary text
-        // (browsers render `title` as plain text, so no markup needed).
-        let tmpl = ContextPanelTemplate {
-            spec_id: "01HTEST".to_string(),
-            attachments: vec![ContextPanelItem {
-                attachment_id: "01HATT".to_string(),
-                filename: "notes.md".to_string(),
-                extension: "md".to_string(),
-                size_display: "1.2 KB".to_string(),
-                added_display: "12:34".to_string(),
-                summary: Some("plain-text tooltip body".to_string()),
-                summary_html: Some("<p>plain-text tooltip body</p>\n".to_string()),
-                user_notes: None,
-            }],
-        };
-        let rendered = tmpl.render().unwrap();
-        assert!(
-            rendered.contains(r#"title="plain-text tooltip body""#),
-            "summary element should carry title attribute with raw summary text, got: {}",
-            rendered
-        );
     }
 
     #[test]

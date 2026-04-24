@@ -28,16 +28,21 @@
     <div class="chat-transcript" style="overflow-y: auto; flex: 1; padding: var(--spacing-md);">
         {% for att in attachments %}
         <details class="card context-card" id="att-{{ att.attachment_id }}" style="margin-bottom: var(--spacing-sm);">
-            <summary class="context-card-head"
-                     title="{% match att.summary %}{% when Some with (s) %}{{ s }}{% when None %}No summary yet{% endmatch %}">
+            <summary class="context-card-head">
                 <span style="display: flex; align-items: center; gap: var(--spacing-sm);">
                     <span class="card-type badge-note">{{ att.extension }}</span>
                     <span style="flex: 1; font-weight: 500; word-break: break-word;">{{ att.filename }}</span>
                     {% match att.summary %}
                     {% when Some with (_) %}
-                        <span class="card-type badge-plan" title="Included in agent context">in context</span>
+                        <span class="has-tooltip">
+                            <span class="card-type badge-plan">in context</span>
+                            <span class="tooltip context-pill-tooltip">Included in agent context</span>
+                        </span>
                     {% when None %}
-                        <span class="card-type badge-note" title="Summary in progress">summarizing&hellip;</span>
+                        <span class="has-tooltip">
+                            <span class="card-type badge-note">summarizing&hellip;</span>
+                            <span class="tooltip context-pill-tooltip">Summary in progress</span>
+                        </span>
                     {% endmatch %}
                 </span>
                 {% match att.user_notes %}
@@ -75,8 +80,7 @@
                             hx-delete="/web/specs/{{ spec_id }}/context/{{ att.attachment_id }}"
                             hx-target="#context-panel"
                             hx-swap="outerHTML"
-                            hx-confirm="Remove this file?"
-                            title="Remove">Remove</button>
+                            hx-confirm="Remove this file?">Remove</button>
                 </div>
             </div>
         </details>
