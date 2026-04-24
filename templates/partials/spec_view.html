@@ -4,11 +4,15 @@
 {% if phase == "brainstorming" %}
 {# Brainstorming layout: command bar + stepper + full-width chat #}
 <div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream"
-     data-view="brainstorming"
-     hx-trigger="sse:phase_transitioned"
-     hx-get="/web/specs/{{ spec_id }}"
-     hx-target="#workspace"
-     hx-swap="innerHTML">
+     data-view="brainstorming">
+{# Hidden sentinel: re-fetches the whole workspace when the phase changes.
+   Kept as a separate element so hx-target="#workspace" does not inherit onto
+   siblings like #agent-controls and #canvas (which need to target themselves). #}
+<span id="sse-phase-sub" style="display:none"
+      hx-trigger="sse:phase_transitioned"
+      hx-get="/web/specs/{{ spec_id }}"
+      hx-target="#workspace"
+      hx-swap="innerHTML"></span>
 
 <header class="command-bar">
     <div class="command-bar-left">
@@ -73,11 +77,15 @@
 
 {% else if phase == "refining" %}
 {# Refining layout: command bar + stepper + view toggles + canvas + chat rail #}
-<div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream"
-     hx-trigger="sse:phase_transitioned"
-     hx-get="/web/specs/{{ spec_id }}"
-     hx-target="#workspace"
-     hx-swap="innerHTML">
+<div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
+{# Hidden sentinel: re-fetches the whole workspace when the phase changes.
+   Kept as a separate element so hx-target="#workspace" does not inherit onto
+   siblings like #canvas (which needs to target itself). #}
+<span id="sse-phase-sub" style="display:none"
+      hx-trigger="sse:phase_transitioned"
+      hx-get="/web/specs/{{ spec_id }}"
+      hx-target="#workspace"
+      hx-swap="innerHTML"></span>
 
 <header class="command-bar">
     <div class="command-bar-left">
@@ -218,11 +226,15 @@
 
 {% else %}
 {# Complete layout: read-only export view #}
-<div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream"
-     hx-trigger="sse:phase_transitioned"
-     hx-get="/web/specs/{{ spec_id }}"
-     hx-target="#workspace"
-     hx-swap="innerHTML">
+<div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
+{# Hidden sentinel: re-fetches the whole workspace when the phase changes.
+   Kept as a separate element so hx-target="#workspace" does not inherit onto
+   siblings like #canvas (which needs to target itself). #}
+<span id="sse-phase-sub" style="display:none"
+      hx-trigger="sse:phase_transitioned"
+      hx-get="/web/specs/{{ spec_id }}"
+      hx-target="#workspace"
+      hx-swap="innerHTML"></span>
 
 <header class="command-bar">
     <div class="command-bar-left">
