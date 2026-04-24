@@ -215,6 +215,7 @@ mod tests {
                 body: None,
                 lane: None,
                 created_by: "agent".to_string(),
+                source_attachment_id: None,
             })
             .await
             .unwrap();

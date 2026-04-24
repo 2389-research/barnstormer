@@ -122,7 +122,8 @@ fn tool_usage_guide(agent_id: &str) -> String {
         - write_commands: Submit commands to modify the spec. You MUST wrap commands in a {{\"commands\": [...]}} object. Example:\n\
           {{\"commands\": [{{\"type\": \"CreateCard\", \"card_type\": \"idea\", \"title\": \"My Idea\", \"body\": \"Details here\", \"lane\": null, \"created_by\": \"{agent_id}\"}}]}}\n\
           Individual command types:\n\
-          * {{\"type\": \"CreateCard\", \"card_type\": \"idea\", \"title\": \"My Idea\", \"body\": \"Details here\", \"lane\": null, \"created_by\": \"{agent_id}\"}}\n\
+          * {{\"type\": \"CreateCard\", \"card_type\": \"idea\", \"title\": \"My Idea\", \"body\": \"Details here\", \"lane\": null, \"created_by\": \"{agent_id}\", \"source_attachment_id\": null}}\n\
+            - source_attachment_id is optional: set it to an attachment ULID (from the Context Files section) when the card is synthesized from that attachment; leave null otherwise.\n\
           * {{\"type\": \"UpdateSpecCore\", \"description\": \"A detailed description\", \"constraints\": null, \"success_criteria\": null, \"risks\": null, \"notes\": null, \"title\": null, \"one_liner\": null, \"goal\": null}}\n\
           * {{\"type\": \"MoveCard\", \"card_id\": \"<ULID from read_state>\", \"lane\": \"Plan\", \"order\": 1.0, \"updated_by\": \"{agent_id}\"}}\n\
         - emit_narration: Post a message to the activity feed. Use this OFTEN to explain your reasoning.\n\

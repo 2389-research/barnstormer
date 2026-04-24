@@ -7,6 +7,12 @@ use ulid::Ulid;
 
 /// A card within a spec's board. Cards represent discrete units of work,
 /// ideas, decisions, or other categorized content.
+///
+/// `source_attachment_id` is an optional link back to the context attachment
+/// that sourced this card (e.g. a card synthesized from an uploaded design
+/// brief). Cards authored organically during brainstorming leave this field
+/// as None. The field deserializes as None when absent, so pre-existing
+/// events in the log continue to materialize without migration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Card {
     pub card_id: Ulid,
@@ -20,6 +26,8 @@ pub struct Card {
     pub updated_at: DateTime<Utc>,
     pub created_by: String,
     pub updated_by: String,
+    #[serde(default)]
+    pub source_attachment_id: Option<Ulid>,
 }
 
 impl Card {
@@ -39,6 +47,7 @@ impl Card {
             updated_at: now,
             created_by: created_by.clone(),
             updated_by: created_by,
+            source_attachment_id: None,
         }
     }
 }
@@ -83,5 +92,52 @@ mod tests {
         assert_eq!(card.order, deserialized.order);
         assert_eq!(card.created_by, deserialized.created_by);
         assert_eq!(card.updated_by, deserialized.updated_by);
+        assert_eq!(card.source_attachment_id, deserialized.source_attachment_id);
+    }
+
+    #[test]
+    fn card_new_defaults_source_attachment_id_to_none() {
+        let card = Card::new(
+            "idea".to_string(),
+            "Organic".to_string(),
+            "agent-1".to_string(),
+        );
+        assert!(card.source_attachment_id.is_none());
+    }
+
+    #[test]
+    fn card_serde_round_trip_with_source_attachment_id() {
+        let att_id = Ulid::new();
+        let mut card = Card::new(
+            "idea".to_string(),
+            "From file".to_string(),
+            "agent-1".to_string(),
+        );
+        card.source_attachment_id = Some(att_id);
+
+        let json = serde_json::to_string(&card).expect("serialize");
+        let deserialized: Card = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(deserialized.source_attachment_id, Some(att_id));
+    }
+
+    #[test]
+    fn card_deserializes_without_source_attachment_id_field() {
+        // Legacy cards persisted before this field existed must still load.
+        let legacy = serde_json::json!({
+            "card_id": Ulid::new().to_string(),
+            "card_type": "idea",
+            "title": "Legacy",
+            "body": null,
+            "lane": "Ideas",
+            "order": 0.0,
+            "refs": [],
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "created_by": "human",
+            "updated_by": "human"
+        });
+        let card: Card = serde_json::from_value(legacy).expect("deserialize legacy");
+        assert!(card.source_attachment_id.is_none());
     }
 }

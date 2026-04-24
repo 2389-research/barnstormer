@@ -206,6 +206,7 @@ mod tests {
             updated_at: now,
             created_by: created_by.to_string(),
             updated_by: created_by.to_string(),
+            source_attachment_id: None,
         }
     }
 

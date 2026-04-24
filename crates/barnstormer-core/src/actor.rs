@@ -205,7 +205,25 @@ impl SpecActor {
                 body,
                 lane,
                 created_by,
+                source_attachment_id,
             } => {
+                // If the card claims to come from an attachment, that
+                // attachment must exist and not be tombstoned. Rejecting
+                // here prevents dangling provenance links if the Manager
+                // invents or misremembers an ID.
+                if let Some(att_id) = source_attachment_id {
+                    let att = state
+                        .context_attachments
+                        .iter()
+                        .find(|a| a.attachment_id == att_id);
+                    match att {
+                        None => return Err(ActorError::AttachmentNotFound(att_id)),
+                        Some(a) if a.removed => {
+                            return Err(ActorError::AttachmentNotFound(att_id));
+                        }
+                        _ => {}
+                    }
+                }
                 let now = Utc::now();
                 let card = Card {
                     card_id: Ulid::new(),
@@ -219,6 +237,7 @@ impl SpecActor {
                     updated_at: now,
                     created_by: created_by.clone(),
                     updated_by: created_by,
+                    source_attachment_id,
                 };
                 vec![EventPayload::CardCreated { card }]
             }
@@ -533,6 +552,7 @@ mod tests {
                 body: None,
                 lane: None,
                 created_by: "human".to_string(),
+                source_attachment_id: None,
             })
             .await
             .unwrap();
@@ -542,12 +562,135 @@ mod tests {
             EventPayload::CardCreated { card } => {
                 assert_eq!(card.title, "My Card");
                 assert_eq!(card.lane, "Ideas");
+                assert!(card.source_attachment_id.is_none());
             }
             _ => panic!("expected CardCreated event"),
         }
 
         let state = handle.read_state().await;
         assert_eq!(state.cards.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn actor_accepts_create_card_with_valid_source_attachment_id() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+
+        handle
+            .send_command(Command::CreateSpec {
+                title: "s".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            })
+            .await
+            .unwrap();
+
+        let att_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id: att_id,
+                filename: "vibes.md".into(),
+                mime_type: "text/markdown".into(),
+                size_bytes: 128,
+            })
+            .await
+            .unwrap();
+
+        let events = handle
+            .send_command(Command::CreateCard {
+                card_type: "constraint".to_string(),
+                title: "Quiet competence".to_string(),
+                body: Some("From vibes.md".to_string()),
+                lane: None,
+                created_by: "manager-1".to_string(),
+                source_attachment_id: Some(att_id),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        match &events[0].payload {
+            EventPayload::CardCreated { card } => {
+                assert_eq!(card.source_attachment_id, Some(att_id));
+            }
+            _ => panic!("expected CardCreated"),
+        }
+    }
+
+    #[tokio::test]
+    async fn actor_rejects_create_card_with_unknown_source_attachment_id() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "s".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            })
+            .await
+            .unwrap();
+
+        let bogus = Ulid::new();
+        let result = handle
+            .send_command(Command::CreateCard {
+                card_type: "idea".to_string(),
+                title: "Ghost source".to_string(),
+                body: None,
+                lane: None,
+                created_by: "manager-1".to_string(),
+                source_attachment_id: Some(bogus),
+            })
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(ActorError::AttachmentNotFound(id)) if id == bogus
+        ));
+    }
+
+    #[tokio::test]
+    async fn actor_rejects_create_card_when_source_attachment_was_removed() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "s".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            })
+            .await
+            .unwrap();
+
+        let att_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id: att_id,
+                filename: "gone.md".into(),
+                mime_type: "text/markdown".into(),
+                size_bytes: 10,
+            })
+            .await
+            .unwrap();
+        handle
+            .send_command(Command::RemoveContext { attachment_id: att_id })
+            .await
+            .unwrap();
+
+        let result = handle
+            .send_command(Command::CreateCard {
+                card_type: "idea".to_string(),
+                title: "Too late".to_string(),
+                body: None,
+                lane: None,
+                created_by: "manager-1".to_string(),
+                source_attachment_id: Some(att_id),
+            })
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(ActorError::AttachmentNotFound(id)) if id == att_id
+        ));
     }
 
     #[tokio::test]
@@ -725,6 +868,7 @@ mod tests {
                 body: None,
                 lane: None,
                 created_by: "human".to_string(),
+                source_attachment_id: None,
             })
             .await
             .unwrap();
@@ -765,6 +909,7 @@ mod tests {
                 body: None,
                 lane: None,
                 created_by: "human".to_string(),
+                source_attachment_id: None,
             })
             .await
             .unwrap();

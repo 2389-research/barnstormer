@@ -20,6 +20,12 @@
                 <span style="display: flex; align-items: center; gap: var(--spacing-sm);">
                     <span class="card-type badge-note">{{ att.extension }}</span>
                     <span style="flex: 1; font-weight: 500; word-break: break-word;">{{ att.filename }}</span>
+                    {% if att.card_count > 0 %}
+                    <span class="has-tooltip">
+                        <span class="card-type badge-note context-card-count">{{ att.card_count }} card{% if att.card_count != 1 %}s{% endif %}</span>
+                        <span class="tooltip context-pill-tooltip">Cards synthesized from this file</span>
+                    </span>
+                    {% endif %}
                     {% match att.summary %}
                     {% when Some with (_) %}
                         <span class="has-tooltip">

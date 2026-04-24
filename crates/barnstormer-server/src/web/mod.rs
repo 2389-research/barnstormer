@@ -791,6 +791,7 @@ pub async fn create_card(
         body: form.body.filter(|b| !b.is_empty()),
         lane: form.lane.filter(|l| !l.is_empty()),
         created_by: "human".to_string(),
+        source_attachment_id: None,
     };
 
     let _events = match handle.send_command(cmd).await {
@@ -2328,6 +2329,10 @@ struct ContextPanelItem {
     summary: Option<String>,
     summary_html: Option<String>,
     user_notes: Option<String>,
+    /// Number of non-removed cards whose `source_attachment_id` points at this
+    /// attachment. Rendered in the collapsed header so the user can see at a
+    /// glance how much of an attachment the Manager has synthesized.
+    card_count: usize,
 }
 
 /// Human-readable file size (B / KB / MB) for display in the context panel.
@@ -2358,19 +2363,27 @@ async fn render_context_panel_for(state: &SharedState, spec_id: Ulid) -> Respons
         .context_attachments
         .iter()
         .filter(|a| !a.removed)
-        .map(|a| ContextPanelItem {
-            attachment_id: a.attachment_id.to_string(),
-            filename: a.filename.clone(),
-            extension: std::path::Path::new(&a.filename)
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("txt")
-                .to_string(),
-            size_display: format_size(a.size_bytes),
-            added_display: a.added_at.format("%H:%M").to_string(),
-            summary: a.summary.clone(),
-            summary_html: a.summary.as_deref().map(render_markdown),
-            user_notes: a.user_notes.clone(),
+        .map(|a| {
+            let card_count = spec_state
+                .cards
+                .values()
+                .filter(|c| c.source_attachment_id == Some(a.attachment_id))
+                .count();
+            ContextPanelItem {
+                attachment_id: a.attachment_id.to_string(),
+                filename: a.filename.clone(),
+                extension: std::path::Path::new(&a.filename)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("txt")
+                    .to_string(),
+                size_display: format_size(a.size_bytes),
+                added_display: a.added_at.format("%H:%M").to_string(),
+                summary: a.summary.clone(),
+                summary_html: a.summary.as_deref().map(render_markdown),
+                user_notes: a.user_notes.clone(),
+                card_count,
+            }
         })
         .collect();
     drop(spec_state);
@@ -3919,6 +3932,7 @@ mod tests {
                 summary: Some("a short summary".to_string()),
                 summary_html: Some("<p>a short summary</p>\n".to_string()),
                 user_notes: None,
+                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -3947,6 +3961,7 @@ mod tests {
                 summary: None,
                 summary_html: None,
                 user_notes: None,
+                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -3970,6 +3985,7 @@ mod tests {
                 summary: Some("a short summary".to_string()),
                 summary_html: Some("<p>a short summary</p>\n".to_string()),
                 user_notes: None,
+                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -4002,6 +4018,7 @@ mod tests {
                 summary: Some("**bold**".to_string()),
                 summary_html: Some(render_markdown("**bold**")),
                 user_notes: None,
+                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -4028,6 +4045,7 @@ mod tests {
                 summary: Some("a summary".to_string()),
                 summary_html: Some("<p>a summary</p>\n".to_string()),
                 user_notes: None,
+                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -4040,6 +4058,81 @@ mod tests {
             "delete button (hx-delete) must appear after </summary>, got delete at {} vs </summary> at {}",
             delete_idx,
             summary_close_idx,
+        );
+    }
+
+    #[test]
+    fn context_panel_shows_card_count_when_cards_sourced() {
+        // When the Manager has synthesized cards from an attachment, the
+        // collapsed header should show a small count so the user can see
+        // at a glance how much of a file has been processed.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "vibes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("design vibes".to_string()),
+                summary_html: Some("<p>design vibes</p>\n".to_string()),
+                user_notes: None,
+                card_count: 3,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("3 cards"),
+            "panel should show card count when > 0, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn context_panel_pluralizes_single_card_count() {
+        // Singular form when exactly one card references the attachment.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "vibes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("design vibes".to_string()),
+                summary_html: Some("<p>design vibes</p>\n".to_string()),
+                user_notes: None,
+                card_count: 1,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("1 card") && !rendered.contains("1 cards"),
+            "panel should use singular 'card' for count of 1, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn context_panel_hides_card_count_when_zero() {
+        // Don't clutter the collapsed header with "0 cards" — just omit the
+        // pill entirely when no cards reference the attachment.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "vibes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("design vibes".to_string()),
+                summary_html: Some("<p>design vibes</p>\n".to_string()),
+                user_notes: None,
+                card_count: 0,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            !rendered.contains("0 cards") && !rendered.contains("0 card"),
+            "panel should omit the count pill entirely when card_count is 0"
         );
     }
 
