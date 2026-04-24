@@ -7118,5 +7118,15 @@ mod tests {
         assert!(html.contains("data-tab=\"context\""), "must have context tab button");
         assert!(html.contains("cards-feed"), "cards panel must load feed");
         assert!(!html.contains("agent-canvas"), "canvas is deleted — element must not render");
+
+        // SSE subscription contract: these event names MUST appear somewhere in the layout,
+        // otherwise htmx-ext-sse never subscribes to them and Task 3's notification wiring
+        // silently drops every event.
+        for ev in ["sse:card_created", "sse:card_updated", "sse:card_moved", "sse:card_deleted"] {
+            assert!(html.contains(ev), "cards panel must declare {} to wake SSE subscription: {}", ev, html);
+        }
+        for ev in ["sse:context_attached", "sse:context_summarized", "sse:context_notes_updated", "sse:context_removed"] {
+            assert!(html.contains(ev), "context panel must declare {} to wake SSE subscription: {}", ev, html);
+        }
     }
 }

@@ -46,11 +46,13 @@
         </div>
         <div class="sidebar-tab-panel" data-panel="cards"
              hx-get="/web/specs/{{ spec_id }}/cards-feed"
-             hx-trigger="load" hx-swap="innerHTML">
+             hx-trigger="load, sse:card_created, sse:card_updated, sse:card_moved, sse:card_deleted"
+             hx-swap="innerHTML">
         </div>
         <div class="sidebar-tab-panel" data-panel="context" style="display:none;"
              hx-get="/web/specs/{{ spec_id }}/context-panel"
-             hx-trigger="load" hx-swap="innerHTML">
+             hx-trigger="load, sse:context_attached, sse:context_summarized, sse:context_notes_updated, sse:context_removed"
+             hx-swap="innerHTML">
         </div>
     </aside>
 </div>
