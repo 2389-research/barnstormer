@@ -30,7 +30,7 @@
         <details class="card context-card" id="att-{{ att.attachment_id }}" style="margin-bottom: var(--spacing-sm);">
             <summary class="context-card-head"
                      title="{% match att.summary %}{% when Some with (s) %}{{ s }}{% when None %}No summary yet{% endmatch %}">
-                <div style="display: flex; align-items: center; gap: var(--spacing-sm);">
+                <span style="display: flex; align-items: center; gap: var(--spacing-sm);">
                     <span class="card-type badge-note">{{ att.extension }}</span>
                     <span style="flex: 1; font-weight: 500; word-break: break-word;">{{ att.filename }}</span>
                     {% match att.summary %}
@@ -39,10 +39,10 @@
                     {% when None %}
                         <span class="card-type badge-note" title="Summary in progress">summarizing&hellip;</span>
                     {% endmatch %}
-                </div>
+                </span>
                 {% match att.user_notes %}
                 {% when Some with (n) %}
-                    <div class="collapsed-notes" style="font-size: 0.78rem; color: var(--text-muted); font-style: italic; margin-top: var(--spacing-xs); word-break: break-word;">{{ n }}</div>
+                    <span class="collapsed-notes" style="display: block; font-size: 0.78rem; color: var(--text-muted); font-style: italic; margin-top: var(--spacing-xs); word-break: break-word;">{{ n }}</span>
                 {% when None %}
                 {% endmatch %}
             </summary>

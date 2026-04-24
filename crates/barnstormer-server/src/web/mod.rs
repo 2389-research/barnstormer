@@ -3737,6 +3737,16 @@ mod tests {
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("<details"), "card must use <details>");
         assert!(rendered.contains("<summary"), "card must use <summary>");
+        // <summary> accepts only phrasing content — a nested <div> is invalid HTML5
+        // and causes browsers to eject the div from the summary context, breaking
+        // the native toggle. The header must use <span> with display:flex instead.
+        let summary_start = rendered.find("<summary").expect("summary exists");
+        let summary_end = rendered[summary_start..].find("</summary>")
+            .map(|e| summary_start + e)
+            .expect("summary closes");
+        let summary_block = &rendered[summary_start..summary_end];
+        assert!(!summary_block.contains("<div"),
+            "<summary> must not contain <div> (block content breaks the toggle); got:\n{summary_block}");
     }
 
     #[test]
