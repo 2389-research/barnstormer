@@ -2118,6 +2118,17 @@ details[open] > .context-card-head .collapsed-notes {
   display: none;
 }
 
+/* Context panel header: flex row so children can sit at opposite ends. */
+.chat-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
 /* Context panel footer: full-width "+ Add file" affordance. */
 .context-panel-footer {
   padding: var(--spacing-sm);
