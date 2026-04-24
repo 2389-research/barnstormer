@@ -1903,22 +1903,6 @@ html, body {
   max-width: none;
 }
 
-/* Agent canvas container (hidden by default, wired up via canvas feature) */
-#agent-canvas {
-  display: none;
-  flex: 1;
-  min-width: 300px;
-  overflow-y: auto;
-  padding: var(--spacing-md);
-  border-left: 1px solid var(--border-subtle);
-}
-
-/* When agent-canvas is visible, brainstorming body becomes flex row */
-[data-view="brainstorming"] .spec-body {
-  display: flex;
-  flex: 1;
-}
-
 /* Agents-offline: dim when agents aren't running, but still interactive */
 .spec-compositor.agents-offline .spec-body {
     opacity: 0.5;

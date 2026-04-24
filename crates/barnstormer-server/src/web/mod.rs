@@ -364,9 +364,6 @@ pub async fn create_spec(
         SpecPhase::Complete => "complete".to_string(),
     };
 
-    let has_pending_question = spec_state.pending_question.is_some();
-    let canvas_content = spec_state.canvas_content.clone();
-
     let mut response = SpecViewTemplate {
         spec_id: spec_id_str.clone(),
         title: core.title.clone(),
@@ -374,8 +371,6 @@ pub async fn create_spec(
         goal: core.goal.clone(),
         phase,
         lanes,
-        canvas_content,
-        has_pending_question,
     }
     .into_response();
 
@@ -503,8 +498,6 @@ pub struct SpecViewTemplate {
     pub goal: String,
     pub phase: String,
     pub lanes: Vec<LaneData>,
-    pub canvas_content: Option<String>,
-    pub has_pending_question: bool,
 }
 
 impl SpecViewTemplate {
@@ -539,8 +532,6 @@ pub struct SpecPageTemplate {
     pub goal: String,
     pub phase: String,
     pub lanes: Vec<LaneData>,
-    pub canvas_content: Option<String>,
-    pub has_pending_question: bool,
 }
 
 impl SpecPageTemplate {
@@ -610,9 +601,6 @@ pub async fn spec_view(
         SpecPhase::Complete => "complete".to_string(),
     };
 
-    let has_pending_question = spec_state.pending_question.is_some();
-    let canvas_content = spec_state.canvas_content.clone();
-
     if is_htmx {
         SpecViewTemplate {
             spec_id: id,
@@ -621,8 +609,6 @@ pub async fn spec_view(
             goal: core.goal.clone(),
             phase,
             lanes,
-            canvas_content,
-            has_pending_question,
         }
         .into_response()
     } else {
@@ -633,8 +619,6 @@ pub async fn spec_view(
             goal: core.goal.clone(),
             phase,
             lanes,
-            canvas_content,
-            has_pending_question,
         }
         .into_response()
     }
@@ -3907,8 +3891,6 @@ mod tests {
             goal: "Test goal".to_string(),
             phase: "refining".to_string(),
             lanes: vec![],
-            canvas_content: None,
-            has_pending_question: false,
         };
         let rendered = tmpl.render().unwrap();
         // Command bar with title and subtitle
@@ -3949,8 +3931,6 @@ mod tests {
             goal: "Think big".to_string(),
             phase: "brainstorming".to_string(),
             lanes: vec![],
-            canvas_content: None,
-            has_pending_question: false,
         };
         let rendered = tmpl.render().unwrap();
         assert!(
