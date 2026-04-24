@@ -4,7 +4,11 @@
 {% if phase == "brainstorming" %}
 {# Brainstorming layout: command bar + stepper + full-width chat #}
 <div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream"
-     data-view="brainstorming">
+     data-view="brainstorming"
+     hx-trigger="sse:phase_transitioned"
+     hx-get="/web/specs/{{ spec_id }}"
+     hx-target="#workspace"
+     hx-swap="innerHTML">
 
 <header class="command-bar">
     <div class="command-bar-left">
@@ -32,16 +36,7 @@
           hx-get="/web/specs/{{ spec_id }}/chat-panel"
           hx-trigger="load" hx-swap="innerHTML">
     </main>
-    {% if has_pending_question %}
-    {% match canvas_content %}
-    {% when Some with (content) %}
-    <div id="agent-canvas" style="display:block;">{{ content|safe }}</div>
-    {% when None %}
-    <div id="agent-canvas" style="display:none;"></div>
-    {% endmatch %}
-    {% else %}
-    <div id="agent-canvas" style="display:none;"></div>
-    {% endif %}
+    {% include "partials/agent_canvas.html" %}
     <aside class="chat-rail" id="context-rail"
            hx-get="/web/specs/{{ spec_id }}/context-panel"
            hx-trigger="load, sse:context_attached, sse:context_summarized, sse:context_notes_updated, sse:context_removed"
@@ -60,54 +55,29 @@
 </div>
 
 <script>
+    // Polling fallback: if SSE drops, check phase every 15 seconds
     (function() {
-        var compositor = document.querySelector('.spec-compositor');
-        if (compositor) {
-            compositor.addEventListener('sse:phase_transitioned', function() {
-                htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
-            });
-
-            compositor.addEventListener('sse:canvas_updated', function(evt) {
-                var data = JSON.parse(evt.detail.data);
-                var canvas = document.getElementById('agent-canvas');
-                var content = data.payload && data.payload.content;
-                if (content && content.trim() !== '') {
-                    canvas.innerHTML = content;
-                    canvas.style.display = 'block';
-                } else {
-                    canvas.innerHTML = '';
-                    canvas.style.display = 'none';
-                }
-            });
-
-            // Clear the agent canvas when a question is answered (stale visual)
-            compositor.addEventListener('sse:question_answered', function() {
-                var canvas = document.getElementById('agent-canvas');
-                if (canvas) {
-                    canvas.innerHTML = '';
-                    canvas.style.display = 'none';
-                }
-            });
-
-            // Polling fallback: if SSE drops, check phase every 15 seconds
-            var currentPhase = '{{ phase }}';
-            setInterval(function() {
-                fetch('/web/specs/{{ spec_id }}/phase-check')
-                    .then(function(r) { return r.text(); })
-                    .then(function(serverPhase) {
-                        if (serverPhase !== currentPhase) {
-                            htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
-                        }
-                    })
-                    .catch(function() {}); // silently ignore network errors
-            }, 15000);
-        }
+        var currentPhase = '{{ phase }}';
+        setInterval(function() {
+            fetch('/web/specs/{{ spec_id }}/phase-check')
+                .then(function(r) { return r.text(); })
+                .then(function(serverPhase) {
+                    if (serverPhase !== currentPhase) {
+                        htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
+                    }
+                })
+                .catch(function() {}); // silently ignore network errors
+        }, 15000);
     })();
 </script>
 
 {% else if phase == "refining" %}
 {# Refining layout: command bar + stepper + view toggles + canvas + chat rail #}
-<div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
+<div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream"
+     hx-trigger="sse:phase_transitioned"
+     hx-get="/web/specs/{{ spec_id }}"
+     hx-target="#workspace"
+     hx-swap="innerHTML">
 
 <header class="command-bar">
     <div class="command-bar-left">
@@ -161,6 +131,11 @@
            hx-trigger="load" hx-swap="innerHTML">
     </aside>
 </div>
+{# Subscription-only sink: makes htmx-ext-sse actually subscribe to these event
+   names on the EventSource. No hx-get, so no request fires — the JS listener on
+   .spec-compositor picks up the bubbled event and re-fetches the active view. #}
+<span id="sse-card-sub" style="display:none"
+      hx-trigger="sse:card_created, sse:card_updated, sse:card_moved, sse:card_deleted, sse:spec_core_updated"></span>
 <div id="agents-offline-banner" class="agents-offline-banner">
     <button class="agents-offline-dismiss" onclick="this.parentElement.style.display='none'" title="Dismiss">&times;</button>
     <span>Agents are not running.</span>
@@ -203,6 +178,9 @@
     });
 
     // Proactive canvas refresh on card changes via SSE.
+    // The hidden <span id="sse-card-sub"> below declares the hx-trigger subscriptions
+    // that make htmx-ext-sse actually listen for these event names; the events then
+    // bubble up to this listener on the compositor.
     // Debounce to avoid hammering the server when multiple card events fire rapidly.
     (function() {
         var refreshTimer = null;
@@ -214,20 +192,13 @@
             compositor.addEventListener('sse:' + eventName, function() {
                 if (refreshTimer) clearTimeout(refreshTimer);
                 refreshTimer = setTimeout(function() {
-                    var canvas = document.getElementById('canvas');
-                    if (!canvas) return;
-                    // Find the active view toggle and re-trigger its HTMX request
+                    // Re-fetch the active view into #canvas
                     var activeBtn = document.querySelector('.view-toggle.active');
                     if (activeBtn) {
                         activeBtn.click();
                     }
                 }, 800);
             });
-        });
-
-        // Phase transition handler — re-fetch entire workspace
-        compositor.addEventListener('sse:phase_transitioned', function() {
-            htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
         });
 
         // Polling fallback: if SSE drops, check phase every 15 seconds
@@ -247,7 +218,11 @@
 
 {% else %}
 {# Complete layout: read-only export view #}
-<div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
+<div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream"
+     hx-trigger="sse:phase_transitioned"
+     hx-get="/web/specs/{{ spec_id }}"
+     hx-target="#workspace"
+     hx-swap="innerHTML">
 
 <header class="command-bar">
     <div class="command-bar-left">
@@ -271,26 +246,19 @@
 </div>
 
 <script>
+    // Polling fallback: if SSE drops, check phase every 15 seconds
     (function() {
-        var compositor = document.querySelector('.spec-compositor');
-        if (compositor) {
-            compositor.addEventListener('sse:phase_transitioned', function() {
-                htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
-            });
-
-            // Polling fallback: if SSE drops, check phase every 15 seconds
-            var currentPhase = '{{ phase }}';
-            setInterval(function() {
-                fetch('/web/specs/{{ spec_id }}/phase-check')
-                    .then(function(r) { return r.text(); })
-                    .then(function(serverPhase) {
-                        if (serverPhase !== currentPhase) {
-                            htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
-                        }
-                    })
-                    .catch(function() {}); // silently ignore network errors
-            }, 15000);
-        }
+        var currentPhase = '{{ phase }}';
+        setInterval(function() {
+            fetch('/web/specs/{{ spec_id }}/phase-check')
+                .then(function(r) { return r.text(); })
+                .then(function(serverPhase) {
+                    if (serverPhase !== currentPhase) {
+                        htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
+                    }
+                })
+                .catch(function() {}); // silently ignore network errors
+        }, 15000);
     })();
 </script>
 

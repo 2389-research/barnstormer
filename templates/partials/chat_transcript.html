@@ -4,6 +4,11 @@
 <div id="{{ container_id }}" class="chat-transcript-wrap">
     {% include "partials/chat_feed.html" %}
     {% include "partials/chat_question.html" %}
+    {# Subscription-only sink: makes htmx-ext-sse subscribe to streaming event
+       names on the EventSource. The events then bubble up to the listeners on
+       .spec-compositor that accumulate streamed tokens and tool activity. #}
+    <span style="display:none"
+          hx-trigger="sse:streaming_delta, sse:streaming_tool_activity"></span>
 </div>
 
 <script>

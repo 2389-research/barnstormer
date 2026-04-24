@@ -49,7 +49,7 @@ Binary entrypoint: `src/main.rs`
 - IDs use ULID (universally unique lexicographically sortable identifiers)
 - Event sourcing: all mutations go through Command -> Event -> State
 - State is materialized by replaying events through a reducer
-- **SSE event handling in templates**: use the declarative `hx-trigger="sse:<event_name>"` attribute on the element that should react — `htmx-ext-sse@2.2.2` does NOT dispatch `sse:<event_name>` DOM events to element listeners, so `element.addEventListener('sse:foo', ...)` in JS is dead code. Working example: `templates/partials/chat_transcript.html` line 6.
+- **SSE event handling in templates**: `htmx-ext-sse@2.2.2` only subscribes to SSE event names that appear in a `hx-trigger="sse:<name>"` or `sse-swap="<name>"` attribute somewhere inside the `sse-connect` element. SSE events with no matching attribute are received by the browser's EventSource but never dispatched anywhere — they vanish. Prefer the declarative form: put `hx-trigger="sse:<name>"` + `hx-get="..."` directly on the element that should re-render. For cases that genuinely need imperative handling (appending streamed tokens, debounced re-fetches of stateful UI), the library dispatches the event as a bubbling DOM event on the element carrying the `hx-trigger` — so an `addEventListener('sse:<name>', ...)` on a parent works only if some descendant declares `hx-trigger="sse:<name>"`. To wake up an event purely for imperative consumption, add a hidden `<span hx-trigger="sse:<name>" style="display:none"></span>` inside the compositor. Examples: `templates/partials/agent_canvas.html` (declarative), `templates/partials/chat_transcript.html` sse-sub span (subscription-only sink).
 - Port: **7331**
 - Environment config via dotenv (see `.env.example`)
 

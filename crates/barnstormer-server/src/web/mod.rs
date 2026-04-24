@@ -961,6 +961,46 @@ pub async fn delete_card(
     Html(String::new()).into_response()
 }
 
+/// Agent canvas fragment: self-refreshing `<div id="agent-canvas">` that mirrors
+/// `canvas_content` state. The template declares its own SSE triggers so that
+/// after an outerHTML swap, subscriptions re-register on the new element.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/agent_canvas.html")]
+pub struct AgentCanvasTemplate {
+    pub spec_id: String,
+    pub canvas_content: Option<String>,
+}
+
+/// GET /web/specs/{id}/canvas-fragment - Render the agent canvas with current content.
+pub async fn canvas_fragment(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    let spec_state = handle.read_state().await;
+    AgentCanvasTemplate {
+        spec_id: id,
+        canvas_content: spec_state.canvas_content.clone(),
+    }
+    .into_response()
+}
+
 /// Document view template.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/document.html")]
@@ -6601,6 +6641,163 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn spec_view_compositor_subscribes_to_phase_transitioned() {
+        // Without this subscription, htmx-ext-sse never listens for the event
+        // name on the EventSource, so phase transitions silently drop (issue #9).
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Phase transition sub test"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains("hx-trigger=\"sse:phase_transitioned\""),
+            "compositor must declare hx-trigger for sse:phase_transitioned"
+        );
+        assert!(
+            html.contains("hx-target=\"#workspace\""),
+            "phase transition should re-fetch into #workspace"
+        );
+    }
+
+    #[tokio::test]
+    async fn canvas_fragment_returns_empty_div_when_no_content() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Canvas fragment empty test"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}/canvas-fragment", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("id=\"agent-canvas\""), "should render agent-canvas div");
+        assert!(
+            html.contains("display:none"),
+            "empty canvas should be hidden: {}",
+            html
+        );
+        assert!(
+            html.contains("sse:canvas_updated"),
+            "should retain SSE trigger so subsequent updates keep working"
+        );
+        assert!(
+            html.contains("sse:question_answered"),
+            "should also refresh on question_answered (canvas clears server-side on answer)"
+        );
+    }
+
+    #[tokio::test]
+    async fn canvas_fragment_renders_content_when_set() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Canvas fragment content test"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        {
+            let actors = state.actors.read().await;
+            let handle = actors.get(&spec_id).unwrap();
+            handle
+                .send_command(Command::UpdateCanvas {
+                    content: "<p>Hello from canvas</p>".to_string(),
+                })
+                .await
+                .unwrap();
+        }
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}/canvas-fragment", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("<p>Hello from canvas</p>"), "should include content");
+        assert!(html.contains("display:block"), "should be visible when content present");
+        assert!(
+            html.contains("hx-swap=\"outerHTML\""),
+            "must swap outerHTML so attrs survive across updates"
+        );
+    }
+
+    #[tokio::test]
+    async fn canvas_fragment_returns_404_for_unknown_spec() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        let bogus = ulid::Ulid::new();
+        let resp = app
+            .oneshot(
+                Request::get(&format!("/web/specs/{}/canvas-fragment", bogus))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

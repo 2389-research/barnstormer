@@ -62,6 +62,10 @@ pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
         .route("/web/specs/{id}/phase", post(web::transition_phase))
         .route("/web/specs/{id}/phase-check", get(web::phase_check))
         .route(
+            "/web/specs/{id}/canvas-fragment",
+            get(web::canvas_fragment),
+        )
+        .route(
             "/web/specs/{id}/context",
             post(web::upload_context).layer(DefaultBodyLimit::max(25 * 1024 * 1024)),
         )
