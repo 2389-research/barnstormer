@@ -3920,6 +3920,48 @@ mod tests {
     }
 
     #[test]
+    fn spec_view_phase_check_polling_is_singleton_per_phase() {
+        // Regression: the polling fallback used a per-render `setInterval(...)`
+        // captured as a closure local. Each #workspace innerHTML swap therefore
+        // installed a fresh timer without clearing the previous one, and the old
+        // timer's stale `currentPhase` would race ahead of a real phase change
+        // and trigger another workspace refetch every 15s — wiping in-progress
+        // chat / Q&A input state. Each phase template MUST guard with
+        // `clearInterval(window.__bsPhase.timerId)` and store the timer id on
+        // the `window.__bsPhase` singleton.
+        for phase in ["brainstorming", "refining", "complete"] {
+            let tmpl = SpecViewTemplate {
+                spec_id: "01HTEST".to_string(),
+                title: "Test".to_string(),
+                one_liner: "t".to_string(),
+                goal: "g".to_string(),
+                phase: phase.to_string(),
+                lanes: vec![],
+            };
+            let rendered = tmpl.render().unwrap();
+
+            assert!(
+                rendered.contains("window.__bsPhase"),
+                "phase={phase}: rendered HTML should declare window.__bsPhase singleton"
+            );
+            assert!(
+                rendered.contains("clearInterval(window.__bsPhase.timerId)"),
+                "phase={phase}: rendered HTML should clear the prior phase-check timer before installing a new one"
+            );
+            assert!(
+                rendered.contains("window.__bsPhase.timerId = setInterval"),
+                "phase={phase}: rendered HTML should assign the new timer id to the singleton slot"
+            );
+            // The buggy pattern was a bare `var currentPhase = '...'` followed
+            // by an unguarded `setInterval`. Make sure it's gone.
+            assert!(
+                !rendered.contains("var currentPhase ="),
+                "phase={phase}: bare `var currentPhase = ...` is the leaky pattern; it must be replaced by the window.__bsPhase singleton"
+            );
+        }
+    }
+
+    #[test]
     fn spec_view_brainstorming_wires_context_sse_via_hx_trigger() {
         // The context rail must rely on the declarative `hx-trigger="sse:..."` pattern
         // (which htmx-ext-sse 2.2.2 actually supports) rather than a JS listener on

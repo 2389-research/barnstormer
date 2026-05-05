@@ -111,14 +111,22 @@
             });
         }
 
-        // Polling fallback: if SSE drops, check phase every 15 seconds.
-        var currentPhase = '{{ phase }}';
-        setInterval(function() {
-            fetch('/web/specs/{{ spec_id }}/phase-check')
+        {# Polling fallback: if SSE drops, check phase every 15 seconds.
+           Singleton on window so workspace innerHTML swaps don't accumulate
+           timers — the prior timer's captured currentPhase would otherwise go
+           stale after a real phase change and trigger repeated workspace
+           refreshes that wipe in-progress chat / Q&A input state. #}
+        window.__bsPhase = window.__bsPhase || {};
+        window.__bsPhase.currentPhase = '{{ phase }}';
+        window.__bsPhase.specId = '{{ spec_id }}';
+        if (window.__bsPhase.timerId) clearInterval(window.__bsPhase.timerId);
+        window.__bsPhase.timerId = setInterval(function() {
+            var p = window.__bsPhase;
+            fetch('/web/specs/' + p.specId + '/phase-check')
                 .then(function(r) { return r.text(); })
                 .then(function(serverPhase) {
-                    if (serverPhase !== currentPhase) {
-                        htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
+                    if (serverPhase !== p.currentPhase) {
+                        htmx.ajax('GET', '/web/specs/' + p.specId, {target: '#workspace', swap: 'innerHTML'});
                     }
                 })
                 .catch(function() {});
@@ -260,17 +268,22 @@
             });
         });
 
-        // Polling fallback: if SSE drops, check phase every 15 seconds
-        var currentPhase = '{{ phase }}';
-        setInterval(function() {
-            fetch('/web/specs/{{ spec_id }}/phase-check')
+        {# Polling fallback: see brainstorming branch for rationale on the
+           window-scoped singleton pattern. #}
+        window.__bsPhase = window.__bsPhase || {};
+        window.__bsPhase.currentPhase = '{{ phase }}';
+        window.__bsPhase.specId = '{{ spec_id }}';
+        if (window.__bsPhase.timerId) clearInterval(window.__bsPhase.timerId);
+        window.__bsPhase.timerId = setInterval(function() {
+            var p = window.__bsPhase;
+            fetch('/web/specs/' + p.specId + '/phase-check')
                 .then(function(r) { return r.text(); })
                 .then(function(serverPhase) {
-                    if (serverPhase !== currentPhase) {
-                        htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
+                    if (serverPhase !== p.currentPhase) {
+                        htmx.ajax('GET', '/web/specs/' + p.specId, {target: '#workspace', swap: 'innerHTML'});
                     }
                 })
-                .catch(function() {}); // silently ignore network errors
+                .catch(function() {});
         }, 15000);
     })();
 </script>
@@ -309,18 +322,23 @@
 </div>
 
 <script>
-    // Polling fallback: if SSE drops, check phase every 15 seconds
+    {# Polling fallback: see brainstorming branch for rationale on the
+       window-scoped singleton pattern. #}
     (function() {
-        var currentPhase = '{{ phase }}';
-        setInterval(function() {
-            fetch('/web/specs/{{ spec_id }}/phase-check')
+        window.__bsPhase = window.__bsPhase || {};
+        window.__bsPhase.currentPhase = '{{ phase }}';
+        window.__bsPhase.specId = '{{ spec_id }}';
+        if (window.__bsPhase.timerId) clearInterval(window.__bsPhase.timerId);
+        window.__bsPhase.timerId = setInterval(function() {
+            var p = window.__bsPhase;
+            fetch('/web/specs/' + p.specId + '/phase-check')
                 .then(function(r) { return r.text(); })
                 .then(function(serverPhase) {
-                    if (serverPhase !== currentPhase) {
-                        htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
+                    if (serverPhase !== p.currentPhase) {
+                        htmx.ajax('GET', '/web/specs/' + p.specId, {target: '#workspace', swap: 'innerHTML'});
                     }
                 })
-                .catch(function() {}); // silently ignore network errors
+                .catch(function() {});
         }, 15000);
     })();
 </script>
