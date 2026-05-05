@@ -28,7 +28,14 @@ impl Tool for ProposeTransitionTool {
     }
 
     fn description(&self) -> &str {
-        "Propose transitioning to the next phase of the spec (Brainstorming → Refining → Complete). Summarize progress so far and ask the user if they're ready to move on. After the user answers Yes, the runtime fires the phase transition automatically — wait for the resulting `PhaseTransitioned` event before continuing, do NOT re-propose. If the user answers No, address their feedback before proposing again."
+        "Propose transitioning to the next phase of the spec. Phase progression: Brainstorming → Refining → Complete. \
+         From Brainstorming this proposes Refining; from Refining this proposes Complete. \
+         The `summary` argument is a brief RECAP of what has been accomplished in the current phase — \
+         do NOT include any question, call to action, or 'ready to move on?' phrasing; the runtime \
+         appends the appropriate confirmation prompt automatically. \
+         After the user answers Yes, the runtime fires the phase transition — wait for the \
+         resulting `PhaseTransitioned` event before continuing, do NOT re-propose. \
+         If the user answers No, address their feedback before proposing again."
     }
 
     fn schema(&self) -> serde_json::Value {
@@ -129,6 +136,33 @@ mod tests {
             pending_transition_question: Arc::new(Mutex::new(None)),
         };
         assert_eq!(tool.name(), "propose_transition");
+    }
+
+    #[tokio::test]
+    async fn description_tells_summary_not_to_contain_questions() {
+        // Regression: an earlier description said "Summarize progress so far
+        // and ASK the user if they're ready to move on." The model took that
+        // literally and packed transition questions into the `summary`
+        // argument — so the user saw a doubled prompt
+        // ("...move to Refining?... Ready to finalize?") even after the phase
+        // had already advanced to Refining. The description must steer the
+        // summary toward a pure recap, not a question.
+        let (_id, handle) = make_test_actor();
+        let tool = ProposeTransitionTool {
+            actor: Arc::new(handle),
+            question_pending: Arc::new(AtomicBool::new(false)),
+            pending_transition_question: Arc::new(Mutex::new(None)),
+        };
+        let desc = tool.description();
+        assert!(
+            desc.contains("do NOT include any question"),
+            "description must explicitly forbid questions in the summary: {desc}"
+        );
+        assert!(
+            desc.contains("Brainstorming → Refining → Complete")
+                || desc.contains("Brainstorming -> Refining -> Complete"),
+            "description must spell out the phase progression: {desc}"
+        );
     }
 
     #[tokio::test]

@@ -152,7 +152,36 @@ fn full_system_prompt(role: &AgentRole, agent_id: &str, phase: &SpecPhase) -> St
     } else {
         system_prompt_for_role(role)
     };
-    format!("{}{}", base, tool_usage_guide(agent_id))
+    format!(
+        "{}{}{}",
+        base,
+        phase_context_block(phase),
+        tool_usage_guide(agent_id)
+    )
+}
+
+/// Phase-awareness block appended to every agent's system prompt. The
+/// brainstorming prompt already covers Brainstorming explicitly, but
+/// agents running in Refining or Complete had no in-prompt signal of
+/// the current phase — which led the Manager to keep narrating about
+/// "moving to Refining" while *already in Refining*, and to stuff
+/// transition questions into `propose_transition`'s `summary`.
+fn phase_context_block(phase: &SpecPhase) -> &'static str {
+    match phase {
+        SpecPhase::Brainstorming => "",
+        SpecPhase::Refining => "\n\n## Current phase: Refining\n\
+            The spec is in the Refining phase — brainstorming is over and the cards have been \
+            captured. Your job here is to polish: review and reorganize cards, tighten descriptions, \
+            fill gaps, and verify the spec is implementation-ready. Do NOT narrate about \
+            'moving to refining' — you are already there.\n\n\
+            To advance to the Complete phase, call propose_transition with a brief recap of what \
+            has been refined. The runtime will append 'Ready to finalize?' itself; do not include \
+            any question in your summary.",
+        SpecPhase::Complete => "\n\n## Current phase: Complete\n\
+            The spec is finalized and read-only from the user's perspective. Do not call \
+            propose_transition (there is no further phase). Focus on answering questions about \
+            the finished spec and helping the user export it.",
+    }
 }
 
 /// Wraps a single agent's role and mutable context.
@@ -1083,6 +1112,83 @@ mod tests {
                 role
             );
         }
+    }
+
+    #[test]
+    fn phase_context_block_brainstorming_is_empty() {
+        // Brainstorming has its own dedicated MANAGER_BRAINSTORMING_PROMPT,
+        // so the dynamic phase block should not duplicate that.
+        assert!(
+            phase_context_block(&SpecPhase::Brainstorming).is_empty(),
+            "brainstorming phase block should be empty (handled by MANAGER_BRAINSTORMING_PROMPT)"
+        );
+    }
+
+    #[test]
+    fn phase_context_block_refining_describes_its_phase_and_target() {
+        // Regression: while the spec was already in Refining, the manager kept
+        // narrating about "moving to the Refining phase" and stuffing that
+        // language into propose_transition's `summary` argument. The phase
+        // block must (a) name the current phase, (b) tell the agent what
+        // propose_transition will do from here, and (c) explicitly forbid
+        // narrating "move to refining" from within Refining.
+        let block = phase_context_block(&SpecPhase::Refining);
+        assert!(block.contains("Refining"), "block should name the current phase");
+        assert!(
+            block.contains("Complete"),
+            "block should name Complete as the propose_transition target from Refining"
+        );
+        assert!(
+            block.to_lowercase().contains("already there"),
+            "block should explicitly tell the agent it is already in Refining"
+        );
+        assert!(
+            block.contains("propose_transition"),
+            "block should mention the propose_transition tool"
+        );
+    }
+
+    #[test]
+    fn phase_context_block_complete_tells_agent_not_to_propose_transition() {
+        let block = phase_context_block(&SpecPhase::Complete);
+        assert!(block.contains("Complete"), "block should name the current phase");
+        assert!(
+            block.contains("Do not call propose_transition")
+                || block.contains("not call propose_transition"),
+            "block should forbid propose_transition in Complete: {block:?}"
+        );
+    }
+
+    #[test]
+    fn full_system_prompt_for_manager_in_refining_includes_phase_context() {
+        let prompt = full_system_prompt(&AgentRole::Manager, "manager-test", &SpecPhase::Refining);
+        assert!(
+            prompt.contains("Current phase: Refining"),
+            "manager prompt in Refining must include phase context"
+        );
+        // And the brainstorming-only base prompt should NOT be the one used here.
+        assert!(
+            !prompt.contains("Manager agent in brainstorming mode"),
+            "manager in Refining should not get the brainstorming base prompt"
+        );
+    }
+
+    #[test]
+    fn full_system_prompt_for_manager_in_brainstorming_uses_brainstorming_base() {
+        let prompt = full_system_prompt(
+            &AgentRole::Manager,
+            "manager-test",
+            &SpecPhase::Brainstorming,
+        );
+        assert!(
+            prompt.contains("Manager agent in brainstorming mode"),
+            "manager in Brainstorming should use the brainstorming base prompt"
+        );
+        // No duplicate phase block — brainstorming prompt covers it.
+        assert!(
+            !prompt.contains("Current phase: Refining"),
+            "brainstorming prompt must not leak Refining phase context"
+        );
     }
 
     #[test]
@@ -2070,9 +2176,31 @@ mod tests {
     }
 
     #[test]
-    fn non_manager_gets_same_prompt_regardless_of_phase() {
-        let active = full_system_prompt(&AgentRole::Brainstormer, "agent-123", &SpecPhase::Refining);
-        let brainstorming = full_system_prompt(&AgentRole::Brainstormer, "agent-123", &SpecPhase::Brainstorming);
-        assert_eq!(active, brainstorming);
+    fn non_manager_full_prompt_differs_only_by_phase_context_block() {
+        // Only the Manager role has a phase-specific BASE prompt
+        // (MANAGER_BRAINSTORMING_PROMPT). Non-Manager roles use the same
+        // role base in every phase. The phase awareness block is appended
+        // to every agent's prompt — so the full prompts now differ across
+        // phases for non-Manager agents too. The difference must be
+        // exactly `phase_context_block(phase)`.
+        let in_brainstorming = full_system_prompt(
+            &AgentRole::Brainstormer,
+            "agent-123",
+            &SpecPhase::Brainstorming,
+        );
+        let in_refining = full_system_prompt(
+            &AgentRole::Brainstormer,
+            "agent-123",
+            &SpecPhase::Refining,
+        );
+        assert_ne!(
+            in_brainstorming, in_refining,
+            "brainstormer prompt should now carry phase awareness"
+        );
+        let stripped = in_refining.replace(phase_context_block(&SpecPhase::Refining), "");
+        assert_eq!(
+            stripped, in_brainstorming,
+            "removing the Refining phase block from the Refining prompt should match the Brainstorming prompt"
+        );
     }
 }
