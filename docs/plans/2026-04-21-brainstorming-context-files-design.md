@@ -94,7 +94,7 @@ Summarization prompt (initial draft — refine during implementation):
 
 `build_task_prompt` in `barnstormer-agent` gains a "Context Files" section when the spec has any non-removed attachments:
 
-```
+```text
 ## Context Files
 
 ### 1. requirements.md (12KB)

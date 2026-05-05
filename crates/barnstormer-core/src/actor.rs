@@ -29,6 +29,9 @@ pub enum ActorError {
     #[error("attachment already removed: {0}")]
     AttachmentAlreadyRemoved(Ulid),
 
+    #[error("attachment already exists: {0}")]
+    AttachmentAlreadyExists(Ulid),
+
     #[error("a question is already pending")]
     QuestionAlreadyPending,
 
@@ -361,6 +364,18 @@ impl SpecActor {
             } => {
                 if state.core.is_none() {
                     return Err(ActorError::SpecNotCreated);
+                }
+                // Reject duplicate IDs up front. The follow-up commands
+                // (Summarize/UpdateNotes/Remove/CreateCard with source) all use
+                // `find(...)` over context_attachments, which would only ever
+                // hit the first entry — leaving any duplicate orphaned in
+                // state and on disk.
+                if state
+                    .context_attachments
+                    .iter()
+                    .any(|a| a.attachment_id == attachment_id)
+                {
+                    return Err(ActorError::AttachmentAlreadyExists(attachment_id));
                 }
                 let attachment = ContextAttachment {
                     attachment_id,
@@ -1058,6 +1073,100 @@ mod tests {
 
         let state = handle.read_state().await;
         assert_eq!(state.context_attachments.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn actor_rejects_duplicate_attach_context_id() {
+        // Regression: AttachContext used to trust the caller-supplied
+        // attachment_id and always append. A duplicate id leaves the second
+        // entry orphaned because every follow-up path (Summarize/UpdateNotes/
+        // Remove, plus CreateCard's source check) uses `find(...)` and only
+        // ever hits the first entry.
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            })
+            .await
+            .unwrap();
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "notes.md".into(),
+                mime_type: "text/markdown".into(),
+                size_bytes: 1,
+            })
+            .await
+            .unwrap();
+
+        let dup = handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "notes-again.md".into(),
+                mime_type: "text/markdown".into(),
+                size_bytes: 2,
+            })
+            .await;
+        assert!(
+            matches!(dup, Err(ActorError::AttachmentAlreadyExists(id)) if id == attachment_id),
+            "second AttachContext with the same id must fail with AttachmentAlreadyExists, got {dup:?}"
+        );
+
+        let state = handle.read_state().await;
+        assert_eq!(
+            state.context_attachments.len(),
+            1,
+            "rejected duplicate must not leave an extra entry in state"
+        );
+        assert_eq!(state.context_attachments[0].filename, "notes.md");
+    }
+
+    #[tokio::test]
+    async fn actor_rejects_attach_context_after_remove_with_same_id() {
+        // Even after a soft-remove, re-attaching with the same id stays
+        // forbidden — the find() pattern in follow-up commands still wouldn't
+        // disambiguate which entry future operations should target.
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            })
+            .await
+            .unwrap();
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "x.md".into(),
+                mime_type: "text/markdown".into(),
+                size_bytes: 1,
+            })
+            .await
+            .unwrap();
+        handle
+            .send_command(Command::RemoveContext { attachment_id })
+            .await
+            .unwrap();
+
+        let dup = handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "x-again.md".into(),
+                mime_type: "text/markdown".into(),
+                size_bytes: 2,
+            })
+            .await;
+        assert!(
+            matches!(dup, Err(ActorError::AttachmentAlreadyExists(id)) if id == attachment_id),
+            "re-attach after remove with the same id must fail with AttachmentAlreadyExists, got {dup:?}"
+        );
     }
 
     #[tokio::test]

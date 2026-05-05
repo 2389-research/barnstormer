@@ -112,16 +112,18 @@ pub async fn setup_with_spec_in_active() -> TestCtx {
     let ctx = setup_with_spec_in_brainstorming().await;
 
     // Transition directly via the actor handle — avoids the web form roundtrip.
-    {
+    // Clone the handle and drop the read-guard before awaiting the command so
+    // we don't hold the actors lock across an await point.
+    let handle = {
         let actors = ctx.state.actors.read().await;
-        let handle = actors.get(&ctx.spec_id).expect("actor present");
-        handle
-            .send_command(Command::TransitionPhase {
-                target: SpecPhase::Refining,
-            })
-            .await
-            .expect("transition to refining");
-    }
+        actors.get(&ctx.spec_id).expect("actor present").clone()
+    };
+    handle
+        .send_command(Command::TransitionPhase {
+            target: SpecPhase::Refining,
+        })
+        .await
+        .expect("transition to refining");
 
     // Rebuild the router with the same state so each test gets a fresh service.
     TestCtx {
@@ -183,9 +185,13 @@ pub async fn setup_with_attachment() -> AttachmentCtx {
     );
 
     // Pull the attachment_id out of state now that the event has landed.
-    let attachment_id = {
+    // Clone the handle and drop the actors guard before awaiting `read_state`
+    // so we never hold the lock across an await point.
+    let handle = {
         let actors = ctx.state.actors.read().await;
-        let handle = actors.get(&ctx.spec_id).expect("actor present");
+        actors.get(&ctx.spec_id).expect("actor present").clone()
+    };
+    let attachment_id = {
         let spec_state = handle.read_state().await;
         assert_eq!(
             spec_state.context_attachments.len(),

@@ -21,6 +21,53 @@ use crate::app_state::SharedState;
 use askama::Template;
 use askama_derive_axum::IntoResponse as AskamaIntoResponse;
 
+/// Maximum size of a single uploaded context file (per part). Enforced while
+/// streaming the multipart field so a malicious client can't buffer up to the
+/// configured global body cap (e.g. 100MB) before being rejected.
+const MAX_FILE_BYTES: usize = 20 * 1024 * 1024;
+
+/// Stream a single multipart field into a `Vec<u8>`, aborting as soon as the
+/// accumulated size exceeds `MAX_FILE_BYTES`. Avoids the eager `field.bytes()`
+/// pattern, which buffers the full part before any size check runs.
+///
+/// On `Ok(None)` the field was empty (e.g. browsers send an empty `files`
+/// part when no file was selected) — callers should treat that as "skip".
+async fn read_field_capped(
+    field: &mut axum::extract::multipart::Field<'_>,
+) -> Result<Option<Vec<u8>>, Response> {
+    let mut accumulated: Vec<u8> = Vec::new();
+    loop {
+        match field.chunk().await {
+            Ok(Some(chunk)) => {
+                if accumulated.len().saturating_add(chunk.len()) > MAX_FILE_BYTES {
+                    return Err((
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        format!(
+                            "file exceeds {}MB",
+                            MAX_FILE_BYTES / (1024 * 1024),
+                        ),
+                    )
+                        .into_response());
+                }
+                accumulated.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(e) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("multipart read error: {e}"),
+                )
+                    .into_response());
+            }
+        }
+    }
+    if accumulated.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(accumulated))
+    }
+}
+
 /// Index page showing the spec list and welcome message.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "index.html")]
@@ -111,7 +158,7 @@ pub async fn create_spec(
 
     loop {
         match multipart.next_field().await {
-            Ok(Some(field)) => match field.name() {
+            Ok(Some(mut field)) => match field.name() {
                 Some("description") => {
                     match field.text().await {
                         Ok(t) => description = Some(t),
@@ -133,21 +180,15 @@ pub async fn create_spec(
                         .content_type()
                         .map(str::to_string)
                         .unwrap_or_else(|| "text/plain".into());
-                    let bytes = match field.bytes().await {
-                        Ok(b) => b.to_vec(),
-                        Err(e) => {
-                            return (
-                                StatusCode::BAD_REQUEST,
-                                format!("failed to read file '{filename}': {e}"),
-                            )
-                                .into_response();
-                        }
+                    // Stream + size-cap so a single 100MB body can't buffer
+                    // 5x past the per-file limit before we reject it.
+                    let bytes = match read_field_capped(&mut field).await {
+                        Ok(Some(b)) => b,
+                        // Browsers send an empty `files` part when no file is
+                        // selected — skip so the no-files case keeps working.
+                        Ok(None) => continue,
+                        Err(resp) => return resp,
                     };
-                    // Browsers send an empty `files` part when no file is
-                    // selected — skip so the no-files case keeps working.
-                    if bytes.is_empty() {
-                        continue;
-                    }
                     files.push((filename, mime, bytes));
                 }
                 _ => {} // ignore unknown fields
@@ -172,16 +213,10 @@ pub async fn create_spec(
     };
 
     // 2. Validate files upfront so we fail before creating the spec. Better
-    // UX than writing a spec then bouncing on file #3.
-    const MAX_FILE_BYTES: usize = 20 * 1024 * 1024;
+    // UX than writing a spec then bouncing on file #3. Per-file size was
+    // already enforced while streaming the multipart field, so here we only
+    // need to verify the bytes are UTF-8 text.
     for (filename, _, bytes) in &files {
-        if bytes.len() > MAX_FILE_BYTES {
-            return (
-                StatusCode::PAYLOAD_TOO_LARGE,
-                format!("'{filename}' exceeds 20MB"),
-            )
-                .into_response();
-        }
         if !crate::context_storage::is_utf8_text(bytes) {
             return (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -273,6 +308,13 @@ pub async fn create_spec(
     // Note: events produced here are persisted inline via `log.append`,
     // same as the CreateSpec and AppendTranscript events above, because
     // the event persister task hasn't been subscribed yet.
+    //
+    // Summarizer jobs are queued here and dispatched AFTER the event
+    // persister subscribes — otherwise a fast LLM call could produce
+    // `ContextSummarized` before the persister is listening, leaving the
+    // summary in memory but absent from `events.jsonl` (so it disappears
+    // after restart).
+    let mut summarize_jobs: Vec<(Ulid, String, String)> = Vec::new();
     for (filename, mime, bytes) in files {
         let attachment_id = Ulid::new();
         let filename = crate::context_storage::sanitize_filename(&filename);
@@ -297,6 +339,13 @@ pub async fn create_spec(
             Ok(events) => events,
             Err(e) => {
                 tracing::error!("failed to attach context {filename}: {e}");
+                // The bytes are on disk but no event references them — clean up
+                // so the filesystem doesn't drift from actor state.
+                if let Err(remove_err) = std::fs::remove_file(&path) {
+                    tracing::warn!(
+                        "failed to clean up orphaned context file {filename}: {remove_err}"
+                    );
+                }
                 continue;
             }
         };
@@ -305,21 +354,22 @@ pub async fn create_spec(
                 tracing::error!("failed to persist attach event: {}", e);
             }
         }
-        // Fire-and-forget summarizer — summary will land via SSE when ready.
         let content = String::from_utf8(bytes).expect("utf-8 verified above");
-        crate::summarizer::spawn_summarize(
-            handle.clone(),
-            attachment_id,
-            filename,
-            content,
-        );
+        summarize_jobs.push((attachment_id, filename, content));
     }
 
-    // Subscribe the event persister BEFORE inserting the actor and starting
-    // agents so it catches all subsequent events (agent-produced, etc.).
-    // The events produced above were already persisted inline.
+    // Subscribe the event persister BEFORE inserting the actor, starting
+    // agents, OR firing the summarizer — so it catches every subsequent event
+    // (agent-produced, summarizer-produced, etc.). The events produced above
+    // were already persisted inline.
     let persister_handle = spawn_event_persister(&handle, spec_id, &state.barnstormer_home);
     state.event_persisters.write().await.insert(spec_id, persister_handle);
+
+    // Now safe to dispatch the summarizer jobs queued above. Their
+    // `ContextSummarized` events will reach the persister.
+    for (attachment_id, filename, content) in summarize_jobs {
+        crate::summarizer::spawn_summarize(handle.clone(), attachment_id, filename, content);
+    }
 
     state.actors.write().await.insert(spec_id, handle);
 
@@ -2547,27 +2597,26 @@ pub async fn upload_context(
             .into_response();
     }
 
-    // Extract first `file` part.
+    // Extract first `file` part. Streamed-and-capped so a request can't
+    // buffer up to the configured global body cap before we reject it.
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut filename: Option<String> = None;
     let mut mime: Option<String> = None;
     loop {
         match multipart.next_field().await {
-            Ok(Some(field)) => {
+            Ok(Some(mut field)) => {
                 if field.name() == Some("file") {
                     filename = field.file_name().map(str::to_string);
                     mime = field.content_type().map(str::to_string);
-                    let bytes = match field.bytes().await {
-                        Ok(b) => b,
-                        Err(e) => {
-                            return (
-                                StatusCode::BAD_REQUEST,
-                                format!("read error: {e}"),
-                            )
+                    let bytes = match read_field_capped(&mut field).await {
+                        Ok(Some(b)) => b,
+                        Ok(None) => {
+                            return (StatusCode::BAD_REQUEST, "empty file part")
                                 .into_response();
                         }
+                        Err(resp) => return resp,
                     };
-                    file_bytes = Some(bytes.to_vec());
+                    file_bytes = Some(bytes);
                     break;
                 }
             }
@@ -2585,11 +2634,6 @@ pub async fn upload_context(
     let Some(bytes) = file_bytes else {
         return (StatusCode::BAD_REQUEST, "missing file part").into_response();
     };
-
-    const MAX_BYTES: usize = 20 * 1024 * 1024;
-    if bytes.len() > MAX_BYTES {
-        return (StatusCode::PAYLOAD_TOO_LARGE, "file exceeds 20MB").into_response();
-    }
 
     if !crate::context_storage::is_utf8_text(&bytes) {
         return (
@@ -2624,6 +2668,14 @@ pub async fn upload_context(
         size_bytes,
     };
     if let Err(e) = handle.send_command(cmd).await {
+        // Bytes already on disk — without the event referencing them they'd
+        // leak and the filesystem would drift from actor state. Best-effort
+        // cleanup (failure is logged but doesn't block the error response).
+        if let Err(remove_err) = std::fs::remove_file(&path) {
+            tracing::warn!(
+                "failed to clean up orphaned context file {filename}: {remove_err}"
+            );
+        }
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("command failed: {e}"),
@@ -2733,7 +2785,13 @@ pub async fn remove_context(
 /// GET /web/specs/{id}/context/{att_id}/raw - Stream the raw text content of
 /// a context attachment. Only live (non-removed) attachments are served; both
 /// "unknown" and "soft-removed" cases return 404 so callers can't distinguish
-/// them. The response `Content-Type` mirrors the stored `mime_type`.
+/// them.
+///
+/// Security: the stored `mime_type` came from the multipart upload and is
+/// untrusted. We always serve the bytes as `text/plain; charset=utf-8` and
+/// add `X-Content-Type-Options: nosniff` so a `text/html` or `image/svg+xml`
+/// upload can't turn this same-origin endpoint into a stored-XSS sink.
+/// (Uploads are UTF-8 verified in `is_utf8_text` before they reach disk.)
 pub async fn download_context(
     State(state): State<SharedState>,
     Path((id, att_id)): Path<(String, String)>,
@@ -2773,7 +2831,10 @@ pub async fn download_context(
     );
     match crate::context_storage::read_text(&path) {
         Ok(text) => (
-            [(axum::http::header::CONTENT_TYPE, att.mime_type.clone())],
+            [
+                (axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+                (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
             text,
         )
             .into_response(),

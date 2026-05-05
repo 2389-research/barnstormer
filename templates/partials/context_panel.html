@@ -96,9 +96,14 @@
               enctype="multipart/form-data"
               hx-target="#context-panel"
               hx-swap="outerHTML">
+            {# `<label>` + visually-hidden (not display:none) `<input type="file">` so
+               the input stays keyboard-focusable. When the input is tabbed to,
+               `.context-add-btn:focus-within` paints the visible focus ring on the
+               label, and Space/Enter on the focused input opens the OS picker. #}
             <label class="btn btn-primary context-add-btn">
                 + Add file
-                <input type="file" name="file" style="display: none;"
+                <input type="file" name="file" class="context-file-input"
+                       aria-label="Add context file"
                        onchange="this.form.requestSubmit()">
             </label>
         </form>

@@ -139,6 +139,50 @@ async fn create_spec_with_binary_file_returns_415_and_creates_no_spec() {
 }
 
 #[tokio::test]
+async fn create_spec_rejects_oversize_file_with_413_before_buffering_full_part() {
+    // Regression: the upload path used to call `field.bytes().await`, which
+    // buffers the entire multipart field before any size check runs — meaning
+    // a single request could allocate up to the configured global body cap
+    // before being rejected. With streaming + per-file cap enforcement, a
+    // 20MB+1 payload must short-circuit to 413 and leave no spec behind.
+    let (state, _tmp) = fresh_state();
+    let app = create_router(Arc::clone(&state), None);
+
+    // 20MB cap + 1 byte. The bytes are valid UTF-8 ('a'), so the only
+    // possible reason for rejection is the size cap.
+    const MAX_BYTES: usize = 20 * 1024 * 1024;
+    let oversize: Vec<u8> = vec![b'a'; MAX_BYTES + 1];
+    let (ct, body) = multipart_body_with_files(
+        "Build a thing with a too-big file",
+        &[("big.txt", "text/plain", &oversize)],
+    );
+
+    let resp = app
+        .oneshot(
+            Request::post("/web/specs")
+                .header("content-type", ct)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("request");
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "oversize file must be rejected with 413"
+    );
+
+    // And no spec should have been created — multipart parsing failed before
+    // any actor was spawned.
+    let actors = state.actors.read().await;
+    assert!(
+        actors.is_empty(),
+        "no spec should be created when a file exceeds the per-file cap"
+    );
+}
+
+#[tokio::test]
 async fn create_spec_with_no_files_works_as_before() {
     let (state, _tmp) = fresh_state();
     let app = create_router(Arc::clone(&state), None);
