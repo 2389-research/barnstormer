@@ -28,7 +28,7 @@ impl Tool for ProposeTransitionTool {
     }
 
     fn description(&self) -> &str {
-        "Propose transitioning to the next phase of the spec. Summarize progress so far and ask the user if they're ready to move on."
+        "Propose transitioning to the next phase of the spec (Brainstorming → Refining → Complete). Summarize progress so far and ask the user if they're ready to move on. After the user answers Yes, the runtime fires the phase transition automatically — wait for the resulting `PhaseTransitioned` event before continuing, do NOT re-propose. If the user answers No, address their feedback before proposing again."
     }
 
     fn schema(&self) -> serde_json::Value {

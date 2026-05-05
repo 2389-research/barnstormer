@@ -108,7 +108,7 @@ const MANAGER_BRAINSTORMING_PROMPT: &str = r#"You are the Manager agent in brain
 - Start by understanding the core idea
 - Explore key decisions: architecture, scope, constraints, users
 - Capture firm decisions as cards along the way
-- When you have enough context, propose transitioning to active mode
+- When you have enough context, propose transitioning to the refining phase
 
 IMPORTANT: You are the primary point of contact for the human user. When you see messages from 'human' in the recent transcript, treat them as top priority — acknowledge them with narration, take action based on their input, and route their requests to the appropriate workflow. The human is actively engaged, so always respond to their messages before doing other work."#;
 
@@ -658,6 +658,47 @@ fn should_transition_on_answer(
     false
 }
 
+/// Drain `phase_rx` and fire `Command::TransitionPhase` for any
+/// `QuestionAnswered` event whose question id matches
+/// `pending_transition_question` with a yes-shaped answer.
+///
+/// MUST be called *before* running the manager again after a human-message
+/// notify — otherwise the manager can re-run, call `propose_transition`
+/// itself, and overwrite `pending_transition_question` so the original
+/// answer no longer matches and the phase transition silently fails.
+async fn drain_transition_answers(
+    swarm: &Arc<tokio::sync::Mutex<SwarmOrchestrator>>,
+    phase_rx: &mut broadcast::Receiver<Event>,
+) {
+    while let Ok(event) = phase_rx.try_recv() {
+        if let EventPayload::QuestionAnswered { question_id, answer } = &event.payload {
+            let s = swarm.lock().await;
+            if should_transition_on_answer(&s.pending_transition_question, *question_id, answer) {
+                let current_phase = s.actor.read_state().await.phase.clone();
+                let target = match current_phase {
+                    SpecPhase::Brainstorming => SpecPhase::Refining,
+                    SpecPhase::Refining => SpecPhase::Complete,
+                    SpecPhase::Complete => continue,
+                };
+                if let Err(e) = s
+                    .actor
+                    .send_command(Command::TransitionPhase {
+                        target: target.clone(),
+                    })
+                    .await
+                {
+                    tracing::warn!(
+                        spec_id = %s.spec_id,
+                        ?target,
+                        error = %e,
+                        "failed to fire phase transition after Yes answer to propose_transition"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Run the agent loop. This drives all agents in the swarm through their
 /// think-act cycles. Runs until the task is cancelled (via JoinHandle::abort).
 ///
@@ -740,30 +781,8 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
             }
         }
 
-        // Check for transition question answers
-        while let Ok(event) = phase_rx.try_recv() {
-            if let EventPayload::QuestionAnswered { question_id, answer } = &event.payload {
-                let s = swarm.lock().await;
-                if should_transition_on_answer(&s.pending_transition_question, *question_id, answer) {
-                    let current_phase = s.actor.read_state().await.phase.clone();
-                    let target = match current_phase {
-                        SpecPhase::Brainstorming => SpecPhase::Refining,
-                        SpecPhase::Refining => SpecPhase::Complete,
-                        SpecPhase::Complete => continue,
-                    };
-                    if let Err(e) = s.actor.send_command(Command::TransitionPhase {
-                        target: target.clone(),
-                    }).await {
-                        tracing::warn!(
-                            spec_id = %s.spec_id,
-                            ?target,
-                            error = %e,
-                            "failed to fire phase transition after Yes answer to propose_transition"
-                        );
-                    }
-                }
-            }
-        }
+        // Check for transition question answers buffered during the for-loop.
+        drain_transition_answers(&swarm, &mut phase_rx).await;
 
         // Wait between cycles. Use tokio::select! so a human message
         // notification or any actor event can interrupt the idle sleep.
@@ -779,8 +798,16 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
         tokio::select! {
             _ = tokio::time::sleep(sleep_duration) => {}
             _ = notify.notified() => {
-                // Human message arrived — run the manager agent immediately
-                // before starting the next full cycle, unless paused.
+                // Human message arrived — typically a chat message OR an answer
+                // to a propose_transition question. Drain any pending transition
+                // answers FIRST so a Yes fires its phase change before the
+                // manager runs again; otherwise the manager can re-propose and
+                // overwrite `pending_transition_question`, silently dropping
+                // the original answer.
+                drain_transition_answers(&swarm, &mut phase_rx).await;
+
+                // Then prioritise the manager so it acts on the new phase
+                // (or the chat message) immediately, unless paused.
                 let (manager_idx, is_paused) = {
                     let s = swarm.lock().await;
                     (find_manager_index(&s), s.is_paused())
@@ -1371,6 +1398,142 @@ mod tests {
         assert!(
             !question_pending.load(Ordering::SeqCst),
             "question_pending should be false after answer and refresh"
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_transition_answers_fires_transition_on_matching_yes() {
+        // Direct unit test on the helper that both run_loop drain points share.
+        // Both call sites (post-for-loop and notify arm) depend on this firing
+        // a TransitionPhase command for a Yes answer whose question id matches
+        // `pending_transition_question`.
+
+        let (spec_id, actor) = make_test_actor();
+        actor
+            .send_command(Command::CreateSpec {
+                title: "Test".to_string(),
+                one_liner: "t".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            actor,
+            Vec::new(),
+            make_test_client(),
+            "stub-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
+        );
+        let actor_handle = Arc::clone(&swarm.actor);
+        let pending = Arc::clone(&swarm.pending_transition_question);
+
+        let q_id = Ulid::new();
+        actor_handle
+            .send_command(Command::AskQuestion {
+                question: barnstormer_core::transcript::UserQuestion::Boolean {
+                    question_id: q_id,
+                    question: "Ready?".to_string(),
+                    default: Some(true),
+                },
+            })
+            .await
+            .unwrap();
+        *pending.lock().unwrap() = Some(q_id);
+
+        // Subscribe BEFORE the answer so the drain receiver actually sees it.
+        let mut phase_rx = actor_handle.subscribe();
+
+        actor_handle
+            .send_command(Command::AnswerQuestion {
+                question_id: q_id,
+                answer: "Yes".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
+        drain_transition_answers(&swarm, &mut phase_rx).await;
+
+        assert_eq!(
+            actor_handle.read_state().await.phase,
+            SpecPhase::Refining,
+            "drain helper should fire TransitionPhase when a matching Yes is buffered"
+        );
+        assert!(
+            pending.lock().unwrap().is_none(),
+            "matched pending_transition_question should be cleared by the drain"
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_transition_answers_ignores_no_answer() {
+        let (spec_id, actor) = make_test_actor();
+        actor
+            .send_command(Command::CreateSpec {
+                title: "T".to_string(),
+                one_liner: "t".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            actor,
+            Vec::new(),
+            make_test_client(),
+            "stub-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
+        );
+        let actor_handle = Arc::clone(&swarm.actor);
+
+        let q_id = Ulid::new();
+        actor_handle
+            .send_command(Command::AskQuestion {
+                question: barnstormer_core::transcript::UserQuestion::Boolean {
+                    question_id: q_id,
+                    question: "Ready?".to_string(),
+                    default: Some(true),
+                },
+            })
+            .await
+            .unwrap();
+        *swarm.pending_transition_question.lock().unwrap() = Some(q_id);
+
+        let mut phase_rx = actor_handle.subscribe();
+        actor_handle
+            .send_command(Command::AnswerQuestion {
+                question_id: q_id,
+                answer: "No".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
+        drain_transition_answers(&swarm, &mut phase_rx).await;
+
+        assert_eq!(
+            actor_handle.read_state().await.phase,
+            SpecPhase::Brainstorming,
+            "No answer should not advance the phase"
+        );
+    }
+
+    #[tokio::test]
+    async fn manager_brainstorming_prompt_uses_refining_terminology() {
+        // Regression: prompt used to say "active mode" — stale since the
+        // SpecPhase::Active → Refining rename. The manager echoed it back to
+        // users as "Transitioning to ACTIVE mode for implementation planning",
+        // which doesn't match the actual phase names.
+        assert!(
+            !MANAGER_BRAINSTORMING_PROMPT.contains("active mode"),
+            "manager prompt should not refer to the obsolete 'active mode' phase name"
+        );
+        assert!(
+            MANAGER_BRAINSTORMING_PROMPT.contains("refining"),
+            "manager prompt should refer to the refining phase by name"
         );
     }
 
