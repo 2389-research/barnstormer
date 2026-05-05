@@ -667,11 +667,19 @@ fn should_transition_on_answer(
 /// When a human sends a chat message, `human_message_notify` wakes the loop
 /// from its idle sleep so the manager agent responds promptly.
 pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
-    // Subscribe to the broadcast channel so we can detect phase transitions
-    // and wake the loop early when the phase changes.
-    let mut phase_rx = {
+    // Two subscribers on the actor's broadcast channel:
+    //
+    // - `phase_rx` is drained by `try_recv` after each agent pass so we can
+    //   spot `QuestionAnswered` events and fire `TransitionPhase` when the
+    //   matching `propose_transition` question is confirmed.
+    // - `wake_rx` exists only to interrupt the idle `select!` sleep when any
+    //   actor event lands. It must NOT be the same receiver as `phase_rx`,
+    //   because `recv()` consumes events; sharing one would silently drop
+    //   `QuestionAnswered` and strand transitions (regression test:
+    //   `run_loop_advances_phase_when_user_confirms_transition`).
+    let (mut phase_rx, mut wake_rx) = {
         let s = swarm.lock().await;
-        s.actor.subscribe()
+        (s.actor.subscribe(), s.actor.subscribe())
     };
 
     loop {
@@ -743,15 +751,25 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
                         SpecPhase::Refining => SpecPhase::Complete,
                         SpecPhase::Complete => continue,
                     };
-                    let _ = s.actor.send_command(Command::TransitionPhase {
-                        target,
-                    }).await;
+                    if let Err(e) = s.actor.send_command(Command::TransitionPhase {
+                        target: target.clone(),
+                    }).await {
+                        tracing::warn!(
+                            spec_id = %s.spec_id,
+                            ?target,
+                            error = %e,
+                            "failed to fire phase transition after Yes answer to propose_transition"
+                        );
+                    }
                 }
             }
         }
 
         // Wait between cycles. Use tokio::select! so a human message
-        // notification or phase transition can interrupt the idle sleep.
+        // notification or any actor event can interrupt the idle sleep.
+        // `wake_rx` is a separate subscriber from `phase_rx` so consuming
+        // wake-up events here doesn't drop the `QuestionAnswered` events
+        // that the transition watcher above relies on.
         let sleep_duration = if any_work {
             std::time::Duration::from_secs(1)
         } else {
@@ -773,7 +791,7 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
                         run_agent_by_index(&swarm, idx).await;
                 }
             }
-            result = phase_rx.recv() => {
+            result = wake_rx.recv() => {
                 if let Ok(event) = result
                     && matches!(event.payload, EventPayload::PhaseTransitioned { .. })
                 {
@@ -1353,6 +1371,95 @@ mod tests {
         assert!(
             !question_pending.load(Ordering::SeqCst),
             "question_pending should be false after answer and refresh"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_loop_advances_phase_when_user_confirms_transition() {
+        // Regression: the run_loop's idle `tokio::select!` used to consume events
+        // from the same broadcast subscriber that the post-agent drain relies on,
+        // silently dropping `QuestionAnswered` and stranding `propose_transition`.
+        // With a dedicated wake-up subscriber, the drain loop reliably observes
+        // the answer and fires `Command::TransitionPhase`.
+
+        let (spec_id, actor) = make_test_actor();
+        actor
+            .send_command(Command::CreateSpec {
+                title: "Test".to_string(),
+                one_liner: "t".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(actor.read_state().await.phase, SpecPhase::Brainstorming);
+
+        let swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            actor,
+            Vec::new(),
+            make_test_client(),
+            "stub-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
+        );
+
+        // Simulate what propose_transition does: ask a Boolean question and
+        // store its id as the pending transition question.
+        let question_id = Ulid::new();
+        let actor_handle = Arc::clone(&swarm.actor);
+        actor_handle
+            .send_command(Command::AskQuestion {
+                question: barnstormer_core::transcript::UserQuestion::Boolean {
+                    question_id,
+                    question: "Ready to refine?".to_string(),
+                    default: Some(true),
+                },
+            })
+            .await
+            .unwrap();
+        *swarm.pending_transition_question.lock().unwrap() = Some(question_id);
+
+        let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
+        let handle = tokio::spawn(run_loop(Arc::clone(&swarm)));
+
+        // Let run_loop reach its idle select! before we answer.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // User says Yes.
+        actor_handle
+            .send_command(Command::AnswerQuestion {
+                question_id,
+                answer: "Yes".to_string(),
+            })
+            .await
+            .unwrap();
+
+        // Wait up to 2s for the run_loop to observe the answer and fire
+        // TransitionPhase. Polls quickly so the test stays fast on success.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let final_phase = loop {
+            let phase = actor_handle.read_state().await.phase.clone();
+            if phase != SpecPhase::Brainstorming {
+                break phase;
+            }
+            if std::time::Instant::now() > deadline {
+                handle.abort();
+                let _ = handle.await;
+                panic!(
+                    "phase never advanced from Brainstorming after Yes answer; \
+                     pending_transition_question = {:?}",
+                    *swarm.lock().await.pending_transition_question.lock().unwrap()
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        };
+
+        handle.abort();
+        let _ = handle.await;
+
+        assert_eq!(
+            final_phase,
+            SpecPhase::Refining,
+            "phase should advance to Refining after a Yes answer to a transition question"
         );
     }
 
