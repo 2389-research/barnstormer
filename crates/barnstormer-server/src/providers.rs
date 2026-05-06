@@ -89,9 +89,7 @@ impl ProviderStatus {
             .ok()
             .filter(|m| !m.is_empty())
             .unwrap_or_else(|| default_model.to_string());
-        let base_url = std::env::var(base_url_var)
-            .ok()
-            .filter(|u| !u.is_empty());
+        let base_url = std::env::var(base_url_var).ok().filter(|u| !u.is_empty());
 
         ProviderInfo {
             name: name.to_string(),
@@ -143,7 +141,10 @@ mod tests {
 
         assert_eq!(status.default_provider, "anthropic");
         assert!(status.default_model.is_none());
-        assert!(!status.any_available, "no providers should be available without API keys");
+        assert!(
+            !status.any_available,
+            "no providers should be available without API keys"
+        );
         assert_eq!(status.providers.len(), 3);
 
         // Verify default models are set even without env vars
@@ -211,13 +212,19 @@ mod tests {
 
         let status = ProviderStatus::detect();
 
-        assert!(status.any_available, "should detect at least one available provider");
+        assert!(
+            status.any_available,
+            "should detect at least one available provider"
+        );
 
         let openai = &status.providers[1];
         assert_eq!(openai.name, "openai");
         assert!(openai.has_api_key);
         assert_eq!(openai.model, "gpt-4-turbo");
-        assert_eq!(openai.base_url.as_deref(), Some("https://custom.openai.example.com"));
+        assert_eq!(
+            openai.base_url.as_deref(),
+            Some("https://custom.openai.example.com")
+        );
 
         // Anthropic should still be unavailable
         let anthropic = &status.providers[0];
@@ -244,7 +251,10 @@ mod tests {
 
         let status = ProviderStatus::detect();
 
-        assert!(!status.any_available, "empty API key should not count as available");
+        assert!(
+            !status.any_available,
+            "empty API key should not count as available"
+        );
         assert!(!status.providers[0].has_api_key);
 
         // Clean up
@@ -265,7 +275,10 @@ mod tests {
         }
 
         let status = ProviderStatus::detect();
-        assert_eq!(status.default_model.as_deref(), Some("claude-opus-4-20250918"));
+        assert_eq!(
+            status.default_model.as_deref(),
+            Some("claude-opus-4-20250918")
+        );
 
         // Clean up
         // SAFETY: holding ENV_MUTEX, no concurrent env var access

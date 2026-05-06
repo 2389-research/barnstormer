@@ -122,9 +122,11 @@ mod tests {
         let state = handle.read_state().await;
         assert_eq!(state.transcript.len(), 1);
         assert_eq!(state.transcript[0].kind, MessageKind::StepFinished);
-        assert!(state.transcript[0]
-            .content
-            .contains("Added 3 cards and updated the goal."));
+        assert!(
+            state.transcript[0]
+                .content
+                .contains("Added 3 cards and updated the goal.")
+        );
     }
 
     #[tokio::test]

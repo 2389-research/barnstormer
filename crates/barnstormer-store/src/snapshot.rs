@@ -6,9 +6,9 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
 
+use barnstormer_core::SpecState;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use barnstormer_core::SpecState;
 use thiserror::Error;
 
 /// Errors that can occur during snapshot operations.

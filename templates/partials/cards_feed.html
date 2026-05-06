@@ -1,0 +1,28 @@
+{# ABOUTME: Cards feed for the brainstorming sidebar: reverse-chrono list of all captured cards. #}
+{# ABOUTME: Self-refreshing on card SSE events via hx-trigger on the wrapper element. #}
+
+<div id="cards-feed"
+     class="cards-feed"
+     hx-get="/web/specs/{{ spec_id }}/cards-feed"
+     hx-trigger="sse:card_created, sse:card_updated, sse:card_moved, sse:card_deleted"
+     hx-swap="outerHTML">
+    {% if cards.is_empty() %}
+    <div class="cards-feed-empty">
+        <p>No cards captured yet.</p>
+        <p class="cards-feed-empty-hint">As you brainstorm, the Manager will capture ideas, questions, and constraints as cards.</p>
+    </div>
+    {% else %}
+    {% for card in cards %}
+    <details class="card-feed-item" id="card-feed-{{ card.card_id }}">
+        <summary class="card-feed-head">
+            <span class="card-type badge-{{ card.card_type }}">{{ card.card_type }}</span>
+            <span class="card-feed-title">{{ card.title }}</span>
+        </summary>
+        {% if let Some(html) = card.body_html %}
+        <div class="card-feed-body">{{ html|safe }}</div>
+        {% endif %}
+        <div class="card-feed-meta">by {{ card.created_by }} &middot; {{ card.updated_at }}</div>
+    </details>
+    {% endfor %}
+    {% endif %}
+</div>

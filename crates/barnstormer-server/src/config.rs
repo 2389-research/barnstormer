@@ -20,14 +20,14 @@ pub enum ConfigError {
 
 /// Expand a leading `~` in a path string to the user's home directory.
 fn expand_tilde(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
-    } else if path == "~" {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home);
-        }
+    if let Some(rest) = path.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return PathBuf::from(home).join(rest);
+    } else if path == "~"
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return PathBuf::from(home);
     }
     PathBuf::from(path)
 }
@@ -65,7 +65,8 @@ impl BarnstormerConfig {
                     .join(".barnstormer")
             });
 
-        let bind_str = std::env::var("BARNSTORMER_BIND").unwrap_or_else(|_| "127.0.0.1:7331".to_string());
+        let bind_str =
+            std::env::var("BARNSTORMER_BIND").unwrap_or_else(|_| "127.0.0.1:7331".to_string());
         let bind: SocketAddr = bind_str
             .parse()
             .map_err(|_| ConfigError::InvalidBind(bind_str))?;
@@ -78,15 +79,15 @@ impl BarnstormerConfig {
             .ok()
             .filter(|t| !t.is_empty());
 
-        let default_provider =
-            std::env::var("BARNSTORMER_DEFAULT_PROVIDER").unwrap_or_else(|_| "anthropic".to_string());
+        let default_provider = std::env::var("BARNSTORMER_DEFAULT_PROVIDER")
+            .unwrap_or_else(|_| "anthropic".to_string());
 
         let default_model = std::env::var("BARNSTORMER_DEFAULT_MODEL")
             .ok()
             .filter(|m| !m.is_empty());
 
-        let public_base_url =
-            std::env::var("BARNSTORMER_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{}", bind));
+        let public_base_url = std::env::var("BARNSTORMER_PUBLIC_BASE_URL")
+            .unwrap_or_else(|_| format!("http://{}", bind));
 
         // Security validation: if allowing remote access, require auth token
         if allow_remote && auth_token.is_none() {
@@ -148,13 +149,31 @@ mod tests {
         assert!(config.home.to_string_lossy().contains(".barnstormer"));
     }
 
+    // `expand_tilde` reads the `HOME` env var, which is only reliably set on
+    // Unix. On Windows the equivalent is `USERPROFILE`, so this test is
+    // gated to Unix targets to keep CI green there. The non-tilde branches
+    // are platform-independent and covered separately below.
+    #[cfg(unix)]
     #[test]
     fn expand_tilde_expands_home() {
         let home = std::env::var("HOME").unwrap();
-        assert_eq!(expand_tilde("~/.barnstormer"), PathBuf::from(&home).join(".barnstormer"));
+        assert_eq!(
+            expand_tilde("~/.barnstormer"),
+            PathBuf::from(&home).join(".barnstormer")
+        );
         assert_eq!(expand_tilde("~"), PathBuf::from(&home));
-        assert_eq!(expand_tilde("/absolute/path"), PathBuf::from("/absolute/path"));
-        assert_eq!(expand_tilde("relative/path"), PathBuf::from("relative/path"));
+    }
+
+    #[test]
+    fn expand_tilde_passes_through_non_tilde_paths() {
+        assert_eq!(
+            expand_tilde("/absolute/path"),
+            PathBuf::from("/absolute/path")
+        );
+        assert_eq!(
+            expand_tilde("relative/path"),
+            PathBuf::from("relative/path")
+        );
     }
 
     #[test]

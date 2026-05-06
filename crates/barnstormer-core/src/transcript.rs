@@ -158,7 +158,11 @@ mod tests {
 
     #[test]
     fn message_kind_serde_round_trip_all_variants() {
-        for kind in [MessageKind::Chat, MessageKind::StepStarted, MessageKind::StepFinished] {
+        for kind in [
+            MessageKind::Chat,
+            MessageKind::StepStarted,
+            MessageKind::StepFinished,
+        ] {
             let json = serde_json::to_string(&kind).expect("serialize");
             let deser: MessageKind = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(kind, deser);

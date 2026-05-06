@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
 use barnstormer_core::event::{Event, EventPayload};
+use barnstormer_core::state::ContextAttachment;
 use barnstormer_core::transcript::TranscriptMessage;
 
 /// The maximum character length for a rolling summary before compaction triggers.
@@ -58,6 +59,11 @@ pub struct AgentContext {
     pub rolling_summary: String,
     pub key_decisions: Vec<String>,
     pub last_event_seen: u64,
+    /// Non-removed context file attachments for the spec. Populated when
+    /// the context is refreshed from actor state; used by the task-prompt
+    /// builder to inject a "## Context Files" section.
+    #[serde(default)]
+    pub context_attachments: Vec<ContextAttachment>,
 }
 
 impl AgentContext {
@@ -73,6 +79,7 @@ impl AgentContext {
             rolling_summary: String::new(),
             key_decisions: Vec::new(),
             last_event_seen: 0,
+            context_attachments: Vec::new(),
         }
     }
 
@@ -224,6 +231,18 @@ fn describe_event_payload(payload: &EventPayload) -> String {
                 "canvas updated with new content".to_string()
             }
         }
+        EventPayload::ContextAttached { attachment } => {
+            format!("context file attached: '{}'", attachment.filename)
+        }
+        EventPayload::ContextSummarized { attachment_id, .. } => {
+            format!("context attachment {} summarized", attachment_id)
+        }
+        EventPayload::ContextNotesUpdated { attachment_id, .. } => {
+            format!("context attachment {} notes updated", attachment_id)
+        }
+        EventPayload::ContextRemoved { attachment_id } => {
+            format!("context attachment {} removed", attachment_id)
+        }
         EventPayload::StreamingDelta { agent_id, .. } => {
             format!("streaming delta from {}", agent_id)
         }
@@ -259,8 +278,8 @@ pub fn contexts_from_snapshot_map(map: &HashMap<String, serde_json::Value>) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
     use barnstormer_core::event::{Event, EventPayload};
+    use chrono::Utc;
 
     #[test]
     fn agent_context_creation() {
@@ -512,11 +531,19 @@ mod tests {
     fn describe_event_payload_non_ascii_content() {
         // Verify describe_event_payload doesn't panic on multi-byte content.
         // Build a message with 60 emoji characters to exceed the 50-char truncation limit.
-        let emoji_content: String = (0..60).map(|i| {
-            // Cycle through a few multi-byte emoji codepoints
-            let codepoints = ['\u{1F600}', '\u{1F525}', '\u{2728}', '\u{1F680}', '\u{1F4A5}'];
-            codepoints[i % codepoints.len()]
-        }).collect();
+        let emoji_content: String = (0..60)
+            .map(|i| {
+                // Cycle through a few multi-byte emoji codepoints
+                let codepoints = [
+                    '\u{1F600}',
+                    '\u{1F525}',
+                    '\u{2728}',
+                    '\u{1F680}',
+                    '\u{1F4A5}',
+                ];
+                codepoints[i % codepoints.len()]
+            })
+            .collect();
         let message = barnstormer_core::transcript::TranscriptMessage::new(
             "agent-1".to_string(),
             emoji_content,

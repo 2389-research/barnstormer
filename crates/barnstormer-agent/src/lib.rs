@@ -10,4 +10,6 @@ pub mod swarm;
 pub mod testing;
 
 pub use context::{AgentContext, AgentRole, contexts_from_snapshot_map, contexts_to_snapshot_map};
-pub use swarm::{AgentRunner, SwarmOrchestrator, run_loop, system_prompt_for_role};
+pub use swarm::{
+    AgentRunner, SwarmOrchestrator, render_context_files_section, run_loop, system_prompt_for_role,
+};

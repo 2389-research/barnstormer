@@ -69,11 +69,7 @@ pub fn export_dot(state: &SpecState) -> String {
 
     // Collect cards by type, excluding the Ideas lane (unrefined cards
     // should not feed into the pipeline — only Plan/Spec/other lanes).
-    let cards: Vec<&Card> = state
-        .cards
-        .values()
-        .filter(|c| c.lane != "Ideas")
-        .collect();
+    let cards: Vec<&Card> = state.cards.values().filter(|c| c.lane != "Ideas").collect();
     let ideas: Vec<&str> = cards
         .iter()
         .filter(|c| c.card_type == "idea" || c.card_type == "inspiration" || c.card_type == "vibes")
@@ -129,12 +125,7 @@ pub fn export_dot(state: &SpecState) -> String {
     // Graph declaration
     writeln!(out, "digraph {} {{", graph_name).unwrap();
     writeln!(out, "graph [").unwrap();
-    writeln!(
-        out,
-        "goal=\"{}\",",
-        escape_dot_string(&goal)
-    )
-    .unwrap();
+    writeln!(out, "goal=\"{}\",", escape_dot_string(&goal)).unwrap();
     writeln!(out, "retry_target=\"implement\",").unwrap();
     writeln!(out, "default_max_retry=2,").unwrap();
     writeln!(out, "rankdir=LR").unwrap();
@@ -178,11 +169,7 @@ pub fn export_dot(state: &SpecState) -> String {
         escape_dot_string(&verify_prompt)
     )
     .unwrap();
-    writeln!(
-        out,
-        "verify_ok [shape=diamond, label=\"Tests passed?\"]"
-    )
-    .unwrap();
+    writeln!(out, "verify_ok [shape=diamond, label=\"Tests passed?\"]").unwrap();
     writeln!(out).unwrap();
     writeln!(
         out,
@@ -260,11 +247,7 @@ pub fn export_dot(state: &SpecState) -> String {
         "review_gate -> release [label=\"[A] Approve\", weight=3]"
     )
     .unwrap();
-    writeln!(
-        out,
-        "review_gate -> polish  [label=\"[F] Fix\", weight=1]"
-    )
-    .unwrap();
+    writeln!(out, "review_gate -> polish  [label=\"[F] Fix\", weight=1]").unwrap();
     writeln!(out).unwrap();
 
     // Retry loop and final edge
@@ -279,7 +262,12 @@ pub fn export_dot(state: &SpecState) -> String {
 
 /// Build the prompt for the "plan" phase.
 /// Aggregates ideas and constraints into a planning directive.
-fn build_plan_prompt(goal: &str, ideas: &[&str], constraints: &[&str], spec_constraints: &str) -> String {
+fn build_plan_prompt(
+    goal: &str,
+    ideas: &[&str],
+    constraints: &[&str],
+    spec_constraints: &str,
+) -> String {
     let mut parts = vec![format!("Plan the approach for: {}", goal)];
     if !ideas.is_empty() {
         parts.push(format!("Key ideas: {}", ideas.join("; ")));
@@ -482,6 +470,7 @@ mod tests {
             lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
             phase: SpecPhase::Refining,
             canvas_content: None,
+            context_attachments: Vec::new(),
         }
     }
 
@@ -499,6 +488,7 @@ mod tests {
             updated_at: now,
             created_by: created_by.to_string(),
             updated_by: created_by.to_string(),
+            source_attachment_id: None,
         }
     }
 
@@ -514,17 +504,61 @@ mod tests {
         assert!(dot.contains("done  [shape=Msquare, label=\"Done\"]"));
 
         // All 10 pipeline phase nodes
-        assert!(dot.contains("plan [shape=box,"), "Missing plan node in:\n{}", dot);
-        assert!(dot.contains("setup [shape=box,"), "Missing setup node in:\n{}", dot);
-        assert!(dot.contains("tdd [shape=box,"), "Missing tdd node in:\n{}", dot);
-        assert!(dot.contains("implement [shape=box,"), "Missing implement node in:\n{}", dot);
-        assert!(dot.contains("verify [shape=box,"), "Missing verify node in:\n{}", dot);
-        assert!(dot.contains("verify_ok [shape=diamond,"), "Missing verify_ok node in:\n{}", dot);
-        assert!(dot.contains("scenario_test [shape=box,"), "Missing scenario_test node in:\n{}", dot);
-        assert!(dot.contains("scenario_ok [shape=diamond,"), "Missing scenario_ok node in:\n{}", dot);
-        assert!(dot.contains("review_gate [shape=hexagon,"), "Missing review_gate node in:\n{}", dot);
-        assert!(dot.contains("polish [shape=box,"), "Missing polish node in:\n{}", dot);
-        assert!(dot.contains("release [shape=box,"), "Missing release node in:\n{}", dot);
+        assert!(
+            dot.contains("plan [shape=box,"),
+            "Missing plan node in:\n{}",
+            dot
+        );
+        assert!(
+            dot.contains("setup [shape=box,"),
+            "Missing setup node in:\n{}",
+            dot
+        );
+        assert!(
+            dot.contains("tdd [shape=box,"),
+            "Missing tdd node in:\n{}",
+            dot
+        );
+        assert!(
+            dot.contains("implement [shape=box,"),
+            "Missing implement node in:\n{}",
+            dot
+        );
+        assert!(
+            dot.contains("verify [shape=box,"),
+            "Missing verify node in:\n{}",
+            dot
+        );
+        assert!(
+            dot.contains("verify_ok [shape=diamond,"),
+            "Missing verify_ok node in:\n{}",
+            dot
+        );
+        assert!(
+            dot.contains("scenario_test [shape=box,"),
+            "Missing scenario_test node in:\n{}",
+            dot
+        );
+        assert!(
+            dot.contains("scenario_ok [shape=diamond,"),
+            "Missing scenario_ok node in:\n{}",
+            dot
+        );
+        assert!(
+            dot.contains("review_gate [shape=hexagon,"),
+            "Missing review_gate node in:\n{}",
+            dot
+        );
+        assert!(
+            dot.contains("polish [shape=box,"),
+            "Missing polish node in:\n{}",
+            dot
+        );
+        assert!(
+            dot.contains("release [shape=box,"),
+            "Missing release node in:\n{}",
+            dot
+        );
     }
 
     #[test]
@@ -534,7 +568,8 @@ mod tests {
 
         assert!(
             dot.contains("start -> plan -> setup -> tdd -> implement -> verify -> verify_ok"),
-            "Missing main chain with tdd in:\n{}", dot
+            "Missing main chain with tdd in:\n{}",
+            dot
         );
     }
 
@@ -545,23 +580,28 @@ mod tests {
 
         assert!(
             dot.starts_with("digraph test_spec {"),
-            "Expected digraph test_spec {{ in:\n{}", dot
+            "Expected digraph test_spec {{ in:\n{}",
+            dot
         );
         assert!(
             dot.contains("goal=\"Verify the DOT exporter\","),
-            "Expected goal with trailing comma in:\n{}", dot
+            "Expected goal with trailing comma in:\n{}",
+            dot
         );
         assert!(
             dot.contains("retry_target=\"implement\","),
-            "Expected retry_target=\"implement\" with comma in:\n{}", dot
+            "Expected retry_target=\"implement\" with comma in:\n{}",
+            dot
         );
         assert!(
             dot.contains("default_max_retry=2,"),
-            "Expected default_max_retry=2 with comma in:\n{}", dot
+            "Expected default_max_retry=2 with comma in:\n{}",
+            dot
         );
         assert!(
             dot.contains("rankdir=LR"),
-            "Expected rankdir=LR in:\n{}", dot
+            "Expected rankdir=LR in:\n{}",
+            dot
         );
     }
 
@@ -573,12 +613,16 @@ mod tests {
         let dot = export_dot(&state);
 
         assert!(
-            dot.contains("verify_ok -> scenario_test [label=\"Pass\", condition=\"outcome=SUCCESS\"]"),
-            "Missing verify_ok -> scenario_test SUCCESS edge in:\n{}", dot
+            dot.contains(
+                "verify_ok -> scenario_test [label=\"Pass\", condition=\"outcome=SUCCESS\"]"
+            ),
+            "Missing verify_ok -> scenario_test SUCCESS edge in:\n{}",
+            dot
         );
         assert!(
             dot.contains("verify_ok -> implement [label=\"Fail\", condition=\"outcome=FAIL\"]"),
-            "Missing verify_ok -> implement FAIL edge in:\n{}", dot
+            "Missing verify_ok -> implement FAIL edge in:\n{}",
+            dot
         );
     }
 
@@ -589,7 +633,8 @@ mod tests {
 
         assert!(
             dot.contains("scenario_test -> scenario_ok"),
-            "Missing scenario_test -> scenario_ok edge in:\n{}", dot
+            "Missing scenario_test -> scenario_ok edge in:\n{}",
+            dot
         );
     }
 
@@ -599,12 +644,16 @@ mod tests {
         let dot = export_dot(&state);
 
         assert!(
-            dot.contains("scenario_ok -> review_gate [label=\"Pass\", condition=\"outcome=SUCCESS\"]"),
-            "Missing scenario_ok -> review_gate SUCCESS edge in:\n{}", dot
+            dot.contains(
+                "scenario_ok -> review_gate [label=\"Pass\", condition=\"outcome=SUCCESS\"]"
+            ),
+            "Missing scenario_ok -> review_gate SUCCESS edge in:\n{}",
+            dot
         );
         assert!(
             dot.contains("scenario_ok -> tdd [label=\"Fail\", condition=\"outcome=FAIL\"]"),
-            "Missing scenario_ok -> tdd FAIL edge in:\n{}", dot
+            "Missing scenario_ok -> tdd FAIL edge in:\n{}",
+            dot
         );
     }
 
@@ -615,15 +664,18 @@ mod tests {
 
         assert!(
             dot.contains("review_gate [shape=hexagon, type=\"wait.human\""),
-            "Missing hexagon wait.human on review_gate in:\n{}", dot
+            "Missing hexagon wait.human on review_gate in:\n{}",
+            dot
         );
         assert!(
             dot.contains("review_gate -> release [label=\"[A] Approve\", weight=3]"),
-            "Missing Approve edge in:\n{}", dot
+            "Missing Approve edge in:\n{}",
+            dot
         );
         assert!(
             dot.contains("review_gate -> polish  [label=\"[F] Fix\", weight=1]"),
-            "Missing Fix edge in:\n{}", dot
+            "Missing Fix edge in:\n{}",
+            dot
         );
     }
 
@@ -634,7 +686,8 @@ mod tests {
 
         assert!(
             dot.contains("polish -> tdd"),
-            "Missing polish -> tdd loop in:\n{}", dot
+            "Missing polish -> tdd loop in:\n{}",
+            dot
         );
     }
 
@@ -645,7 +698,8 @@ mod tests {
 
         assert!(
             dot.contains("release -> done"),
-            "Missing release -> done in:\n{}", dot
+            "Missing release -> done in:\n{}",
+            dot
         );
     }
 
@@ -656,15 +710,18 @@ mod tests {
 
         assert!(
             dot.contains("implement [shape=box, label=\"Implement\","),
-            "Missing implement node in:\n{}", dot
+            "Missing implement node in:\n{}",
+            dot
         );
         assert!(
             dot.contains("goal_gate=true"),
-            "Missing goal_gate=true on implement in:\n{}", dot
+            "Missing goal_gate=true on implement in:\n{}",
+            dot
         );
         assert!(
             dot.contains("max_retries=3"),
-            "Missing max_retries=3 on implement in:\n{}", dot
+            "Missing max_retries=3 on implement in:\n{}",
+            dot
         );
     }
 
@@ -677,11 +734,13 @@ mod tests {
 
         assert!(
             dot.contains("Write failing tests for:"),
-            "TDD prompt missing test-first directive in:\n{}", dot
+            "TDD prompt missing test-first directive in:\n{}",
+            dot
         );
         assert!(
             dot.contains("Tests must fail before implementation begins"),
-            "TDD prompt missing fail-first requirement in:\n{}", dot
+            "TDD prompt missing fail-first requirement in:\n{}",
+            dot
         );
     }
 
@@ -698,11 +757,13 @@ mod tests {
 
         assert!(
             dot.contains("Cover: Build API"),
-            "TDD prompt missing task in:\n{}", dot
+            "TDD prompt missing task in:\n{}",
+            dot
         );
         assert!(
             dot.contains("Following: Roadmap"),
-            "TDD prompt missing plan in:\n{}", dot
+            "TDD prompt missing plan in:\n{}",
+            dot
         );
     }
 
@@ -715,11 +776,13 @@ mod tests {
 
         assert!(
             dot.contains("No mocks allowed"),
-            "Scenario test prompt missing no-mocks directive in:\n{}", dot
+            "Scenario test prompt missing no-mocks directive in:\n{}",
+            dot
         );
         assert!(
             dot.contains("real dependencies"),
-            "Scenario test prompt missing real-dependencies in:\n{}", dot
+            "Scenario test prompt missing real-dependencies in:\n{}",
+            dot
         );
     }
 
@@ -734,14 +797,16 @@ mod tests {
 
         assert!(
             dot.contains("Validate assumptions: Fast Network"),
-            "Scenario test prompt missing assumption in:\n{}", dot
+            "Scenario test prompt missing assumption in:\n{}",
+            dot
         );
     }
 
     #[test]
     fn scenario_test_prompt_includes_success_criteria() {
         let mut state = make_state_with_core();
-        state.core.as_mut().unwrap().success_criteria = Some("All endpoints respond < 200ms".to_string());
+        state.core.as_mut().unwrap().success_criteria =
+            Some("All endpoints respond < 200ms".to_string());
 
         let dot = export_dot(&state);
 
@@ -752,7 +817,8 @@ mod tests {
             .expect("scenario_test node not found");
         assert!(
             scenario_line.contains("All endpoints respond < 200ms"),
-            "Scenario test prompt missing success criteria in:\n{}", scenario_line
+            "Scenario test prompt missing success criteria in:\n{}",
+            scenario_line
         );
     }
 
@@ -769,7 +835,8 @@ mod tests {
             .expect("implement node not found");
         assert!(
             implement_line.contains("make the failing tests pass"),
-            "Implement prompt missing TDD reference in:\n{}", implement_line
+            "Implement prompt missing TDD reference in:\n{}",
+            implement_line
         );
     }
 
@@ -787,12 +854,15 @@ mod tests {
         let dot = export_dot(&state);
 
         assert!(
-            dot.contains("Deliver: Build API; Add Tests") || dot.contains("Deliver: Add Tests; Build API"),
-            "Implement prompt missing tasks in:\n{}", dot
+            dot.contains("Deliver: Build API; Add Tests")
+                || dot.contains("Deliver: Add Tests; Build API"),
+            "Implement prompt missing tasks in:\n{}",
+            dot
         );
         assert!(
             dot.contains("Following: Roadmap"),
-            "Implement prompt missing plans in:\n{}", dot
+            "Implement prompt missing plans in:\n{}",
+            dot
         );
     }
 
@@ -809,11 +879,13 @@ mod tests {
             .expect("verify node not found");
         assert!(
             verify_line.contains("typecheck, lint, unit tests"),
-            "Verify prompt missing test directives in:\n{}", verify_line
+            "Verify prompt missing test directives in:\n{}",
+            verify_line
         );
         assert!(
             verify_line.contains("outcome=SUCCESS") || verify_line.contains("outcome=FAIL"),
-            "Verify prompt missing outcome reporting in:\n{}", verify_line
+            "Verify prompt missing outcome reporting in:\n{}",
+            verify_line
         );
     }
 
@@ -829,11 +901,13 @@ mod tests {
 
         assert!(
             dot.contains("Validate: Choose Stack"),
-            "Verify prompt missing decision in:\n{}", dot
+            "Verify prompt missing decision in:\n{}",
+            dot
         );
         assert!(
             dot.contains("Success criteria: All tests pass"),
-            "Verify prompt missing success criteria in:\n{}", dot
+            "Verify prompt missing success criteria in:\n{}",
+            dot
         );
     }
 
@@ -852,15 +926,18 @@ mod tests {
 
         assert!(
             dot.contains("Plan the approach for: Verify the DOT exporter"),
-            "Plan prompt missing goal in:\n{}", dot
+            "Plan prompt missing goal in:\n{}",
+            dot
         );
         assert!(
             dot.contains("Key ideas: Fast DB"),
-            "Plan prompt missing ideas in:\n{}", dot
+            "Plan prompt missing ideas in:\n{}",
+            dot
         );
         assert!(
             dot.contains("Must Use Rust"),
-            "Plan prompt missing constraint card in:\n{}", dot
+            "Plan prompt missing constraint card in:\n{}",
+            dot
         );
     }
 
@@ -875,11 +952,13 @@ mod tests {
 
         assert!(
             dot.contains("Open questions: What DB"),
-            "Review prompt missing open question in:\n{}", dot
+            "Review prompt missing open question in:\n{}",
+            dot
         );
         assert!(
             dot.contains("Approve?"),
-            "Review prompt missing Approve? in:\n{}", dot
+            "Review prompt missing Approve? in:\n{}",
+            dot
         );
     }
 
@@ -894,11 +973,13 @@ mod tests {
 
         assert!(
             dot.contains("Apply fixes based on review feedback"),
-            "Polish prompt missing base text in:\n{}", dot
+            "Polish prompt missing base text in:\n{}",
+            dot
         );
         assert!(
             dot.contains("Risks: Data Loss"),
-            "Polish prompt missing risk in:\n{}", dot
+            "Polish prompt missing risk in:\n{}",
+            dot
         );
     }
 
@@ -911,7 +992,8 @@ mod tests {
 
         assert!(
             dot.contains("Budget < $1000"),
-            "Plan prompt missing spec-level constraints in:\n{}", dot
+            "Plan prompt missing spec-level constraints in:\n{}",
+            dot
         );
     }
 
@@ -922,27 +1004,33 @@ mod tests {
 
         assert!(
             !dot.contains("Key ideas:"),
-            "Plan prompt should omit Key ideas when empty in:\n{}", dot
+            "Plan prompt should omit Key ideas when empty in:\n{}",
+            dot
         );
         assert!(
             !dot.contains("Deliver:"),
-            "Implement prompt should omit Deliver when empty in:\n{}", dot
+            "Implement prompt should omit Deliver when empty in:\n{}",
+            dot
         );
         assert!(
             !dot.contains("Validate:"),
-            "Verify prompt should omit Validate when empty in:\n{}", dot
+            "Verify prompt should omit Validate when empty in:\n{}",
+            dot
         );
         assert!(
             !dot.contains("Open questions:"),
-            "Review prompt should omit Open questions when empty in:\n{}", dot
+            "Review prompt should omit Open questions when empty in:\n{}",
+            dot
         );
         assert!(
             !dot.contains("Validate assumptions:"),
-            "Scenario test prompt should omit Validate assumptions when empty in:\n{}", dot
+            "Scenario test prompt should omit Validate assumptions when empty in:\n{}",
+            dot
         );
         assert!(
             !dot.contains("Cover:"),
-            "TDD prompt should omit Cover when empty in:\n{}", dot
+            "TDD prompt should omit Cover when empty in:\n{}",
+            dot
         );
     }
 
@@ -973,12 +1061,14 @@ mod tests {
             lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
             phase: SpecPhase::Refining,
             canvas_content: None,
+            context_attachments: Vec::new(),
         };
         let dot = export_dot(&state);
 
         assert!(
             dot.contains("goal=\"Fallback Test: Uses title and one_liner\""),
-            "Expected fallback goal from title: one_liner in:\n{}", dot
+            "Expected fallback goal from title: one_liner in:\n{}",
+            dot
         );
     }
 
@@ -994,16 +1084,19 @@ mod tests {
             lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
             phase: SpecPhase::Refining,
             canvas_content: None,
+            context_attachments: Vec::new(),
         };
         let dot = export_dot(&state);
 
         assert!(
             dot.starts_with("digraph unnamed_spec {"),
-            "Expected unnamed_spec graph in:\n{}", dot
+            "Expected unnamed_spec graph in:\n{}",
+            dot
         );
         assert!(
             dot.contains("goal=\"\","),
-            "Expected empty goal in:\n{}", dot
+            "Expected empty goal in:\n{}",
+            dot
         );
     }
 
@@ -1034,12 +1127,14 @@ mod tests {
             lanes: vec!["Ideas".to_string()],
             phase: SpecPhase::Refining,
             canvas_content: None,
+            context_attachments: Vec::new(),
         };
         let dot = export_dot(&state);
 
         assert!(
             dot.contains("goal=\"Say \\\"hello\\\" to the world\""),
-            "Expected escaped quotes in goal in:\n{}", dot
+            "Expected escaped quotes in goal in:\n{}",
+            dot
         );
     }
 
@@ -1054,7 +1149,8 @@ mod tests {
 
         assert!(
             dot.contains("Line one\\nLine two"),
-            "Expected escaped newline in prompt in:\n{}", dot
+            "Expected escaped newline in prompt in:\n{}",
+            dot
         );
     }
 
@@ -1064,6 +1160,8 @@ mod tests {
     fn long_prompts_are_truncated() {
         let mut state = make_state_with_core();
 
+        // 50 cards × ~47 chars/title ≫ MAX_PROMPT_LEN (500), so any prompt
+        // built from the full task list is guaranteed to need truncation.
         for i in 0..50 {
             let card = make_card(
                 "task",
@@ -1082,9 +1180,30 @@ mod tests {
             .find(|l| l.contains("implement [shape=box"))
             .expect("implement node not found");
 
+        // Pull just the prompt argument out of the line so we don't count
+        // the surrounding DOT attributes.
+        let prompt_start = implement_line
+            .find("prompt=\"")
+            .expect("implement line should carry a prompt= attribute")
+            + "prompt=\"".len();
+        let prompt_end = implement_line[prompt_start..]
+            .find("\", goal_gate=")
+            .expect("implement line should close the prompt before goal_gate")
+            + prompt_start;
+        let prompt_body = &implement_line[prompt_start..prompt_end];
+
+        // `state.cards` is a HashMap, so iteration order is non-deterministic.
+        // Asserting "task #49 must be missing" therefore depends on which task
+        // happens to land past the truncation cutoff this run — flaky on every
+        // platform, just less likely to bite Linux/Mac (it bit Windows in CI).
+        // Assert the truncation invariant directly: the prompt body must be
+        // bounded by MAX_PROMPT_LEN regardless of which tasks made it in.
         assert!(
-            !implement_line.contains("Number 49"),
-            "Expected truncated prompt, but found last task in:\n{}", implement_line
+            prompt_body.chars().count() <= MAX_PROMPT_LEN,
+            "expected truncated prompt to be at most {} chars, got {} chars in:\n{}",
+            MAX_PROMPT_LEN,
+            prompt_body.chars().count(),
+            prompt_body
         );
     }
 
@@ -1150,27 +1269,63 @@ mod tests {
         let dot = export_dot(&state);
 
         // plan phase: ideas + constraints
-        assert!(dot.contains("Key ideas: Brainstorm"), "Missing idea in plan prompt:\n{}", dot);
-        assert!(dot.contains("Budget Cap"), "Missing constraint in plan prompt:\n{}", dot);
+        assert!(
+            dot.contains("Key ideas: Brainstorm"),
+            "Missing idea in plan prompt:\n{}",
+            dot
+        );
+        assert!(
+            dot.contains("Budget Cap"),
+            "Missing constraint in plan prompt:\n{}",
+            dot
+        );
 
         // tdd phase: tasks + plans
-        assert!(dot.contains("Cover: Build API"), "Missing task in tdd prompt:\n{}", dot);
+        assert!(
+            dot.contains("Cover: Build API"),
+            "Missing task in tdd prompt:\n{}",
+            dot
+        );
 
         // implement phase: tasks + plans
-        assert!(dot.contains("Deliver: Build API"), "Missing task in implement prompt:\n{}", dot);
-        assert!(dot.contains("Following: Roadmap"), "Missing plan in implement prompt:\n{}", dot);
+        assert!(
+            dot.contains("Deliver: Build API"),
+            "Missing task in implement prompt:\n{}",
+            dot
+        );
+        assert!(
+            dot.contains("Following: Roadmap"),
+            "Missing plan in implement prompt:\n{}",
+            dot
+        );
 
         // verify phase: decisions
-        assert!(dot.contains("Validate: Choose DB"), "Missing decision in verify prompt:\n{}", dot);
+        assert!(
+            dot.contains("Validate: Choose DB"),
+            "Missing decision in verify prompt:\n{}",
+            dot
+        );
 
         // scenario_test phase: assumptions
-        assert!(dot.contains("Validate assumptions: Fast Network"), "Missing assumption in scenario_test prompt:\n{}", dot);
+        assert!(
+            dot.contains("Validate assumptions: Fast Network"),
+            "Missing assumption in scenario_test prompt:\n{}",
+            dot
+        );
 
         // review phase: open questions
-        assert!(dot.contains("Open questions: What Stack"), "Missing open_q in review prompt:\n{}", dot);
+        assert!(
+            dot.contains("Open questions: What Stack"),
+            "Missing open_q in review prompt:\n{}",
+            dot
+        );
 
         // polish phase: risks
-        assert!(dot.contains("Risks: Data Loss"), "Missing risk in polish prompt:\n{}", dot);
+        assert!(
+            dot.contains("Risks: Data Loss"),
+            "Missing risk in polish prompt:\n{}",
+            dot
+        );
     }
 
     #[test]
@@ -1179,9 +1334,19 @@ mod tests {
         let dot = export_dot(&state);
 
         let fixed_nodes = [
-            "start", "done", "plan", "setup", "tdd", "implement", "verify",
-            "verify_ok", "scenario_test", "scenario_ok", "review_gate",
-            "polish", "release",
+            "start",
+            "done",
+            "plan",
+            "setup",
+            "tdd",
+            "implement",
+            "verify",
+            "verify_ok",
+            "scenario_test",
+            "scenario_ok",
+            "review_gate",
+            "polish",
+            "release",
         ];
         for node in &fixed_nodes {
             assert!(
@@ -1200,12 +1365,7 @@ mod tests {
                     || trimmed.contains(&format!("{} ->", node))
                     || trimmed.contains(&format!("-> {}", node))
             });
-            assert!(
-                found,
-                "Expected node '{}' in DOT output:\n{}",
-                node,
-                dot
-            );
+            assert!(found, "Expected node '{}' in DOT output:\n{}", node, dot);
         }
     }
 
@@ -1219,7 +1379,11 @@ mod tests {
 
         let opens = dot.chars().filter(|&c| c == '{').count();
         let closes = dot.chars().filter(|&c| c == '}').count();
-        assert_eq!(opens, closes, "Mismatched braces: {} opens, {} closes", opens, closes);
+        assert_eq!(
+            opens, closes,
+            "Mismatched braces: {} opens, {} closes",
+            opens, closes
+        );
     }
 
     #[test]
@@ -1235,11 +1399,13 @@ mod tests {
 
         assert!(
             dot.contains("Good Energy"),
-            "Missing vibes card in plan prompt:\n{}", dot
+            "Missing vibes card in plan prompt:\n{}",
+            dot
         );
         assert!(
             dot.contains("Cool Pattern"),
-            "Missing inspiration card in plan prompt:\n{}", dot
+            "Missing inspiration card in plan prompt:\n{}",
+            dot
         );
     }
 
@@ -1373,13 +1539,34 @@ mod tests {
 
         let dot = export_dot(&state);
 
-        assert!(!dot.contains("Idea Task"), "Ideas lane task leaked into pipeline");
-        assert!(!dot.contains("Idea Risk"), "Ideas lane risk leaked into pipeline");
-        assert!(!dot.contains("Idea Constraint"), "Ideas lane constraint leaked into pipeline");
-        assert!(!dot.contains("Idea Assumption"), "Ideas lane assumption leaked into pipeline");
-        assert!(!dot.contains("Idea Decision"), "Ideas lane decision leaked into pipeline");
-        assert!(!dot.contains("Idea Plan"), "Ideas lane plan leaked into pipeline");
-        assert!(!dot.contains("Idea Question"), "Ideas lane question leaked into pipeline");
+        assert!(
+            !dot.contains("Idea Task"),
+            "Ideas lane task leaked into pipeline"
+        );
+        assert!(
+            !dot.contains("Idea Risk"),
+            "Ideas lane risk leaked into pipeline"
+        );
+        assert!(
+            !dot.contains("Idea Constraint"),
+            "Ideas lane constraint leaked into pipeline"
+        );
+        assert!(
+            !dot.contains("Idea Assumption"),
+            "Ideas lane assumption leaked into pipeline"
+        );
+        assert!(
+            !dot.contains("Idea Decision"),
+            "Ideas lane decision leaked into pipeline"
+        );
+        assert!(
+            !dot.contains("Idea Plan"),
+            "Ideas lane plan leaked into pipeline"
+        );
+        assert!(
+            !dot.contains("Idea Question"),
+            "Ideas lane question leaked into pipeline"
+        );
     }
 
     #[test]
@@ -1396,8 +1583,17 @@ mod tests {
 
         let dot = export_dot(&state);
 
-        assert!(dot.contains("Spec Task"), "Spec lane card should be included");
-        assert!(dot.contains("Plan Task"), "Plan lane card should be included");
-        assert!(dot.contains("Backlog Task"), "Non-Ideas lane card should be included");
+        assert!(
+            dot.contains("Spec Task"),
+            "Spec lane card should be included"
+        );
+        assert!(
+            dot.contains("Plan Task"),
+            "Plan lane card should be included"
+        );
+        assert!(
+            dot.contains("Backlog Task"),
+            "Non-Ideas lane card should be included"
+        );
     }
 }

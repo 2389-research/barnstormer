@@ -50,7 +50,11 @@ pub fn export_spec(state: &SpecState) -> String {
         ("Requirements", None, Some("task")),
         ("Implementation Plan", None, Some("plan")),
         ("Design Decisions", None, Some("decision")),
-        ("Constraints", core.constraints.as_deref(), Some("constraint")),
+        (
+            "Constraints",
+            core.constraints.as_deref(),
+            Some("constraint"),
+        ),
         ("Assumptions", None, Some("assumption")),
         ("Risks & Mitigations", core.risks.as_deref(), Some("risk")),
         ("Open Questions", None, Some("open_question")),
@@ -146,6 +150,7 @@ mod tests {
             lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
             phase: SpecPhase::Refining,
             canvas_content: None,
+            context_attachments: Vec::new(),
         }
     }
 
@@ -164,6 +169,7 @@ mod tests {
             updated_at: now,
             created_by: "test".to_string(),
             updated_by: "test".to_string(),
+            source_attachment_id: None,
         }
     }
 

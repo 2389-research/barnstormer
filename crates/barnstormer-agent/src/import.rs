@@ -224,6 +224,7 @@ pub fn to_commands(result: &ImportResult) -> Vec<Command> {
             body: card.body.clone(),
             lane: card.lane.clone(),
             created_by: "import".to_string(),
+            source_attachment_id: None,
         });
     }
 
@@ -332,6 +333,7 @@ mod tests {
                 body,
                 lane,
                 created_by,
+                ..
             } => {
                 assert_eq!(card_type, "idea");
                 assert_eq!(title, "Add tasks");
@@ -349,6 +351,7 @@ mod tests {
                 body,
                 lane,
                 created_by,
+                ..
             } => {
                 assert_eq!(card_type, "task");
                 assert_eq!(title, "Set up CLI framework");
@@ -432,10 +435,7 @@ mod tests {
     fn extract_json_rejects_garbage() {
         let result = extract_json("this is not json at all");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("failed to parse"));
+        assert!(result.unwrap_err().to_string().contains("failed to parse"));
     }
 
     // -- ImportResult serde round-trip --

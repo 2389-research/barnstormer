@@ -2,6 +2,7 @@
 // ABOUTME: Assembles all API routes, web UI routes, and static file serving into a single Axum Router.
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post, put};
 use tower_http::services::ServeDir;
 
@@ -33,20 +34,26 @@ pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
             get(api::stream::event_stream),
         )
         .route("/api/specs/{id}/undo", post(api::commands::undo))
-        .route("/api/specs/import", post(api::import::import_spec))
         // Web UI routes (HTML)
         .route("/", get(web::index))
-        .route("/web/specs", get(web::spec_list).post(web::create_spec))
-        .route("/web/specs/new", get(web::create_spec_form))
         .route(
-            "/web/specs/import",
-            get(web::import_spec_form).post(web::import_spec),
+            "/web/specs",
+            get(web::spec_list)
+                .post(web::create_spec)
+                // Creation accepts optional file uploads (up to 20MB each).
+                // 100MB caps the combined multipart body — roughly five max
+                // files at once. Raise if we see users hitting this.
+                .layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
         )
+        .route("/web/specs/new", get(web::create_spec_form))
         .route("/web/specs/{id}", get(web::spec_view))
         .route("/web/specs/{id}/board", get(web::board))
         .route("/web/specs/{id}/document", get(web::document))
         .route("/web/specs/{id}/activity", get(web::activity))
-        .route("/web/specs/{id}/activity/transcript", get(web::activity_transcript))
+        .route(
+            "/web/specs/{id}/activity/transcript",
+            get(web::activity_transcript),
+        )
         .route("/web/specs/{id}/answer", post(web::answer_question))
         .route("/web/specs/{id}/chat", post(web::chat))
         .route("/web/specs/{id}/chat-panel", get(web::chat_panel))
@@ -55,9 +62,31 @@ pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
         .route("/web/specs/{id}/export/markdown", get(web::export_markdown))
         .route("/web/specs/{id}/export/yaml", get(web::export_yaml))
         .route("/web/specs/{id}/export/dot", get(web::export_dot))
-        .route("/web/specs/{id}/export/spec", get(web::export_spec_download))
+        .route(
+            "/web/specs/{id}/export/spec",
+            get(web::export_spec_download),
+        )
         .route("/web/specs/{id}/phase", post(web::transition_phase))
         .route("/web/specs/{id}/phase-check", get(web::phase_check))
+        .route("/web/specs/{id}/cards-feed", get(web::cards_feed))
+        .route(
+            "/web/specs/{id}/context",
+            post(web::upload_context).layer(DefaultBodyLimit::max(25 * 1024 * 1024)),
+        )
+        .route("/web/specs/{id}/context-panel", get(web::context_panel))
+        .route("/web/specs/{id}/context-preview", get(web::context_preview))
+        .route(
+            "/web/specs/{id}/context/{att_id}/notes",
+            axum::routing::patch(web::update_context_notes),
+        )
+        .route(
+            "/web/specs/{id}/context/{att_id}",
+            axum::routing::delete(web::remove_context),
+        )
+        .route(
+            "/web/specs/{id}/context/{att_id}/raw",
+            get(web::download_context),
+        )
         .route("/web/specs/{id}/undo", post(web::undo))
         .route("/web/specs/{id}/regenerate", post(web::regenerate))
         .route("/web/provider-status", get(web::provider_status))
@@ -139,11 +168,7 @@ mod tests {
 
         // API route without token should be rejected
         let resp = app
-            .oneshot(
-                Request::get("/api/specs")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::get("/api/specs").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -182,11 +207,7 @@ mod tests {
 
         // API route without token should work when no auth configured
         let resp = app
-            .oneshot(
-                Request::get("/api/specs")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::get("/api/specs").body(Body::empty()).unwrap())
             .await
             .unwrap();
 

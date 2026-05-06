@@ -63,10 +63,7 @@ impl Hook for StreamingHook {
             HookEvent::PostToolUse {
                 tool_name, input, ..
             } => {
-                let title = input
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let title = input.get("title").and_then(|v| v.as_str()).unwrap_or("");
                 let activity = if title.is_empty() {
                     tool_name.clone()
                 } else {
@@ -106,7 +103,10 @@ mod tests {
     use ulid::Ulid;
 
     /// Helper: create a SpecActorHandle wrapped in Arc plus a broadcast receiver.
-    fn setup_actor() -> (Arc<SpecActorHandle>, tokio::sync::broadcast::Receiver<barnstormer_core::Event>) {
+    fn setup_actor() -> (
+        Arc<SpecActorHandle>,
+        tokio::sync::broadcast::Receiver<barnstormer_core::Event>,
+    ) {
         let handle = spawn(Ulid::new(), SpecState::new());
         let rx = handle.subscribe();
         (Arc::new(handle), rx)
@@ -125,13 +125,10 @@ mod tests {
         let action = hook.on_event(&event).await.unwrap();
         assert!(matches!(action, HookAction::Continue));
 
-        let broadcast = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            rx.recv(),
-        )
-        .await
-        .expect("should receive broadcast within timeout")
-        .expect("broadcast recv should succeed");
+        let broadcast = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("should receive broadcast within timeout")
+            .expect("broadcast recv should succeed");
 
         match &broadcast.payload {
             barnstormer_core::EventPayload::StreamingDelta { agent_id, text } => {
@@ -156,12 +153,11 @@ mod tests {
         assert!(matches!(action, HookAction::Continue));
 
         // No broadcast should have been sent
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            rx.recv(),
-        )
-        .await;
-        assert!(result.is_err(), "expected timeout (no broadcast), but got a message");
+        let result = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await;
+        assert!(
+            result.is_err(),
+            "expected timeout (no broadcast), but got a message"
+        );
     }
 
     #[tokio::test]
@@ -180,19 +176,22 @@ mod tests {
         let action = hook.on_event(&event).await.unwrap();
         assert!(matches!(action, HookAction::Continue));
 
-        let broadcast = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            rx.recv(),
-        )
-        .await
-        .expect("should receive broadcast within timeout")
-        .expect("broadcast recv should succeed");
+        let broadcast = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("should receive broadcast within timeout")
+            .expect("broadcast recv should succeed");
 
         match &broadcast.payload {
             barnstormer_core::EventPayload::StreamingToolActivity { agent_id, activity } => {
                 assert_eq!(agent_id, "worker-1");
-                assert!(activity.contains("create_card"), "activity should contain tool name");
-                assert!(activity.contains("Auth Flow"), "activity should contain title");
+                assert!(
+                    activity.contains("create_card"),
+                    "activity should contain tool name"
+                );
+                assert!(
+                    activity.contains("Auth Flow"),
+                    "activity should contain title"
+                );
             }
             other => panic!("expected StreamingToolActivity, got {:?}", other),
         }
@@ -211,18 +210,18 @@ mod tests {
         let action = hook.on_event(&event).await.unwrap();
         assert!(matches!(action, HookAction::Continue));
 
-        let broadcast = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            rx.recv(),
-        )
-        .await
-        .expect("should receive broadcast within timeout")
-        .expect("broadcast recv should succeed");
+        let broadcast = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("should receive broadcast within timeout")
+            .expect("broadcast recv should succeed");
 
         match &broadcast.payload {
             barnstormer_core::EventPayload::StreamingToolActivity { agent_id, activity } => {
                 assert_eq!(agent_id, "manager-1");
-                assert!(activity.contains("thinking"), "activity should contain 'thinking'");
+                assert!(
+                    activity.contains("thinking"),
+                    "activity should contain 'thinking'"
+                );
             }
             other => panic!("expected StreamingToolActivity, got {:?}", other),
         }
@@ -238,6 +237,9 @@ mod tests {
             task: "brainstorm".to_string(),
         };
 
-        assert!(!hook.accepts(&event), "accepts() should return false for AgentStart");
+        assert!(
+            !hook.accepts(&event),
+            "accepts() should return false for AgentStart"
+        );
     }
 }

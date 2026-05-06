@@ -11,7 +11,11 @@ use mux::llm::{AnthropicClient, GeminiClient, LlmClient, OpenAIClient};
 fn non_empty_env(key: &str) -> Option<String> {
     env::var(key).ok().and_then(|v| {
         let trimmed = v.trim().to_string();
-        if trimmed.is_empty() { None } else { Some(trimmed) }
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
     })
 }
 

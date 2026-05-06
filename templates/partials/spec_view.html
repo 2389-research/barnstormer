@@ -2,9 +2,16 @@
 {# ABOUTME: Loaded into #workspace when a spec is selected; layout varies by phase. #}
 
 {% if phase == "brainstorming" %}
-{# Brainstorming layout: command bar + stepper + full-width chat #}
+{# Brainstorming layout: chat dominant, right sidebar with Cards | Context tabs. #}
 <div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream"
      data-view="brainstorming">
+{# Hidden sentinel: re-fetches the whole workspace when the phase changes.
+   Kept separate so hx-target="#workspace" does not inherit onto siblings. #}
+<span id="sse-phase-sub" style="display:none"
+      hx-trigger="sse:phase_transitioned"
+      hx-get="/web/specs/{{ spec_id }}"
+      hx-target="#workspace"
+      hx-swap="innerHTML"></span>
 
 <header class="command-bar">
     <div class="command-bar-left">
@@ -26,16 +33,28 @@
           hx-get="/web/specs/{{ spec_id }}/chat-panel"
           hx-trigger="load" hx-swap="innerHTML">
     </main>
-    {% if has_pending_question %}
-    {% match canvas_content %}
-    {% when Some with (content) %}
-    <div id="agent-canvas" style="display:block;">{{ content|safe }}</div>
-    {% when None %}
-    <div id="agent-canvas" style="display:none;"></div>
-    {% endmatch %}
-    {% else %}
-    <div id="agent-canvas" style="display:none;"></div>
-    {% endif %}
+    <aside class="sidebar-tabs" id="brainstorm-sidebar">
+        <div class="sidebar-tab-toggles" role="tablist">
+            <button type="button" class="sidebar-tab-toggle active" data-tab="cards" role="tab" aria-selected="true">
+                <span class="sidebar-tab-label">Cards</span>
+                <span class="sidebar-tab-badge" aria-hidden="true"></span>
+            </button>
+            <button type="button" class="sidebar-tab-toggle" data-tab="context" role="tab" aria-selected="false">
+                <span class="sidebar-tab-label">Context</span>
+                <span class="sidebar-tab-badge" aria-hidden="true"></span>
+            </button>
+        </div>
+        <div class="sidebar-tab-panel" data-panel="cards"
+             hx-get="/web/specs/{{ spec_id }}/cards-feed"
+             hx-trigger="load, sse:card_created, sse:card_updated, sse:card_moved, sse:card_deleted"
+             hx-swap="innerHTML">
+        </div>
+        <div class="sidebar-tab-panel" data-panel="context" style="display:none;"
+             hx-get="/web/specs/{{ spec_id }}/context-panel"
+             hx-trigger="load, sse:context_attached, sse:context_summarized, sse:context_notes_updated, sse:context_removed"
+             hx-swap="innerHTML">
+        </div>
+    </aside>
 </div>
 <div id="agents-offline-banner" class="agents-offline-banner">
     <button class="agents-offline-dismiss" onclick="this.parentElement.style.display='none'" title="Dismiss">&times;</button>
@@ -50,53 +69,82 @@
 
 <script>
     (function() {
+        var sidebar = document.getElementById('brainstorm-sidebar');
+        if (!sidebar) return;
+
+        var toggles = sidebar.querySelectorAll('.sidebar-tab-toggle');
+        var panels = sidebar.querySelectorAll('.sidebar-tab-panel');
+
+        function activate(tabName) {
+            toggles.forEach(function(t) {
+                var on = t.getAttribute('data-tab') === tabName;
+                t.classList.toggle('active', on);
+                t.setAttribute('aria-selected', on ? 'true' : 'false');
+                if (on) t.classList.remove('has-notification');
+            });
+            panels.forEach(function(p) {
+                p.style.display = p.getAttribute('data-panel') === tabName ? '' : 'none';
+            });
+        }
+
+        function notify(tabName) {
+            toggles.forEach(function(t) {
+                if (t.getAttribute('data-tab') === tabName && !t.classList.contains('active')) {
+                    t.classList.add('has-notification');
+                }
+            });
+        }
+
+        toggles.forEach(function(t) {
+            t.addEventListener('click', function() { activate(t.getAttribute('data-tab')); });
+        });
+
+        // SSE notification wiring — the sidebar panels' hx-trigger wakes up these event
+        // names on the EventSource (see Task 2 fix), so bubbled CustomEvents reach us here.
         var compositor = document.querySelector('.spec-compositor');
         if (compositor) {
-            compositor.addEventListener('sse:phase_transitioned', function() {
-                htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
+            ['card_created', 'card_updated', 'card_moved', 'card_deleted'].forEach(function(e) {
+                compositor.addEventListener('sse:' + e, function() { notify('cards'); });
             });
-
-            compositor.addEventListener('sse:canvas_updated', function(evt) {
-                var data = JSON.parse(evt.detail.data);
-                var canvas = document.getElementById('agent-canvas');
-                var content = data.payload && data.payload.content;
-                if (content && content.trim() !== '') {
-                    canvas.innerHTML = content;
-                    canvas.style.display = 'block';
-                } else {
-                    canvas.innerHTML = '';
-                    canvas.style.display = 'none';
-                }
+            ['context_attached', 'context_summarized', 'context_notes_updated', 'context_removed'].forEach(function(e) {
+                compositor.addEventListener('sse:' + e, function() { notify('context'); });
             });
-
-            // Clear the agent canvas when a question is answered (stale visual)
-            compositor.addEventListener('sse:question_answered', function() {
-                var canvas = document.getElementById('agent-canvas');
-                if (canvas) {
-                    canvas.innerHTML = '';
-                    canvas.style.display = 'none';
-                }
-            });
-
-            // Polling fallback: if SSE drops, check phase every 15 seconds
-            var currentPhase = '{{ phase }}';
-            setInterval(function() {
-                fetch('/web/specs/{{ spec_id }}/phase-check')
-                    .then(function(r) { return r.text(); })
-                    .then(function(serverPhase) {
-                        if (serverPhase !== currentPhase) {
-                            htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
-                        }
-                    })
-                    .catch(function() {}); // silently ignore network errors
-            }, 15000);
         }
+
+        {# Polling fallback: if SSE drops, check phase every 15 seconds.
+           Singleton on window so workspace innerHTML swaps don't accumulate
+           timers — the prior timer's captured currentPhase would otherwise go
+           stale after a real phase change and trigger repeated workspace
+           refreshes that wipe in-progress chat / Q&A input state. #}
+        window.__bsPhase = window.__bsPhase || {};
+        window.__bsPhase.currentPhase = '{{ phase }}';
+        window.__bsPhase.specId = '{{ spec_id }}';
+        if (window.__bsPhase.timerId) clearInterval(window.__bsPhase.timerId);
+        window.__bsPhase.timerId = setInterval(function() {
+            var p = window.__bsPhase;
+            fetch('/web/specs/' + p.specId + '/phase-check')
+                .then(function(r) { return r.text(); })
+                .then(function(serverPhase) {
+                    if (serverPhase !== p.currentPhase) {
+                        htmx.ajax('GET', '/web/specs/' + p.specId, {target: '#workspace', swap: 'innerHTML'});
+                    }
+                })
+                .catch(function() {});
+        }, 15000);
     })();
 </script>
 
 {% else if phase == "refining" %}
 {# Refining layout: command bar + stepper + view toggles + canvas + chat rail #}
 <div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
+{# Hidden sentinel: re-fetches the whole workspace when the phase changes.
+   Kept as a separate element so hx-target="#workspace" does not inherit onto
+   siblings like #canvas (which needs to target itself). #}
+<span id="sse-phase-sub" style="display:none"
+      hx-trigger="sse:phase_transitioned"
+      hx-get="/web/specs/{{ spec_id }}"
+      hx-target="#workspace"
+      hx-swap="innerHTML"></span>
 
 <header class="command-bar">
     <div class="command-bar-left">
@@ -150,6 +198,11 @@
            hx-trigger="load" hx-swap="innerHTML">
     </aside>
 </div>
+{# Subscription-only sink: makes htmx-ext-sse actually subscribe to these event
+   names on the EventSource. No hx-get, so no request fires — the JS listener on
+   .spec-compositor picks up the bubbled event and re-fetches the active view. #}
+<span id="sse-card-sub" style="display:none"
+      hx-trigger="sse:card_created, sse:card_updated, sse:card_moved, sse:card_deleted, sse:spec_core_updated"></span>
 <div id="agents-offline-banner" class="agents-offline-banner">
     <button class="agents-offline-dismiss" onclick="this.parentElement.style.display='none'" title="Dismiss">&times;</button>
     <span>Agents are not running.</span>
@@ -192,6 +245,9 @@
     });
 
     // Proactive canvas refresh on card changes via SSE.
+    // The hidden <span id="sse-card-sub"> below declares the hx-trigger subscriptions
+    // that make htmx-ext-sse actually listen for these event names; the events then
+    // bubble up to this listener on the compositor.
     // Debounce to avoid hammering the server when multiple card events fire rapidly.
     (function() {
         var refreshTimer = null;
@@ -203,9 +259,7 @@
             compositor.addEventListener('sse:' + eventName, function() {
                 if (refreshTimer) clearTimeout(refreshTimer);
                 refreshTimer = setTimeout(function() {
-                    var canvas = document.getElementById('canvas');
-                    if (!canvas) return;
-                    // Find the active view toggle and re-trigger its HTMX request
+                    // Re-fetch the active view into #canvas
                     var activeBtn = document.querySelector('.view-toggle.active');
                     if (activeBtn) {
                         activeBtn.click();
@@ -214,22 +268,22 @@
             });
         });
 
-        // Phase transition handler — re-fetch entire workspace
-        compositor.addEventListener('sse:phase_transitioned', function() {
-            htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
-        });
-
-        // Polling fallback: if SSE drops, check phase every 15 seconds
-        var currentPhase = '{{ phase }}';
-        setInterval(function() {
-            fetch('/web/specs/{{ spec_id }}/phase-check')
+        {# Polling fallback: see brainstorming branch for rationale on the
+           window-scoped singleton pattern. #}
+        window.__bsPhase = window.__bsPhase || {};
+        window.__bsPhase.currentPhase = '{{ phase }}';
+        window.__bsPhase.specId = '{{ spec_id }}';
+        if (window.__bsPhase.timerId) clearInterval(window.__bsPhase.timerId);
+        window.__bsPhase.timerId = setInterval(function() {
+            var p = window.__bsPhase;
+            fetch('/web/specs/' + p.specId + '/phase-check')
                 .then(function(r) { return r.text(); })
                 .then(function(serverPhase) {
-                    if (serverPhase !== currentPhase) {
-                        htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
+                    if (serverPhase !== p.currentPhase) {
+                        htmx.ajax('GET', '/web/specs/' + p.specId, {target: '#workspace', swap: 'innerHTML'});
                     }
                 })
-                .catch(function() {}); // silently ignore network errors
+                .catch(function() {});
         }, 15000);
     })();
 </script>
@@ -237,6 +291,14 @@
 {% else %}
 {# Complete layout: read-only export view #}
 <div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
+{# Hidden sentinel: re-fetches the whole workspace when the phase changes.
+   Kept as a separate element so hx-target="#workspace" does not inherit onto
+   siblings like #canvas (which needs to target itself). #}
+<span id="sse-phase-sub" style="display:none"
+      hx-trigger="sse:phase_transitioned"
+      hx-get="/web/specs/{{ spec_id }}"
+      hx-target="#workspace"
+      hx-swap="innerHTML"></span>
 
 <header class="command-bar">
     <div class="command-bar-left">
@@ -260,26 +322,24 @@
 </div>
 
 <script>
+    {# Polling fallback: see brainstorming branch for rationale on the
+       window-scoped singleton pattern. #}
     (function() {
-        var compositor = document.querySelector('.spec-compositor');
-        if (compositor) {
-            compositor.addEventListener('sse:phase_transitioned', function() {
-                htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
-            });
-
-            // Polling fallback: if SSE drops, check phase every 15 seconds
-            var currentPhase = '{{ phase }}';
-            setInterval(function() {
-                fetch('/web/specs/{{ spec_id }}/phase-check')
-                    .then(function(r) { return r.text(); })
-                    .then(function(serverPhase) {
-                        if (serverPhase !== currentPhase) {
-                            htmx.ajax('GET', '/web/specs/{{ spec_id }}', {target: '#workspace', swap: 'innerHTML'});
-                        }
-                    })
-                    .catch(function() {}); // silently ignore network errors
-            }, 15000);
-        }
+        window.__bsPhase = window.__bsPhase || {};
+        window.__bsPhase.currentPhase = '{{ phase }}';
+        window.__bsPhase.specId = '{{ spec_id }}';
+        if (window.__bsPhase.timerId) clearInterval(window.__bsPhase.timerId);
+        window.__bsPhase.timerId = setInterval(function() {
+            var p = window.__bsPhase;
+            fetch('/web/specs/' + p.specId + '/phase-check')
+                .then(function(r) { return r.text(); })
+                .then(function(serverPhase) {
+                    if (serverPhase !== p.currentPhase) {
+                        htmx.ajax('GET', '/web/specs/' + p.specId, {target: '#workspace', swap: 'innerHTML'});
+                    }
+                })
+                .catch(function() {});
+        }, 15000);
     })();
 </script>
 

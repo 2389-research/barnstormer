@@ -125,8 +125,8 @@ impl JsonlLog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
     use barnstormer_core::EventPayload;
+    use chrono::Utc;
     use tempfile::TempDir;
     use ulid::Ulid;
 

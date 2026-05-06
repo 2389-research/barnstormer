@@ -5,9 +5,9 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use serde::{Deserialize, Serialize};
 use barnstormer_core::{Command, SpecState, spawn};
 use barnstormer_store::JsonlLog;
+use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
 use crate::app_state::SharedState;
@@ -63,7 +63,10 @@ pub async fn create_spec(
     let spec_id = Ulid::new();
 
     // Create directory structure for this spec
-    let spec_dir = state.barnstormer_home.join("specs").join(spec_id.to_string());
+    let spec_dir = state
+        .barnstormer_home
+        .join("specs")
+        .join(spec_id.to_string());
     if let Err(e) = std::fs::create_dir_all(&spec_dir) {
         tracing::error!("failed to create spec directory: {}", e);
         return (
@@ -118,8 +121,13 @@ pub async fn create_spec(
     // Subscribe the event persister BEFORE inserting the actor and starting
     // agents so it catches all subsequent events (agent-produced, etc.).
     // The CreateSpec events above were already persisted inline.
-    let persister_handle = crate::web::spawn_event_persister(&handle, spec_id, &state.barnstormer_home);
-    state.event_persisters.write().await.insert(spec_id, persister_handle);
+    let persister_handle =
+        crate::web::spawn_event_persister(&handle, spec_id, &state.barnstormer_home);
+    state
+        .event_persisters
+        .write()
+        .await
+        .insert(spec_id, persister_handle);
 
     // Store actor handle
     state.actors.write().await.insert(spec_id, handle);

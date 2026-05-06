@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
@@ -16,6 +17,22 @@ use crate::transcript::{MessageKind, TranscriptMessage, UserQuestion};
 pub struct UndoEntry {
     pub event_id: u64,
     pub inverse: Vec<EventPayload>,
+}
+
+/// A file attached as context to the brainstorming phase of a spec.
+/// Tracks the original upload metadata plus an optional agent-generated
+/// summary and user notes. `removed` is a tombstone flag so event history
+/// is preserved when an attachment is taken out of active context.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContextAttachment {
+    pub attachment_id: Ulid,
+    pub filename: String,
+    pub mime_type: String,
+    pub size_bytes: u64,
+    pub summary: Option<String>,
+    pub user_notes: Option<String>,
+    pub added_at: DateTime<Utc>,
+    pub removed: bool,
 }
 
 /// Tracks which lifecycle phase a spec is in.
@@ -45,6 +62,8 @@ pub struct SpecState {
     pub phase: SpecPhase,
     #[serde(default)]
     pub canvas_content: Option<String>,
+    #[serde(default)]
+    pub context_attachments: Vec<ContextAttachment>,
 }
 
 impl Default for SpecState {
@@ -59,6 +78,7 @@ impl Default for SpecState {
             lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
             phase: SpecPhase::Refining,
             canvas_content: None,
+            context_attachments: Vec::new(),
         }
     }
 }
@@ -298,6 +318,75 @@ impl SpecState {
                 // No undo entry — phase transitions are lifecycle events
             }
 
+            EventPayload::ContextAttached { attachment } => {
+                let inverse = vec![EventPayload::ContextRemoved {
+                    attachment_id: attachment.attachment_id,
+                }];
+                self.undo_stack.push(UndoEntry {
+                    event_id: event.event_id,
+                    inverse,
+                });
+                self.context_attachments.push(attachment.clone());
+            }
+
+            EventPayload::ContextSummarized {
+                attachment_id,
+                summary,
+            } => {
+                if let Some(att) = self
+                    .context_attachments
+                    .iter_mut()
+                    .find(|a| a.attachment_id == *attachment_id)
+                {
+                    // no undo for summarization — it's idempotent replacement from the summarizer
+                    att.summary = Some(summary.clone());
+                }
+            }
+
+            EventPayload::ContextNotesUpdated {
+                attachment_id,
+                notes,
+            } => {
+                if let Some(att) = self
+                    .context_attachments
+                    .iter_mut()
+                    .find(|a| a.attachment_id == *attachment_id)
+                {
+                    let prior = att.user_notes.clone().unwrap_or_default();
+                    self.undo_stack.push(UndoEntry {
+                        event_id: event.event_id,
+                        inverse: vec![EventPayload::ContextNotesUpdated {
+                            attachment_id: *attachment_id,
+                            notes: prior,
+                        }],
+                    });
+                    att.user_notes = if notes.is_empty() {
+                        None
+                    } else {
+                        Some(notes.clone())
+                    };
+                }
+            }
+
+            EventPayload::ContextRemoved { attachment_id } => {
+                if let Some(att) = self
+                    .context_attachments
+                    .iter_mut()
+                    .find(|a| a.attachment_id == *attachment_id)
+                {
+                    // Inverse is ContextAttached with the same attachment (un-removed).
+                    let mut restored = att.clone();
+                    restored.removed = false;
+                    self.undo_stack.push(UndoEntry {
+                        event_id: event.event_id,
+                        inverse: vec![EventPayload::ContextAttached {
+                            attachment: restored,
+                        }],
+                    });
+                    att.removed = true;
+                }
+            }
+
             EventPayload::StreamingDelta { .. } => {
                 // Ephemeral — no state mutation
             }
@@ -360,6 +449,56 @@ impl SpecState {
                     self.canvas_content = None;
                 } else {
                     self.canvas_content = Some(content.clone());
+                }
+            }
+            EventPayload::ContextAttached { attachment } => {
+                // During undo of a ContextRemoved, we get a ContextAttached inverse whose
+                // attachment_id already exists in state — un-tombstone rather than duplicate.
+                if let Some(existing) = self
+                    .context_attachments
+                    .iter_mut()
+                    .find(|a| a.attachment_id == attachment.attachment_id)
+                {
+                    *existing = attachment.clone();
+                } else {
+                    self.context_attachments.push(attachment.clone());
+                }
+            }
+            EventPayload::ContextSummarized {
+                attachment_id,
+                summary,
+            } => {
+                if let Some(att) = self
+                    .context_attachments
+                    .iter_mut()
+                    .find(|a| a.attachment_id == *attachment_id)
+                {
+                    att.summary = Some(summary.clone());
+                }
+            }
+            EventPayload::ContextNotesUpdated {
+                attachment_id,
+                notes,
+            } => {
+                if let Some(att) = self
+                    .context_attachments
+                    .iter_mut()
+                    .find(|a| a.attachment_id == *attachment_id)
+                {
+                    att.user_notes = if notes.is_empty() {
+                        None
+                    } else {
+                        Some(notes.clone())
+                    };
+                }
+            }
+            EventPayload::ContextRemoved { attachment_id } => {
+                if let Some(att) = self
+                    .context_attachments
+                    .iter_mut()
+                    .find(|a| a.attachment_id == *attachment_id)
+                {
+                    att.removed = true;
                 }
             }
             EventPayload::StreamingDelta { .. } => {
@@ -666,10 +805,18 @@ mod tests {
         let spec_id = make_spec_id();
 
         // Create a card (pushes 1 undo entry)
-        let card = Card::new("idea".to_string(), "Undo Test".to_string(), "human".to_string());
+        let card = Card::new(
+            "idea".to_string(),
+            "Undo Test".to_string(),
+            "human".to_string(),
+        );
         let card_id = card.card_id;
         state.apply(&make_event(1, spec_id, EventPayload::CardCreated { card }));
-        assert_eq!(state.undo_stack.len(), 1, "undo_stack should have 1 entry after card creation");
+        assert_eq!(
+            state.undo_stack.len(),
+            1,
+            "undo_stack should have 1 entry after card creation"
+        );
 
         // Apply UndoApplied (should apply inverse and pop the entry)
         state.apply(&make_event(
@@ -702,7 +849,10 @@ mod tests {
             },
         ));
         assert_eq!(state.transcript.len(), 1);
-        assert_eq!(state.transcript[0].kind, crate::transcript::MessageKind::StepStarted);
+        assert_eq!(
+            state.transcript[0].kind,
+            crate::transcript::MessageKind::StepStarted
+        );
         assert_eq!(state.transcript[0].content, "Manager reasoning step");
         assert!(!state.transcript[0].content.contains("[step started]"));
     }
@@ -720,8 +870,14 @@ mod tests {
             },
         ));
         assert_eq!(state.transcript.len(), 1);
-        assert_eq!(state.transcript[0].kind, crate::transcript::MessageKind::StepFinished);
-        assert_eq!(state.transcript[0].content, "Updated goal and added 3 cards");
+        assert_eq!(
+            state.transcript[0].kind,
+            crate::transcript::MessageKind::StepFinished
+        );
+        assert_eq!(
+            state.transcript[0].content,
+            "Updated goal and added 3 cards"
+        );
         assert!(!state.transcript[0].content.contains("[step finished]"));
     }
 
@@ -974,5 +1130,290 @@ mod tests {
         let json = r#"{"core":null,"cards":{},"transcript":[],"pending_question":null,"undo_stack":[],"last_event_id":0,"lanes":["Ideas","Plan","Spec"]}"#;
         let state: SpecState = serde_json::from_str(json).unwrap();
         assert_eq!(state.phase, SpecPhase::Refining);
+    }
+
+    #[test]
+    fn apply_context_attached_adds_attachment() {
+        let mut state = SpecState::new();
+        let attachment_id = Ulid::new();
+        let event = make_event(
+            1,
+            make_spec_id(),
+            EventPayload::ContextAttached {
+                attachment: ContextAttachment {
+                    attachment_id,
+                    filename: "a.md".to_string(),
+                    mime_type: "text/markdown".to_string(),
+                    size_bytes: 42,
+                    summary: None,
+                    user_notes: None,
+                    added_at: Utc::now(),
+                    removed: false,
+                },
+            },
+        );
+        state.apply(&event);
+        assert_eq!(state.context_attachments.len(), 1);
+        assert_eq!(state.context_attachments[0].attachment_id, attachment_id);
+    }
+
+    #[test]
+    fn apply_context_summarized_updates_summary() {
+        let mut state = SpecState::new();
+        let attachment_id = Ulid::new();
+        state.apply(&make_event(
+            1,
+            make_spec_id(),
+            EventPayload::ContextAttached {
+                attachment: ContextAttachment {
+                    attachment_id,
+                    filename: "a".into(),
+                    mime_type: "text/plain".into(),
+                    size_bytes: 1,
+                    summary: None,
+                    user_notes: None,
+                    added_at: Utc::now(),
+                    removed: false,
+                },
+            },
+        ));
+        state.apply(&make_event(
+            2,
+            make_spec_id(),
+            EventPayload::ContextSummarized {
+                attachment_id,
+                summary: "brief".into(),
+            },
+        ));
+        assert_eq!(
+            state.context_attachments[0].summary.as_deref(),
+            Some("brief")
+        );
+    }
+
+    #[test]
+    fn apply_context_notes_updated_sets_notes() {
+        let mut state = SpecState::new();
+        let attachment_id = Ulid::new();
+        state.apply(&make_event(
+            1,
+            make_spec_id(),
+            EventPayload::ContextAttached {
+                attachment: ContextAttachment {
+                    attachment_id,
+                    filename: "a".into(),
+                    mime_type: "text/plain".into(),
+                    size_bytes: 1,
+                    summary: None,
+                    user_notes: None,
+                    added_at: Utc::now(),
+                    removed: false,
+                },
+            },
+        ));
+        state.apply(&make_event(
+            2,
+            make_spec_id(),
+            EventPayload::ContextNotesUpdated {
+                attachment_id,
+                notes: "my note".into(),
+            },
+        ));
+        assert_eq!(
+            state.context_attachments[0].user_notes.as_deref(),
+            Some("my note")
+        );
+    }
+
+    #[test]
+    fn apply_context_removed_marks_removed() {
+        let mut state = SpecState::new();
+        let attachment_id = Ulid::new();
+        state.apply(&make_event(
+            1,
+            make_spec_id(),
+            EventPayload::ContextAttached {
+                attachment: ContextAttachment {
+                    attachment_id,
+                    filename: "a".into(),
+                    mime_type: "text/plain".into(),
+                    size_bytes: 1,
+                    summary: None,
+                    user_notes: None,
+                    added_at: Utc::now(),
+                    removed: false,
+                },
+            },
+        ));
+        state.apply(&make_event(
+            2,
+            make_spec_id(),
+            EventPayload::ContextRemoved { attachment_id },
+        ));
+        assert!(state.context_attachments[0].removed);
+    }
+
+    #[test]
+    fn undo_context_attached_marks_removed() {
+        let mut state = SpecState::new();
+        let attachment_id = Ulid::new();
+        state.apply(&make_event(
+            1,
+            make_spec_id(),
+            EventPayload::ContextAttached {
+                attachment: ContextAttachment {
+                    attachment_id,
+                    filename: "a".into(),
+                    mime_type: "text/plain".into(),
+                    size_bytes: 1,
+                    summary: None,
+                    user_notes: None,
+                    added_at: Utc::now(),
+                    removed: false,
+                },
+            },
+        ));
+        // Simulate undo by applying UndoApplied with the inverse the attach event produced.
+        let top = state.undo_stack.last().expect("undo entry pushed");
+        let inverse = top.inverse.clone();
+        state.apply(&make_event(
+            2,
+            make_spec_id(),
+            EventPayload::UndoApplied {
+                target_event_id: 1,
+                inverse_events: inverse,
+            },
+        ));
+        assert!(state.context_attachments[0].removed);
+    }
+
+    #[test]
+    fn undo_context_removed_restores_attachment() {
+        let mut state = SpecState::new();
+        let attachment_id = Ulid::new();
+        state.apply(&make_event(
+            1,
+            make_spec_id(),
+            EventPayload::ContextAttached {
+                attachment: ContextAttachment {
+                    attachment_id,
+                    filename: "a".into(),
+                    mime_type: "text/plain".into(),
+                    size_bytes: 1,
+                    summary: None,
+                    user_notes: None,
+                    added_at: Utc::now(),
+                    removed: false,
+                },
+            },
+        ));
+        state.apply(&make_event(
+            2,
+            make_spec_id(),
+            EventPayload::ContextRemoved { attachment_id },
+        ));
+        assert!(state.context_attachments[0].removed);
+
+        let inverse = state.undo_stack.last().unwrap().inverse.clone();
+        state.apply(&make_event(
+            3,
+            make_spec_id(),
+            EventPayload::UndoApplied {
+                target_event_id: 2,
+                inverse_events: inverse,
+            },
+        ));
+
+        assert_eq!(state.context_attachments.len(), 1, "no duplicate entry");
+        assert!(
+            !state.context_attachments[0].removed,
+            "removed flag cleared"
+        );
+    }
+
+    #[test]
+    fn context_summarized_does_not_push_undo() {
+        let mut state = SpecState::new();
+        let attachment_id = Ulid::new();
+        state.apply(&make_event(
+            1,
+            make_spec_id(),
+            EventPayload::ContextAttached {
+                attachment: ContextAttachment {
+                    attachment_id,
+                    filename: "a".into(),
+                    mime_type: "text/plain".into(),
+                    size_bytes: 1,
+                    summary: None,
+                    user_notes: None,
+                    added_at: Utc::now(),
+                    removed: false,
+                },
+            },
+        ));
+        let undo_len_after_attach = state.undo_stack.len();
+        state.apply(&make_event(
+            2,
+            make_spec_id(),
+            EventPayload::ContextSummarized {
+                attachment_id,
+                summary: "brief".into(),
+            },
+        ));
+        assert_eq!(
+            state.undo_stack.len(),
+            undo_len_after_attach,
+            "summarization should not push an undo entry"
+        );
+    }
+
+    #[test]
+    fn undo_context_notes_updated_restores_none_when_prior_was_none() {
+        let mut state = SpecState::new();
+        let attachment_id = Ulid::new();
+        // Attach (no notes)
+        state.apply(&make_event(
+            1,
+            make_spec_id(),
+            EventPayload::ContextAttached {
+                attachment: ContextAttachment {
+                    attachment_id,
+                    filename: "a".into(),
+                    mime_type: "text/plain".into(),
+                    size_bytes: 1,
+                    summary: None,
+                    user_notes: None,
+                    added_at: Utc::now(),
+                    removed: false,
+                },
+            },
+        ));
+        // Add notes
+        state.apply(&make_event(
+            2,
+            make_spec_id(),
+            EventPayload::ContextNotesUpdated {
+                attachment_id,
+                notes: "hello".into(),
+            },
+        ));
+        assert_eq!(
+            state.context_attachments[0].user_notes.as_deref(),
+            Some("hello")
+        );
+
+        // Undo
+        let inverse = state.undo_stack.last().unwrap().inverse.clone();
+        state.apply(&make_event(
+            3,
+            make_spec_id(),
+            EventPayload::UndoApplied {
+                target_event_id: 2,
+                inverse_events: inverse,
+            },
+        ));
+
+        // Prior was None — should be restored to None, not Some("")
+        assert_eq!(state.context_attachments[0].user_notes, None);
     }
 }

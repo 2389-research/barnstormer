@@ -6,11 +6,11 @@ use std::sync::Arc;
 use axum::extract::{Form, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
-use serde::Deserialize;
 use barnstormer_agent::SwarmOrchestrator;
 use barnstormer_core::{ActorError, Command, SpecPhase, SpecState, spawn};
 use barnstormer_store::{JsonlLog, SnapshotData, save_snapshot};
 use chrono::Utc;
+use serde::Deserialize;
 use ulid::Ulid;
 
 use pulldown_cmark::{Event, Options, Parser, html};
@@ -20,6 +20,50 @@ use crate::app_state::SharedState;
 
 use askama::Template;
 use askama_derive_axum::IntoResponse as AskamaIntoResponse;
+
+/// Maximum size of a single uploaded context file (per part). Enforced while
+/// streaming the multipart field so a malicious client can't buffer up to the
+/// configured global body cap (e.g. 100MB) before being rejected.
+const MAX_FILE_BYTES: usize = 20 * 1024 * 1024;
+
+/// Stream a single multipart field into a `Vec<u8>`, aborting as soon as the
+/// accumulated size exceeds `MAX_FILE_BYTES`. Avoids the eager `field.bytes()`
+/// pattern, which buffers the full part before any size check runs.
+///
+/// On `Ok(None)` the field was empty (e.g. browsers send an empty `files`
+/// part when no file was selected) — callers should treat that as "skip".
+async fn read_field_capped(
+    field: &mut axum::extract::multipart::Field<'_>,
+) -> Result<Option<Vec<u8>>, Response> {
+    let mut accumulated: Vec<u8> = Vec::new();
+    loop {
+        match field.chunk().await {
+            Ok(Some(chunk)) => {
+                if accumulated.len().saturating_add(chunk.len()) > MAX_FILE_BYTES {
+                    return Err((
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        format!("file exceeds {}MB", MAX_FILE_BYTES / (1024 * 1024),),
+                    )
+                        .into_response());
+                }
+                accumulated.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(e) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("multipart read error: {e}"),
+                )
+                    .into_response());
+            }
+        }
+    }
+    if accumulated.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(accumulated))
+    }
+}
 
 /// Index page showing the spec list and welcome message.
 #[derive(Template, AskamaIntoResponse)]
@@ -68,220 +112,6 @@ pub async fn create_spec_form() -> CreateSpecFormTemplate {
     CreateSpecFormTemplate {}
 }
 
-/// Partial: import spec form.
-#[derive(Template, AskamaIntoResponse)]
-#[template(path = "partials/import_spec_form.html")]
-pub struct ImportSpecFormTemplate {}
-
-/// GET /web/specs/import - Render the import spec form.
-pub async fn import_spec_form() -> ImportSpecFormTemplate {
-    ImportSpecFormTemplate {}
-}
-
-/// Form data for importing a spec from arbitrary content.
-#[derive(Deserialize)]
-pub struct ImportSpecForm {
-    pub content: String,
-    #[serde(default)]
-    pub source_format: Option<String>,
-}
-
-/// POST /web/specs/import - Import a spec from pasted content via LLM.
-pub async fn import_spec(
-    State(state): State<SharedState>,
-    Form(form): Form<ImportSpecForm>,
-) -> Response {
-    if form.content.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Html("<p class=\"error-msg\">Content must not be empty.</p>".to_string()),
-        )
-            .into_response();
-    }
-
-    // Create LLM client
-    let provider = &state.provider_status.default_provider;
-    let (client, model) = match barnstormer_agent::client::create_llm_client(
-        provider,
-        state.provider_status.default_model.as_deref(),
-    ) {
-        Ok(pair) => pair,
-        Err(e) => {
-            tracing::error!("failed to create LLM client for import: {}", e);
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Html(format!(
-                    "<p class=\"error-msg\">LLM provider not available: {}</p>",
-                    e
-                )),
-            )
-                .into_response();
-        }
-    };
-
-    // Parse via LLM
-    let source_hint = form
-        .source_format
-        .as_deref()
-        .filter(|s| *s != "auto");
-    let import_result = match barnstormer_agent::import::parse_with_llm(
-        &form.content,
-        source_hint,
-        &client,
-        &model,
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(e) => {
-            tracing::error!("LLM import failed: {}", e);
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Html(format!(
-                    "<p class=\"error-msg\">Failed to parse content: {}</p>",
-                    e
-                )),
-            )
-                .into_response();
-        }
-    };
-
-    let commands = barnstormer_agent::import::to_commands(&import_result);
-
-    // Create spec directory and JSONL log
-    let spec_id = Ulid::new();
-    let spec_dir = state
-        .barnstormer_home
-        .join("specs")
-        .join(spec_id.to_string());
-    if let Err(e) = std::fs::create_dir_all(&spec_dir) {
-        tracing::error!("failed to create spec directory: {}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html("<p class=\"error-msg\">Failed to create spec directory.</p>".to_string()),
-        )
-            .into_response();
-    }
-    let log_path = spec_dir.join("events.jsonl");
-    let mut log = match JsonlLog::open(&log_path) {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::error!("failed to create JSONL log: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Html("<p class=\"error-msg\">Failed to create spec storage.</p>".to_string()),
-            )
-                .into_response();
-        }
-    };
-
-    // Spawn actor and send all commands
-    let handle = spawn(spec_id, SpecState::new());
-    for cmd in commands {
-        match handle.send_command(cmd).await {
-            Ok(events) => {
-                for event in &events {
-                    if let Err(e) = log.append(event) {
-                        tracing::error!("failed to persist event: {}", e);
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::error!("failed to send import command: {}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Html(format!(
-                        "<p class=\"error-msg\">Failed to create spec: {}</p>",
-                        e
-                    )),
-                )
-                    .into_response();
-            }
-        }
-    }
-
-    // Subscribe event persister
-    let persister_handle = spawn_event_persister(&handle, spec_id, &state.barnstormer_home);
-    state
-        .event_persisters
-        .write()
-        .await
-        .insert(spec_id, persister_handle);
-
-    state.actors.write().await.insert(spec_id, handle);
-
-    // Auto-start agents if a provider is available
-    {
-        let actors = state.actors.read().await;
-        if let Some(handle_ref) = actors.get(&spec_id) {
-            try_start_agents(&state, spec_id, handle_ref).await;
-        }
-    }
-
-    // Return the spec view so HTMX navigates into the imported spec
-    let spec_state = {
-        let actors = state.actors.read().await;
-        match actors.get(&spec_id) {
-            Some(h) => h.read_state().await.clone(),
-            None => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Html("<p class=\"error-msg\">Spec imported but not found.</p>".to_string()),
-                )
-                    .into_response();
-            }
-        }
-    };
-
-    let lanes = cards_by_lane(&spec_state);
-    let core = match spec_state.core.as_ref() {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Html(
-                    "<p class=\"error-msg\">Spec imported but core data is missing.</p>".to_string(),
-                ),
-            )
-                .into_response();
-        }
-    };
-    let spec_id_str = spec_id.to_string();
-    let phase = match spec_state.phase {
-        SpecPhase::Brainstorming => "brainstorming".to_string(),
-        SpecPhase::Refining => "refining".to_string(),
-        SpecPhase::Complete => "complete".to_string(),
-    };
-
-    let has_pending_question = spec_state.pending_question.is_some();
-    let canvas_content = spec_state.canvas_content.clone();
-
-    let mut response = SpecViewTemplate {
-        spec_id: spec_id_str.clone(),
-        title: core.title.clone(),
-        one_liner: core.one_liner.clone(),
-        goal: core.goal.clone(),
-        phase,
-        lanes,
-        canvas_content,
-        has_pending_question,
-    }
-    .into_response();
-
-    response.headers_mut().insert(
-        axum::http::HeaderName::from_static("hx-push-url"),
-        axum::http::HeaderValue::from_str(&format!("/web/specs/{}", spec_id_str)).unwrap(),
-    );
-
-    response
-}
-
-/// Form data for creating a new spec.
-#[derive(Deserialize)]
-pub struct CreateSpecForm {
-    pub description: String,
-}
-
 /// Extract a placeholder title from free-text description.
 /// Takes the first sentence (ending in . ! ?) or first 60 chars, whichever is shorter.
 fn extract_placeholder_title(description: &str) -> String {
@@ -307,13 +137,99 @@ fn extract_placeholder_title(description: &str) -> String {
     title
 }
 
-/// POST /web/specs - Create a spec from free-text description, return spec view.
+/// POST /web/specs - Create a spec from free-text description plus optional
+/// context files, return spec view.
+///
+/// Body is `multipart/form-data` with one required `description` field and
+/// zero-or-more `files` parts. Each file is validated (UTF-8, max 20MB)
+/// before any spec is created so we fail fast without leaving a half-wired
+/// spec behind. Accepted files are written to disk, attached via
+/// `Command::AttachContext`, and handed to the async summarizer.
 pub async fn create_spec(
     State(state): State<SharedState>,
-    Form(form): Form<CreateSpecForm>,
+    mut multipart: axum::extract::Multipart,
 ) -> Response {
+    // 1. Parse fields: description (required) + zero-or-more `files`.
+    let mut description: Option<String> = None;
+    let mut files: Vec<(String, String, Vec<u8>)> = Vec::new(); // (filename, mime, bytes)
+
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(mut field)) => match field.name() {
+                Some("description") => match field.text().await {
+                    Ok(t) => description = Some(t),
+                    Err(e) => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            format!("failed to read description: {e}"),
+                        )
+                            .into_response();
+                    }
+                },
+                Some("files") => {
+                    let filename = field
+                        .file_name()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| "file".into());
+                    let mime = field
+                        .content_type()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| "text/plain".into());
+                    // Stream + size-cap so a single 100MB body can't buffer
+                    // 5x past the per-file limit before we reject it.
+                    let bytes = match read_field_capped(&mut field).await {
+                        Ok(Some(b)) => b,
+                        // Browsers send an empty `files` part when no file is
+                        // selected — skip so the no-files case keeps working.
+                        Ok(None) => continue,
+                        Err(resp) => return resp,
+                    };
+                    files.push((filename, mime, bytes));
+                }
+                _ => {} // ignore unknown fields
+            },
+            Ok(None) => break,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("multipart parse error: {e}"),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    let description = match description {
+        Some(d) if !d.trim().is_empty() => d,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Html("<p class=\"error-msg\">Description is required.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    // 2. Validate files upfront so we fail before creating the spec. Better
+    // UX than writing a spec then bouncing on file #3. Per-file size was
+    // already enforced while streaming the multipart field, so here we only
+    // need to verify the bytes are UTF-8 text.
+    for (filename, _, bytes) in &files {
+        if !crate::context_storage::is_utf8_text(bytes) {
+            return (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                format!("'{filename}' is binary — text files only for now"),
+            )
+                .into_response();
+        }
+    }
+
+    // 3. Create the spec.
     let spec_id = Ulid::new();
-    let spec_dir = state.barnstormer_home.join("specs").join(spec_id.to_string());
+    let spec_dir = state
+        .barnstormer_home
+        .join("specs")
+        .join(spec_id.to_string());
     if let Err(e) = std::fs::create_dir_all(&spec_dir) {
         tracing::error!("failed to create spec directory: {}", e);
         return (
@@ -339,7 +255,7 @@ pub async fn create_spec(
     let handle = spawn(spec_id, SpecState::new());
     let events = match handle
         .send_command(Command::CreateSpec {
-            title: extract_placeholder_title(&form.description),
+            title: extract_placeholder_title(&description),
             one_liner: String::new(),
             goal: String::new(),
         })
@@ -370,7 +286,7 @@ pub async fn create_spec(
     let transcript_events = match handle
         .send_command(Command::AppendTranscript {
             sender: "human".to_string(),
-            content: form.description,
+            content: description,
         })
         .await
     {
@@ -386,11 +302,79 @@ pub async fn create_spec(
         }
     }
 
-    // Subscribe the event persister BEFORE inserting the actor and starting
-    // agents so it catches all subsequent events (agent-produced, etc.).
-    // The CreateSpec events above were already persisted inline.
+    // 4. Attach any uploaded context files. Validation ran above, so from
+    // here on we treat per-file errors as soft failures — the spec itself
+    // is already live, we just skip the file and log.
+    //
+    // Note: events produced here are persisted inline via `log.append`,
+    // same as the CreateSpec and AppendTranscript events above, because
+    // the event persister task hasn't been subscribed yet.
+    //
+    // Summarizer jobs are queued here and dispatched AFTER the event
+    // persister subscribes — otherwise a fast LLM call could produce
+    // `ContextSummarized` before the persister is listening, leaving the
+    // summary in memory but absent from `events.jsonl` (so it disappears
+    // after restart).
+    let mut summarize_jobs: Vec<(Ulid, String, String)> = Vec::new();
+    for (filename, mime, bytes) in files {
+        let attachment_id = Ulid::new();
+        let filename = crate::context_storage::sanitize_filename(&filename);
+        let path = crate::context_storage::attachment_path(
+            &state.barnstormer_home,
+            spec_id,
+            attachment_id,
+            &filename,
+        );
+        if let Err(e) = crate::context_storage::write_bytes(&path, &bytes) {
+            tracing::error!("failed to write context file {filename}: {e}");
+            continue;
+        }
+        let size_bytes = bytes.len() as u64;
+        let cmd = Command::AttachContext {
+            attachment_id,
+            filename: filename.clone(),
+            mime_type: mime,
+            size_bytes,
+        };
+        let attach_events = match handle.send_command(cmd).await {
+            Ok(events) => events,
+            Err(e) => {
+                tracing::error!("failed to attach context {filename}: {e}");
+                // The bytes are on disk but no event references them — clean up
+                // so the filesystem doesn't drift from actor state.
+                if let Err(remove_err) = std::fs::remove_file(&path) {
+                    tracing::warn!(
+                        "failed to clean up orphaned context file {filename}: {remove_err}"
+                    );
+                }
+                continue;
+            }
+        };
+        for event in &attach_events {
+            if let Err(e) = log.append(event) {
+                tracing::error!("failed to persist attach event: {}", e);
+            }
+        }
+        let content = String::from_utf8(bytes).expect("utf-8 verified above");
+        summarize_jobs.push((attachment_id, filename, content));
+    }
+
+    // Subscribe the event persister BEFORE inserting the actor, starting
+    // agents, OR firing the summarizer — so it catches every subsequent event
+    // (agent-produced, summarizer-produced, etc.). The events produced above
+    // were already persisted inline.
     let persister_handle = spawn_event_persister(&handle, spec_id, &state.barnstormer_home);
-    state.event_persisters.write().await.insert(spec_id, persister_handle);
+    state
+        .event_persisters
+        .write()
+        .await
+        .insert(spec_id, persister_handle);
+
+    // Now safe to dispatch the summarizer jobs queued above. Their
+    // `ContextSummarized` events will reach the persister.
+    for (attachment_id, filename, content) in summarize_jobs {
+        crate::summarizer::spawn_summarize(handle.clone(), attachment_id, filename, content);
+    }
 
     state.actors.write().await.insert(spec_id, handle);
 
@@ -423,7 +407,9 @@ pub async fn create_spec(
         None => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Html("<p class=\"error-msg\">Spec created but core data is missing.</p>".to_string()),
+                Html(
+                    "<p class=\"error-msg\">Spec created but core data is missing.</p>".to_string(),
+                ),
             )
                 .into_response();
         }
@@ -435,9 +421,6 @@ pub async fn create_spec(
         SpecPhase::Complete => "complete".to_string(),
     };
 
-    let has_pending_question = spec_state.pending_question.is_some();
-    let canvas_content = spec_state.canvas_content.clone();
-
     let mut response = SpecViewTemplate {
         spec_id: spec_id_str.clone(),
         title: core.title.clone(),
@@ -445,8 +428,6 @@ pub async fn create_spec(
         goal: core.goal.clone(),
         phase,
         lanes,
-        canvas_content,
-        has_pending_question,
     }
     .into_response();
 
@@ -574,8 +555,6 @@ pub struct SpecViewTemplate {
     pub goal: String,
     pub phase: String,
     pub lanes: Vec<LaneData>,
-    pub canvas_content: Option<String>,
-    pub has_pending_question: bool,
 }
 
 impl SpecViewTemplate {
@@ -610,8 +589,6 @@ pub struct SpecPageTemplate {
     pub goal: String,
     pub phase: String,
     pub lanes: Vec<LaneData>,
-    pub canvas_content: Option<String>,
-    pub has_pending_question: bool,
 }
 
 impl SpecPageTemplate {
@@ -681,9 +658,6 @@ pub async fn spec_view(
         SpecPhase::Complete => "complete".to_string(),
     };
 
-    let has_pending_question = spec_state.pending_question.is_some();
-    let canvas_content = spec_state.canvas_content.clone();
-
     if is_htmx {
         SpecViewTemplate {
             spec_id: id,
@@ -692,8 +666,6 @@ pub async fn spec_view(
             goal: core.goal.clone(),
             phase,
             lanes,
-            canvas_content,
-            has_pending_question,
         }
         .into_response()
     } else {
@@ -704,8 +676,6 @@ pub async fn spec_view(
             goal: core.goal.clone(),
             phase,
             lanes,
-            canvas_content,
-            has_pending_question,
         }
         .into_response()
     }
@@ -862,6 +832,7 @@ pub async fn create_card(
         body: form.body.filter(|b| !b.is_empty()),
         lane: form.lane.filter(|l| !l.is_empty()),
         created_by: "human".to_string(),
+        source_attachment_id: None,
     };
 
     let _events = match handle.send_command(cmd).await {
@@ -1031,6 +1002,52 @@ pub async fn delete_card(
     Html(String::new()).into_response()
 }
 
+/// Cards feed partial: reverse-chronological list of all captured cards for the
+/// brainstorming sidebar. Self-refreshes on card SSE events.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/cards_feed.html")]
+pub struct CardsFeedTemplate {
+    pub spec_id: String,
+    pub cards: Vec<CardData>,
+}
+
+/// GET /web/specs/{id}/cards-feed - Render the flat card list for the brainstorm sidebar.
+pub async fn cards_feed(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        }
+    };
+
+    let spec_state = handle.read_state().await;
+    // Newest-first: sort by updated_at descending. Break ties with card_id
+    // (ULID) descending so ordering is deterministic even when cards created
+    // in the same clock tick share a formatted updated_at string.
+    let mut sorted: Vec<&barnstormer_core::Card> = spec_state.cards.values().collect();
+    sorted.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then_with(|| b.card_id.cmp(&a.card_id))
+    });
+    let cards: Vec<CardData> = sorted.into_iter().map(CardData::from_card).collect();
+
+    CardsFeedTemplate { spec_id: id, cards }.into_response()
+}
+
 /// Document view template.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/document.html")]
@@ -1164,9 +1181,8 @@ fn slugify(title: &str) -> String {
 
 fn render_markdown(content: &str) -> String {
     let options = Options::empty();
-    let parser = Parser::new_ext(content, options).filter(|event| {
-        !matches!(event, Event::Html(_) | Event::InlineHtml(_))
-    });
+    let parser = Parser::new_ext(content, options)
+        .filter(|event| !matches!(event, Event::Html(_) | Event::InlineHtml(_)));
     let mut html_output = String::new();
     html::push_html(&mut html_output, parser);
     html_output
@@ -1198,7 +1214,10 @@ fn to_transcript_entry(m: &barnstormer_core::TranscriptMessage) -> TranscriptEnt
 /// template can skip the avatar/name row.
 fn mark_continuations(entries: &mut [TranscriptEntry]) {
     for i in 1..entries.len() {
-        if entries[i].sender == entries[i - 1].sender && !entries[i].is_step && !entries[i - 1].is_step {
+        if entries[i].sender == entries[i - 1].sender
+            && !entries[i].is_step
+            && !entries[i - 1].is_step
+        {
             entries[i].is_continuation = true;
         }
     }
@@ -1211,7 +1230,10 @@ fn collapse_repeated_steps(entries: &mut Vec<TranscriptEntry>) {
     while i < entries.len() {
         if entries[i].is_step {
             let mut j = i + 1;
-            while j < entries.len() && entries[j].is_step && entries[j].content == entries[i].content {
+            while j < entries.len()
+                && entries[j].is_step
+                && entries[j].content == entries[i].content
+            {
                 entries[i].repeat_count += 1;
                 j += 1;
             }
@@ -1265,7 +1287,13 @@ fn sender_display(sender: &str) -> (String, bool, String) {
 fn normalize_css_class(raw: &str) -> String {
     raw.to_lowercase()
         .chars()
-        .map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
 }
 
@@ -1408,7 +1436,10 @@ pub async fn activity(
     mark_continuations(&mut transcript);
     collapse_repeated_steps(&mut transcript);
 
-    let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
+    let pending_question = spec_state
+        .pending_question
+        .as_ref()
+        .map(question_to_view_data);
 
     ActivityTemplate {
         spec_id: id,
@@ -1445,10 +1476,16 @@ pub async fn activity_transcript(
 
     let spec_state = handle.read_state().await;
 
-    let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
+    let pending_question = spec_state
+        .pending_question
+        .as_ref()
+        .map(question_to_view_data);
 
     let container_id = sanitize_container_id(
-        query.container_id.as_deref().unwrap_or("activity-transcript"),
+        query
+            .container_id
+            .as_deref()
+            .unwrap_or("activity-transcript"),
     );
 
     // Chat containers only show human + manager messages (filtered by
@@ -1580,7 +1617,10 @@ pub async fn chat_panel(
     mark_continuations(&mut transcript);
     collapse_repeated_steps(&mut transcript);
 
-    let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
+    let pending_question = spec_state
+        .pending_question
+        .as_ref()
+        .map(question_to_view_data);
 
     ChatPanelTemplate {
         spec_id: id,
@@ -1627,9 +1667,8 @@ pub async fn artifacts(
     let spec_state = handle.read_state().await;
 
     let markdown_content = barnstormer_core::export::export_markdown(&spec_state);
-    let yaml_content = barnstormer_core::export::export_yaml(&spec_state).unwrap_or_else(|e| {
-        format!("# YAML export error: {}", e)
-    });
+    let yaml_content = barnstormer_core::export::export_yaml(&spec_state)
+        .unwrap_or_else(|e| format!("# YAML export error: {}", e));
     let dot_content = barnstormer_core::export::export_dot(&spec_state);
 
     let title_slug = spec_state
@@ -1659,10 +1698,7 @@ pub struct SpecTabTemplate {
 }
 
 /// GET /web/specs/{id}/spec - Render the synthesized Spec tab.
-pub async fn spec(
-    State(state): State<SharedState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+pub async fn spec(State(state): State<SharedState>, Path(id): Path<String>) -> impl IntoResponse {
     let spec_id = match parse_spec_id(&id) {
         Ok(id) => id,
         Err(resp) => return *resp,
@@ -1918,7 +1954,8 @@ pub async fn regenerate(
             .map(|c| slugify(&c.title))
             .unwrap_or_else(|| "spec".to_string());
 
-        if let Err(e) = std::fs::write(exports_dir.join(format!("{}.md", slug)), &markdown_content) {
+        if let Err(e) = std::fs::write(exports_dir.join(format!("{}.md", slug)), &markdown_content)
+        {
             tracing::error!("failed to write markdown export: {}", e);
         }
         if let Err(e) = std::fs::write(exports_dir.join(format!("{}.yaml", slug)), &yaml_content) {
@@ -2057,7 +2094,10 @@ pub async fn answer_question(
     let is_ticker = container_id == "mission-ticker";
 
     // Read actual pending question from state instead of assuming None
-    let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
+    let pending_question = spec_state
+        .pending_question
+        .as_ref()
+        .map(question_to_view_data);
 
     // If the answer form targeted the question card directly, return only
     // the question partial so the message feed and any user input are preserved.
@@ -2235,7 +2275,10 @@ pub async fn chat(
     mark_continuations(&mut transcript);
     collapse_repeated_steps(&mut transcript);
 
-    let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
+    let pending_question = spec_state
+        .pending_question
+        .as_ref()
+        .map(question_to_view_data);
 
     if is_ticker {
         // For mission ticker, show only last 10 entries
@@ -2374,6 +2417,451 @@ pub async fn transition_phase(
     }
 }
 
+/// Context panel partial template — rendered HTML for the brainstorming
+/// right-rail panel showing all live (non-removed) context attachments.
+#[derive(Template)]
+#[template(path = "partials/context_panel.html")]
+struct ContextPanelTemplate {
+    spec_id: String,
+    attachments: Vec<ContextPanelItem>,
+}
+
+/// View model for a single context attachment row in the panel.
+///
+/// `summary` holds the raw (plain-text) summary used for the collapsed-state
+/// tooltip (the native `title` attribute on the `<summary>` element). It's
+/// also used as the presence flag for rendering the "in context" pill.
+/// `summary_html` holds the pre-rendered HTML produced by `render_markdown`,
+/// displayed only when the card is expanded.
+struct ContextPanelItem {
+    attachment_id: String,
+    filename: String,
+    extension: String,
+    size_display: String,
+    added_display: String,
+    summary: Option<String>,
+    summary_html: Option<String>,
+    user_notes: Option<String>,
+    /// Number of non-removed cards whose `source_attachment_id` points at this
+    /// attachment. Rendered in the collapsed header so the user can see at a
+    /// glance how much of an attachment the Manager has synthesized.
+    card_count: usize,
+}
+
+/// Human-readable file size (B / KB / MB) for display in the context panel.
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+/// Shared helper: builds the context panel HTML for a given spec. Returns
+/// 404 if the spec is unknown, 500 on render failure. All four context
+/// handlers (upload/notes/delete/GET panel) route through this helper so
+/// they return identical HTML on success.
+async fn render_context_panel_for(state: &SharedState, spec_id: Ulid) -> Response {
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h.clone(),
+        None => return (StatusCode::NOT_FOUND, "spec not found").into_response(),
+    };
+    drop(actors);
+
+    let spec_state = handle.read_state().await;
+    let attachments: Vec<ContextPanelItem> = spec_state
+        .context_attachments
+        .iter()
+        .filter(|a| !a.removed)
+        .map(|a| {
+            let card_count = spec_state
+                .cards
+                .values()
+                .filter(|c| c.source_attachment_id == Some(a.attachment_id))
+                .count();
+            ContextPanelItem {
+                attachment_id: a.attachment_id.to_string(),
+                filename: a.filename.clone(),
+                extension: std::path::Path::new(&a.filename)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("txt")
+                    .to_string(),
+                size_display: format_size(a.size_bytes),
+                added_display: a.added_at.format("%H:%M").to_string(),
+                summary: a.summary.clone(),
+                summary_html: a.summary.as_deref().map(render_markdown),
+                user_notes: a.user_notes.clone(),
+                card_count,
+            }
+        })
+        .collect();
+    drop(spec_state);
+
+    let tmpl = ContextPanelTemplate {
+        spec_id: spec_id.to_string(),
+        attachments,
+    };
+    match tmpl.render() {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => {
+            tracing::error!("context_panel render failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "render failed").into_response()
+        }
+    }
+}
+
+/// GET /web/specs/{id}/context-panel - Render the context panel partial.
+///
+/// Returns the full `<div id="context-panel">` partial; the brainstorming
+/// view and Task 16 SSE wiring swap this element via HTMX.
+pub async fn context_panel(State(state): State<SharedState>, Path(id): Path<String>) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    render_context_panel_for(&state, spec_id).await
+}
+
+/// GET /web/specs/{id}/context-preview - Render a read-only preview of the
+/// "## Context Files" section of the agent's current task prompt.
+///
+/// Uses `barnstormer_agent::render_context_files_section` so what the user
+/// sees exactly matches what the Manager is being told about attached files.
+/// Non-removed attachments only. Returns a small `.card` wrapper for drop-in
+/// swap into the panel; empty state shows "No context files attached."
+pub async fn context_preview(State(state): State<SharedState>, Path(id): Path<String>) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h.clone(),
+        None => return (StatusCode::NOT_FOUND, "spec not found").into_response(),
+    };
+    drop(actors);
+
+    let spec_state = handle.read_state().await;
+    let live: Vec<barnstormer_core::state::ContextAttachment> = spec_state
+        .context_attachments
+        .iter()
+        .filter(|a| !a.removed)
+        .cloned()
+        .collect();
+    drop(spec_state);
+
+    let rendered = barnstormer_agent::render_context_files_section(&live);
+
+    // Minimal HTML: escape the rendered markdown so the preview is read-only
+    // and can't inject markup through attachment fields.
+    let inner = if rendered.is_empty() {
+        "No context files attached.".to_string()
+    } else {
+        html_escape(&rendered)
+    };
+    let body = format!(
+        r#"<div class="card" style="margin: var(--spacing-md); white-space: pre-wrap; font-family: monospace; font-size: 0.78rem;">{inner}</div>"#,
+    );
+    Html(body).into_response()
+}
+
+/// Minimal HTML-escape for the context preview body. Only escapes the five
+/// characters that matter for HTML text content; the wrapper uses
+/// `white-space: pre-wrap` so newlines and spaces are preserved as-is.
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// POST /web/specs/{id}/context - Upload a context file during brainstorming.
+///
+/// Accepts `multipart/form-data` with a single `file` part. Writes the file
+/// to disk under the spec's context directory and emits a `ContextAttached`
+/// event via `Command::AttachContext`. Gated to `SpecPhase::Brainstorming`;
+/// outside that phase returns 409 CONFLICT. Binary (non-UTF-8) content is
+/// rejected with 415, and uploads over 20MB are rejected with 413.
+pub async fn upload_context(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h.clone(),
+        None => {
+            return (StatusCode::NOT_FOUND, "spec not found").into_response();
+        }
+    };
+    drop(actors);
+
+    // Gate: brainstorming only.
+    let phase = handle.read_state().await.phase.clone();
+    if phase != SpecPhase::Brainstorming {
+        return (
+            StatusCode::CONFLICT,
+            "context files can only be attached during brainstorming",
+        )
+            .into_response();
+    }
+
+    // Extract first `file` part. Streamed-and-capped so a request can't
+    // buffer up to the configured global body cap before we reject it.
+    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut filename: Option<String> = None;
+    let mut mime: Option<String> = None;
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(mut field)) => {
+                if field.name() == Some("file") {
+                    filename = field.file_name().map(str::to_string);
+                    mime = field.content_type().map(str::to_string);
+                    let bytes = match read_field_capped(&mut field).await {
+                        Ok(Some(b)) => b,
+                        Ok(None) => {
+                            return (StatusCode::BAD_REQUEST, "empty file part").into_response();
+                        }
+                        Err(resp) => return resp,
+                    };
+                    file_bytes = Some(bytes);
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("multipart parse error: {e}"),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    let Some(bytes) = file_bytes else {
+        return (StatusCode::BAD_REQUEST, "missing file part").into_response();
+    };
+
+    if !crate::context_storage::is_utf8_text(&bytes) {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "binary files not yet supported — text files only for now",
+        )
+            .into_response();
+    }
+
+    let filename = crate::context_storage::sanitize_filename(filename.as_deref().unwrap_or("file"));
+    let mime = mime.unwrap_or_else(|| "text/plain".to_string());
+    let attachment_id = Ulid::new();
+
+    let path = crate::context_storage::attachment_path(
+        &state.barnstormer_home,
+        spec_id,
+        attachment_id,
+        &filename,
+    );
+    if let Err(e) = crate::context_storage::write_bytes(&path, &bytes) {
+        tracing::error!("failed to write attachment: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+
+    let size_bytes = bytes.len() as u64;
+    let cmd = Command::AttachContext {
+        attachment_id,
+        filename: filename.clone(),
+        mime_type: mime,
+        size_bytes,
+    };
+    if let Err(e) = handle.send_command(cmd).await {
+        // Bytes already on disk — without the event referencing them they'd
+        // leak and the filesystem would drift from actor state. Best-effort
+        // cleanup (failure is logged but doesn't block the error response).
+        if let Err(remove_err) = std::fs::remove_file(&path) {
+            tracing::warn!("failed to clean up orphaned context file {filename}: {remove_err}");
+        }
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("command failed: {e}"),
+        )
+            .into_response();
+    }
+
+    // Spawn summarizer — fire-and-forget. Summary will land via SSE when done.
+    let content = String::from_utf8(bytes).expect("utf-8 verified above");
+    crate::summarizer::spawn_summarize(handle.clone(), attachment_id, filename.clone(), content);
+
+    // Return the re-rendered panel partial so HTMX can swap it in place.
+    render_context_panel_for(&state, spec_id).await
+}
+
+/// Form body for PATCH notes — HTMX submits form-encoded by default.
+#[derive(Debug, Deserialize)]
+pub struct NotesForm {
+    pub notes: String,
+}
+
+/// PATCH /web/specs/{id}/context/{att_id}/notes - Update user-authored notes
+/// for a context attachment. Sends `Command::UpdateContextNotes` to the actor;
+/// returns 404 if the attachment is unknown, 409 if it has already been
+/// removed (soft-delete tombstone).
+pub async fn update_context_notes(
+    State(state): State<SharedState>,
+    Path((id, att_id)): Path<(String, String)>,
+    Form(form): Form<NotesForm>,
+) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    let attachment_id = match att_id.parse::<Ulid>() {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad attachment id").into_response(),
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h.clone(),
+        None => return (StatusCode::NOT_FOUND, "spec not found").into_response(),
+    };
+    drop(actors);
+
+    let cmd = Command::UpdateContextNotes {
+        attachment_id,
+        notes: form.notes,
+    };
+    match handle.send_command(cmd).await {
+        Ok(_) => render_context_panel_for(&state, spec_id).await,
+        Err(ActorError::AttachmentNotFound(_)) => {
+            (StatusCode::NOT_FOUND, "attachment not found").into_response()
+        }
+        Err(ActorError::AttachmentAlreadyRemoved(_)) => {
+            (StatusCode::CONFLICT, "attachment is removed").into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    }
+}
+
+/// DELETE /web/specs/{id}/context/{att_id} - Soft-remove a context attachment.
+/// Emits `Command::RemoveContext`; the on-disk file is preserved so undo can
+/// restore it. Returns 404 for unknown ids and 409 when the attachment has
+/// already been removed.
+pub async fn remove_context(
+    State(state): State<SharedState>,
+    Path((id, att_id)): Path<(String, String)>,
+) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    let attachment_id = match att_id.parse::<Ulid>() {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad attachment id").into_response(),
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h.clone(),
+        None => return (StatusCode::NOT_FOUND, "spec not found").into_response(),
+    };
+    drop(actors);
+
+    match handle
+        .send_command(Command::RemoveContext { attachment_id })
+        .await
+    {
+        Ok(_) => render_context_panel_for(&state, spec_id).await,
+        Err(ActorError::AttachmentNotFound(_)) => {
+            (StatusCode::NOT_FOUND, "attachment not found").into_response()
+        }
+        Err(ActorError::AttachmentAlreadyRemoved(_)) => {
+            (StatusCode::CONFLICT, "attachment already removed").into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    }
+}
+
+/// GET /web/specs/{id}/context/{att_id}/raw - Stream the raw text content of
+/// a context attachment. Only live (non-removed) attachments are served; both
+/// "unknown" and "soft-removed" cases return 404 so callers can't distinguish
+/// them.
+///
+/// Security: the stored `mime_type` came from the multipart upload and is
+/// untrusted. We always serve the bytes as `text/plain; charset=utf-8` and
+/// add `X-Content-Type-Options: nosniff` so a `text/html` or `image/svg+xml`
+/// upload can't turn this same-origin endpoint into a stored-XSS sink.
+/// (Uploads are UTF-8 verified in `is_utf8_text` before they reach disk.)
+pub async fn download_context(
+    State(state): State<SharedState>,
+    Path((id, att_id)): Path<(String, String)>,
+) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    let attachment_id = match att_id.parse::<Ulid>() {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad attachment id").into_response(),
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h.clone(),
+        None => return (StatusCode::NOT_FOUND, "spec not found").into_response(),
+    };
+    drop(actors);
+
+    let spec_state = handle.read_state().await;
+    let att = match spec_state
+        .context_attachments
+        .iter()
+        .find(|a| a.attachment_id == attachment_id && !a.removed)
+    {
+        Some(a) => a.clone(),
+        None => return (StatusCode::NOT_FOUND, "attachment not found").into_response(),
+    };
+    drop(spec_state);
+
+    let path = crate::context_storage::attachment_path(
+        &state.barnstormer_home,
+        spec_id,
+        attachment_id,
+        &att.filename,
+    );
+    match crate::context_storage::read_text(&path) {
+        Ok(text) => (
+            [
+                (
+                    axum::http::header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8",
+                ),
+                (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
+            text,
+        )
+            .into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "file not found on disk").into_response(),
+    }
+}
+
 /// Returns the current phase as plain text — used by the client-side
 /// polling fallback when SSE might be disconnected.
 pub async fn phase_check(
@@ -2465,10 +2953,7 @@ pub struct AgentStatusTemplate {
 }
 
 /// GET /web/specs/{id}/ticker - Render the mission strip ticker content.
-pub async fn ticker(
-    State(state): State<SharedState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+pub async fn ticker(State(state): State<SharedState>, Path(id): Path<String>) -> impl IntoResponse {
     let spec_id = match parse_spec_id(&id) {
         Ok(id) => id,
         Err(resp) => return *resp,
@@ -2500,7 +2985,10 @@ pub async fn ticker(
         .map(to_transcript_entry)
         .collect();
 
-    let pending_question = spec_state.pending_question.as_ref().map(question_to_view_data);
+    let pending_question = spec_state
+        .pending_question
+        .as_ref()
+        .map(question_to_view_data);
 
     MissionTickerTemplate {
         spec_id: id,
@@ -2584,7 +3072,11 @@ pub async fn start_agents(
     }
 
     // Create swarm (sync operation, safe to hold write lock)
-    let swarm = match SwarmOrchestrator::with_defaults(spec_id, swarm_actor_handle) {
+    let swarm = match SwarmOrchestrator::with_defaults(
+        spec_id,
+        swarm_actor_handle,
+        state.barnstormer_home.clone(),
+    ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {
             return (
@@ -2610,10 +3102,7 @@ pub async fn start_agents(
     let task = tokio::spawn(barnstormer_agent::run_loop(Arc::clone(&swarm)));
 
     // Insert into swarms map while still holding write lock
-    swarms.insert(
-        spec_id,
-        crate::app_state::SwarmHandle { swarm, task },
-    );
+    swarms.insert(spec_id, crate::app_state::SwarmHandle { swarm, task });
     drop(swarms);
 
     AgentStatusTemplate {
@@ -2726,9 +3215,16 @@ pub async fn agent_status(
 /// Helper to start the agent swarm for a spec, if a provider is available.
 /// Returns silently if no provider is configured, if the swarm already exists,
 /// or if swarm creation fails. Used by both web and API create_spec handlers.
-pub async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_handle: &barnstormer_core::SpecActorHandle) {
+pub async fn try_start_agents(
+    state: &SharedState,
+    spec_id: Ulid,
+    actor_handle: &barnstormer_core::SpecActorHandle,
+) {
     if !state.provider_status.any_available {
-        tracing::info!("no LLM provider configured, skipping agent start for spec {}", spec_id);
+        tracing::info!(
+            "no LLM provider configured, skipping agent start for spec {}",
+            spec_id
+        );
         return;
     }
 
@@ -2745,7 +3241,11 @@ pub async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_handle: 
     }
 
     // Create swarm (sync operation, safe to hold write lock)
-    let swarm = match SwarmOrchestrator::with_defaults(spec_id, swarm_actor_handle) {
+    let swarm = match SwarmOrchestrator::with_defaults(
+        spec_id,
+        swarm_actor_handle,
+        state.barnstormer_home.clone(),
+    ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {
             tracing::warn!("failed to auto-start agents for spec {}: {}", spec_id, e);
@@ -2765,10 +3265,7 @@ pub async fn try_start_agents(state: &SharedState, spec_id: Ulid, actor_handle: 
     let task = tokio::spawn(barnstormer_agent::run_loop(Arc::clone(&swarm)));
 
     // Insert into swarms map while still holding write lock
-    swarms.insert(
-        spec_id,
-        crate::app_state::SwarmHandle { swarm, task },
-    );
+    swarms.insert(spec_id, crate::app_state::SwarmHandle { swarm, task });
     drop(swarms);
     tracing::info!("auto-started {} agents for spec {}", agent_count, spec_id);
 }
@@ -2872,7 +3369,10 @@ pub fn spawn_event_persister(
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    tracing::debug!("event persister for spec {} shutting down (channel closed)", spec_id);
+                    tracing::debug!(
+                        "event persister for spec {} shutting down (channel closed)",
+                        spec_id
+                    );
                     break;
                 }
             }
@@ -2901,6 +3401,28 @@ mod tests {
         };
         Arc::new(AppState::new(dir.keep(), provider_status))
     }
+
+    /// Test multipart boundary used by `mp_description_body`. Tests that
+    /// POST to `/web/specs` use this to construct the request body, since
+    /// the endpoint switched from form-encoded to multipart in Task 18.
+    const MP_BOUNDARY: &str = "----BarnstormerInlineTest";
+
+    /// Build a `Body` containing a multipart/form-data payload with just a
+    /// `description` field. Pair with `MP_CONTENT_TYPE` as the
+    /// `content-type` header. The description is embedded verbatim — do
+    /// not URL-encode it.
+    fn mp_description_body(description: &str) -> Body {
+        let payload = format!(
+            "--{MP_BOUNDARY}\r\n\
+             Content-Disposition: form-data; name=\"description\"\r\n\r\n\
+             {description}\r\n\
+             --{MP_BOUNDARY}--\r\n"
+        );
+        Body::from(payload)
+    }
+
+    /// Content-type header value matching `mp_description_body`.
+    const MP_CONTENT_TYPE: &str = "multipart/form-data; boundary=----BarnstormerInlineTest";
 
     #[test]
     fn index_template_renders() {
@@ -2994,7 +3516,8 @@ mod tests {
         assert!(result.ends_with("..."));
 
         // CJK characters (3 bytes each) — 40 chars fits within the 60-char limit
-        let cjk_short = "你好世界你好世界你好世界你好世界你好世界你好世界你好世界你好世界你好世界你好世界";
+        let cjk_short =
+            "你好世界你好世界你好世界你好世界你好世界你好世界你好世界你好世界你好世界你好世界";
         let result = extract_placeholder_title(cjk_short);
         assert_eq!(result, cjk_short); // 40 chars, no truncation needed
 
@@ -3207,6 +3730,84 @@ mod tests {
         assert!(rendered.contains("Green"));
     }
 
+    /// The "Something else..." fallback textarea must NOT start as `required` in the
+    /// rendered HTML — otherwise Chromium refuses to submit the Yes/No buttons because
+    /// the hidden textarea fails form validation ("invalid form control is not focusable").
+    /// The onclick handler is responsible for setting `required=true` when the textarea
+    /// becomes visible.
+    #[test]
+    fn chat_transcript_boolean_question_textarea_is_not_required_initially() {
+        let tmpl = ChatTranscriptTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![],
+            pending_question: Some(QuestionData::Boolean {
+                question_id: "01HQID".to_string(),
+                question: "Proceed with this?".to_string(),
+                default: Some(true),
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+
+        // Locate the "Something else..." fallback textarea by its placeholder.
+        let placeholder = "Describe what you mean...";
+        let idx = rendered
+            .find(placeholder)
+            .expect("rendered HTML should contain the fallback textarea");
+
+        // Find the bounds of the <textarea ...> tag that contains this placeholder.
+        let tag_start = rendered[..idx].rfind("<textarea").expect("<textarea tag");
+        let tag_end_rel = rendered[tag_start..].find('>').expect("closing '>'");
+        let textarea_tag = &rendered[tag_start..tag_start + tag_end_rel + 1];
+
+        assert!(
+            !textarea_tag.contains("required"),
+            "fallback textarea must not have `required` at initial render; got: {textarea_tag}"
+        );
+
+        // The onclick handler must flip required=true when the user clicks "Something else...".
+        assert!(
+            rendered.contains("ta.required=true") || rendered.contains("ta.required = true"),
+            "onclick handler must set textarea.required=true when fallback is revealed"
+        );
+    }
+
+    /// Same guarantee for the MultipleChoice branch of the chat transcript.
+    #[test]
+    fn chat_transcript_multiple_choice_question_textarea_is_not_required_initially() {
+        let tmpl = ChatTranscriptTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![],
+            pending_question: Some(QuestionData::MultipleChoice {
+                question_id: "01HQID".to_string(),
+                question: "Pick a color".to_string(),
+                choices: vec!["Red".to_string(), "Blue".to_string()],
+                allow_multi: false,
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+
+        let placeholder = "Describe what you mean...";
+        let idx = rendered
+            .find(placeholder)
+            .expect("rendered HTML should contain the fallback textarea");
+
+        let tag_start = rendered[..idx].rfind("<textarea").expect("<textarea tag");
+        let tag_end_rel = rendered[tag_start..].find('>').expect("closing '>'");
+        let textarea_tag = &rendered[tag_start..tag_start + tag_end_rel + 1];
+
+        assert!(
+            !textarea_tag.contains("required"),
+            "fallback textarea must not have `required` at initial render; got: {textarea_tag}"
+        );
+
+        assert!(
+            rendered.contains("ta.required=true") || rendered.contains("ta.required = true"),
+            "onclick handler must set textarea.required=true when fallback is revealed"
+        );
+    }
+
     #[tokio::test]
     async fn get_index_returns_html() {
         let state = test_state();
@@ -3252,8 +3853,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+test+spec+for+testing"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build a test spec for testing"))
                     .unwrap(),
             )
             .await
@@ -3262,9 +3863,15 @@ mod tests {
         assert_eq!(resp.status(), 200);
         // Verify HX-Push-Url header is set for auto-navigation
         let hx_push = resp.headers().get("hx-push-url");
-        assert!(hx_push.is_some(), "response should include HX-Push-Url header");
+        assert!(
+            hx_push.is_some(),
+            "response should include HX-Push-Url header"
+        );
         let url = hx_push.unwrap().to_str().unwrap();
-        assert!(url.starts_with("/web/specs/"), "HX-Push-Url should point to spec view");
+        assert!(
+            url.starts_with("/web/specs/"),
+            "HX-Push-Url should point to spec view"
+        );
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -3281,8 +3888,14 @@ mod tests {
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("activity-transcript"), "should contain activity-transcript id");
-        assert!(rendered.contains("activity-transcript-feed"), "should contain activity-transcript-feed div");
+        assert!(
+            rendered.contains("activity-transcript"),
+            "should contain activity-transcript id"
+        );
+        assert!(
+            rendered.contains("activity-transcript-feed"),
+            "should contain activity-transcript-feed div"
+        );
     }
 
     #[test]
@@ -3308,7 +3921,10 @@ mod tests {
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("Agent-1"), "should contain sender_label");
         assert!(rendered.contains("Started analysis"));
-        assert!(!rendered.contains("chat-input"), "transcript template should not contain chat input");
+        assert!(
+            !rendered.contains("chat-input"),
+            "transcript template should not contain chat input"
+        );
     }
 
     #[test]
@@ -3332,12 +3948,30 @@ mod tests {
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("id=\"chat-transcript\""), "should use chat-transcript as container id");
-        assert!(rendered.contains("id=\"chat-transcript-feed\""), "should use chat-transcript-feed as feed id");
-        assert!(rendered.contains("hx-target=\"#chat-transcript\""), "should target chat-transcript");
-        assert!(rendered.contains("container_id=chat-transcript"), "hx-get should include container_id param");
-        assert!(!rendered.contains("id=\"activity-transcript\""), "should not contain activity-transcript id");
-        assert!(rendered.contains("Hello chat"), "should render transcript content");
+        assert!(
+            rendered.contains("id=\"chat-transcript\""),
+            "should use chat-transcript as container id"
+        );
+        assert!(
+            rendered.contains("id=\"chat-transcript-feed\""),
+            "should use chat-transcript-feed as feed id"
+        );
+        assert!(
+            rendered.contains("hx-target=\"#chat-transcript\""),
+            "should target chat-transcript"
+        );
+        assert!(
+            rendered.contains("container_id=chat-transcript"),
+            "hx-get should include container_id param"
+        );
+        assert!(
+            !rendered.contains("id=\"activity-transcript\""),
+            "should not contain activity-transcript id"
+        );
+        assert!(
+            rendered.contains("Hello chat"),
+            "should render transcript content"
+        );
     }
 
     #[test]
@@ -3349,8 +3983,14 @@ mod tests {
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(!rendered.contains("chat-input"), "activity should not contain chat input div");
-        assert!(!rendered.contains("Send a message"), "activity should not contain chat placeholder");
+        assert!(
+            !rendered.contains("chat-input"),
+            "activity should not contain chat input div"
+        );
+        assert!(
+            !rendered.contains("Send a message"),
+            "activity should not contain chat placeholder"
+        );
     }
 
     #[test]
@@ -3362,9 +4002,18 @@ mod tests {
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("agent-controls"), "activity should contain agent controls");
-        assert!(rendered.contains("agent-status"), "activity should contain agent status");
-        assert!(rendered.contains("Undo"), "activity should contain undo button");
+        assert!(
+            rendered.contains("agent-controls"),
+            "activity should contain agent controls"
+        );
+        assert!(
+            rendered.contains("agent-status"),
+            "activity should contain agent status"
+        );
+        assert!(
+            rendered.contains("Undo"),
+            "activity should contain undo button"
+        );
     }
 
     #[test]
@@ -3376,34 +4025,529 @@ mod tests {
             goal: "Test goal".to_string(),
             phase: "refining".to_string(),
             lanes: vec![],
-            canvas_content: None,
-            has_pending_question: false,
         };
         let rendered = tmpl.render().unwrap();
         // Command bar with title and subtitle
-        assert!(rendered.contains("command-bar"), "should contain command-bar");
+        assert!(
+            rendered.contains("command-bar"),
+            "should contain command-bar"
+        );
         assert!(rendered.contains("Test Spec"), "should contain spec title");
         assert!(rendered.contains("A test spec"), "should contain one-liner");
         // Capsule view toggles for document, board, spec
-        assert!(rendered.contains("view-toggles-capsule"), "should contain capsule view toggles");
-        assert!(rendered.contains("data-view=\"document\""), "should contain document toggle");
-        assert!(rendered.contains("data-view=\"board\""), "should contain board toggle");
-        assert!(rendered.contains("data-view=\"spec\""), "should contain spec toggle");
-        assert!(rendered.contains("view-toggle active"), "document toggle should be active");
+        assert!(
+            rendered.contains("view-toggles-capsule"),
+            "should contain capsule view toggles"
+        );
+        assert!(
+            rendered.contains("data-view=\"document\""),
+            "should contain document toggle"
+        );
+        assert!(
+            rendered.contains("data-view=\"board\""),
+            "should contain board toggle"
+        );
+        assert!(
+            rendered.contains("data-view=\"spec\""),
+            "should contain spec toggle"
+        );
+        assert!(
+            rendered.contains("view-toggle active"),
+            "document toggle should be active"
+        );
         // Canvas and chat rail
-        assert!(rendered.contains("id=\"canvas\""), "should contain canvas element");
-        assert!(rendered.contains("spec-body"), "should contain spec-body row");
+        assert!(
+            rendered.contains("id=\"canvas\""),
+            "should contain canvas element"
+        );
+        assert!(
+            rendered.contains("spec-body"),
+            "should contain spec-body row"
+        );
         assert!(rendered.contains("chat-rail"), "should contain chat-rail");
         assert!(rendered.contains("chat-panel"), "should load chat panel");
         // Agent controls in command bar
-        assert!(rendered.contains("agent-controls"), "should contain agent-controls");
+        assert!(
+            rendered.contains("agent-controls"),
+            "should contain agent-controls"
+        );
         // SSE on spec-compositor
-        assert!(rendered.contains("sse-connect"), "should have SSE connection");
+        assert!(
+            rendered.contains("sse-connect"),
+            "should have SSE connection"
+        );
         // Old layout elements should NOT be present
-        assert!(!rendered.contains("mission-strip"), "should not contain mission-strip");
-        assert!(!rendered.contains("mission-ticker"), "should not contain mission-ticker");
-        assert!(!rendered.contains("tab-bar"), "should not contain old tab-bar");
-        assert!(!rendered.contains("right-rail"), "should not contain right-rail references");
+        assert!(
+            !rendered.contains("mission-strip"),
+            "should not contain mission-strip"
+        );
+        assert!(
+            !rendered.contains("mission-ticker"),
+            "should not contain mission-ticker"
+        );
+        assert!(
+            !rendered.contains("tab-bar"),
+            "should not contain old tab-bar"
+        );
+        assert!(
+            !rendered.contains("right-rail"),
+            "should not contain right-rail references"
+        );
+    }
+
+    #[test]
+    fn spec_view_phase_check_polling_is_singleton_per_phase() {
+        // Regression: the polling fallback used a per-render `setInterval(...)`
+        // captured as a closure local. Each #workspace innerHTML swap therefore
+        // installed a fresh timer without clearing the previous one, and the old
+        // timer's stale `currentPhase` would race ahead of a real phase change
+        // and trigger another workspace refetch every 15s — wiping in-progress
+        // chat / Q&A input state. Each phase template MUST guard with
+        // `clearInterval(window.__bsPhase.timerId)` and store the timer id on
+        // the `window.__bsPhase` singleton.
+        for phase in ["brainstorming", "refining", "complete"] {
+            let tmpl = SpecViewTemplate {
+                spec_id: "01HTEST".to_string(),
+                title: "Test".to_string(),
+                one_liner: "t".to_string(),
+                goal: "g".to_string(),
+                phase: phase.to_string(),
+                lanes: vec![],
+            };
+            let rendered = tmpl.render().unwrap();
+
+            assert!(
+                rendered.contains("window.__bsPhase"),
+                "phase={phase}: rendered HTML should declare window.__bsPhase singleton"
+            );
+            assert!(
+                rendered.contains("clearInterval(window.__bsPhase.timerId)"),
+                "phase={phase}: rendered HTML should clear the prior phase-check timer before installing a new one"
+            );
+            assert!(
+                rendered.contains("window.__bsPhase.timerId = setInterval"),
+                "phase={phase}: rendered HTML should assign the new timer id to the singleton slot"
+            );
+            // The buggy pattern was a bare `var currentPhase = '...'` followed
+            // by an unguarded `setInterval`. Make sure it's gone.
+            assert!(
+                !rendered.contains("var currentPhase ="),
+                "phase={phase}: bare `var currentPhase = ...` is the leaky pattern; it must be replaced by the window.__bsPhase singleton"
+            );
+        }
+    }
+
+    #[test]
+    fn spec_view_brainstorming_wires_context_sse_via_hx_trigger() {
+        // The context rail must rely on the declarative `hx-trigger="sse:..."` pattern
+        // (which htmx-ext-sse 2.2.2 actually supports) rather than a JS listener on
+        // `sse:<event>` DOM events, which that extension does NOT dispatch.
+        let tmpl = SpecViewTemplate {
+            spec_id: "01HTEST".to_string(),
+            title: "Brainstorm Spec".to_string(),
+            one_liner: "A brainstorming spec".to_string(),
+            goal: "Think big".to_string(),
+            phase: "brainstorming".to_string(),
+            lanes: vec![],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains(r#"hx-trigger="load, sse:context_attached, sse:context_summarized, sse:context_notes_updated, sse:context_removed""#),
+            "context rail must declare SSE triggers"
+        );
+        assert!(
+            !rendered.contains("'sse:' + evt"),
+            "dead JS listener pattern for context events must be removed"
+        );
+    }
+
+    #[test]
+    fn context_panel_shows_in_context_badge_when_summary_present() {
+        // An attachment that has a summary should render the "in context" pill —
+        // signalling to the user that it's been included in the agent's prompt.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "notes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "1.2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("a short summary".to_string()),
+                summary_html: Some("<p>a short summary</p>\n".to_string()),
+                user_notes: None,
+                card_count: 0,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("in context"),
+            "summary present should show 'in context' pill"
+        );
+        // The hover hint must use the shared .tooltip component rather than a
+        // native `title=` attribute, so it renders as a styled popover.
+        assert!(
+            rendered.contains(r#"class="has-tooltip""#),
+            "in-context pill must be wrapped in .has-tooltip"
+        );
+        assert!(
+            rendered.contains(r#"class="tooltip context-pill-tooltip""#),
+            "in-context hint must use the .tooltip component"
+        );
+        assert!(
+            rendered.contains("Included in agent context"),
+            "tooltip text must be present"
+        );
+    }
+
+    #[test]
+    fn context_panel_shows_summarizing_badge_when_summary_pending() {
+        // An attachment without a summary yet should render the "summarizing…" pill.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "pending.txt".to_string(),
+                extension: "txt".to_string(),
+                size_display: "500 B".to_string(),
+                added_display: "12:35".to_string(),
+                summary: None,
+                summary_html: None,
+                user_notes: None,
+                card_count: 0,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("summarizing"),
+            "summary pending should show 'summarizing' pill"
+        );
+        assert!(
+            rendered.contains("Summary in progress"),
+            "tooltip text must be present on the summarizing pill"
+        );
+    }
+
+    #[test]
+    fn context_panel_uses_details_summary_for_collapsible_card() {
+        // Each attachment card must use native <details>/<summary> so users can
+        // click the header to expand/collapse without any JS.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "notes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "1.2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("a short summary".to_string()),
+                summary_html: Some("<p>a short summary</p>\n".to_string()),
+                user_notes: None,
+                card_count: 0,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("<details"), "card must use <details>");
+        assert!(rendered.contains("<summary"), "card must use <summary>");
+        // <summary> accepts only phrasing content — a nested <div> is invalid HTML5
+        // and causes browsers to eject the div from the summary context, breaking
+        // the native toggle. The header must use <span> with display:flex instead.
+        let summary_start = rendered.find("<summary").expect("summary exists");
+        let summary_end = rendered[summary_start..]
+            .find("</summary>")
+            .map(|e| summary_start + e)
+            .expect("summary closes");
+        let summary_block = &rendered[summary_start..summary_end];
+        assert!(
+            !summary_block.contains("<div"),
+            "<summary> must not contain <div> (block content breaks the toggle); got:\n{summary_block}"
+        );
+    }
+
+    #[test]
+    fn context_panel_expanded_renders_markdown_summary_as_html() {
+        // When the card is open, the summary should be rendered as HTML
+        // from the `summary_html` field (bold, etc.), not as plain text.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "notes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "1.2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("**bold**".to_string()),
+                summary_html: Some(render_markdown("**bold**")),
+                user_notes: None,
+                card_count: 0,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("<strong>bold</strong>"),
+            "expanded card should contain rendered HTML, got: {}",
+            rendered
+        );
+    }
+
+    #[test]
+    fn context_panel_delete_button_is_outside_summary() {
+        // The delete button should live in the expanded section so clicking it
+        // doesn't toggle the card. Concretely: the `hx-delete` attribute must
+        // appear AFTER the closing `</summary>` tag.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "notes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "1.2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("a summary".to_string()),
+                summary_html: Some("<p>a summary</p>\n".to_string()),
+                user_notes: None,
+                card_count: 0,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        let delete_idx = rendered
+            .find("hx-delete")
+            .expect("should have delete button");
+        let summary_close_idx = rendered
+            .find("</summary>")
+            .expect("should have </summary> tag");
+        assert!(
+            delete_idx > summary_close_idx,
+            "delete button (hx-delete) must appear after </summary>, got delete at {} vs </summary> at {}",
+            delete_idx,
+            summary_close_idx,
+        );
+    }
+
+    #[test]
+    fn context_panel_shows_card_count_when_cards_sourced() {
+        // When the Manager has synthesized cards from an attachment, the
+        // collapsed header should show a small count so the user can see
+        // at a glance how much of a file has been processed.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "vibes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("design vibes".to_string()),
+                summary_html: Some("<p>design vibes</p>\n".to_string()),
+                user_notes: None,
+                card_count: 3,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("3 cards"),
+            "panel should show card count when > 0, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn context_panel_pluralizes_single_card_count() {
+        // Singular form when exactly one card references the attachment.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "vibes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("design vibes".to_string()),
+                summary_html: Some("<p>design vibes</p>\n".to_string()),
+                user_notes: None,
+                card_count: 1,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("1 card") && !rendered.contains("1 cards"),
+            "panel should use singular 'card' for count of 1, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn context_panel_shows_not_yet_synthesized_when_summarized_but_no_cards() {
+        // An attachment that has a summary but hasn't been ingested yet should
+        // display a subtle hint so the user knows the Manager is expected to
+        // process it.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "vibes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("design vibes".to_string()),
+                summary_html: Some("<p>design vibes</p>\n".to_string()),
+                user_notes: None,
+                card_count: 0,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("Not yet synthesized"),
+            "panel should show 'Not yet synthesized' when summary is Some and card_count is 0"
+        );
+    }
+
+    #[test]
+    fn context_panel_hides_not_yet_synthesized_when_summary_pending() {
+        // Before a summary exists, the hint would be confusing — hide it.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "pending.txt".to_string(),
+                extension: "txt".to_string(),
+                size_display: "500 B".to_string(),
+                added_display: "12:35".to_string(),
+                summary: None,
+                summary_html: None,
+                user_notes: None,
+                card_count: 0,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            !rendered.contains("Not yet synthesized"),
+            "panel should not show the synthesis hint before a summary exists"
+        );
+    }
+
+    #[test]
+    fn context_panel_hides_not_yet_synthesized_when_cards_present() {
+        // Once the Manager has sourced cards from the attachment, the hint
+        // should disappear.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "vibes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("design vibes".to_string()),
+                summary_html: Some("<p>design vibes</p>\n".to_string()),
+                user_notes: None,
+                card_count: 2,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            !rendered.contains("Not yet synthesized"),
+            "panel should not show the synthesis hint once cards reference the attachment"
+        );
+    }
+
+    #[test]
+    fn context_panel_hides_card_count_when_zero() {
+        // Don't clutter the collapsed header with "0 cards" — just omit the
+        // pill entirely when no cards reference the attachment.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "vibes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "2 KB".to_string(),
+                added_display: "12:34".to_string(),
+                summary: Some("design vibes".to_string()),
+                summary_html: Some("<p>design vibes</p>\n".to_string()),
+                user_notes: None,
+                card_count: 0,
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            !rendered.contains("0 cards") && !rendered.contains("0 card"),
+            "panel should omit the count pill entirely when card_count is 0"
+        );
+    }
+
+    #[test]
+    fn context_panel_upload_form_lives_in_footer_not_header() {
+        // The "+ Add file" upload form belongs in the panel footer (under the
+        // attachment list), not in the header. Structural check: the upload
+        // form must appear after </div> that closes the chat-panel-header, AND
+        // must be inside a .context-panel-footer element.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![],
+        };
+        let rendered = tmpl.render().unwrap();
+        let form_idx = rendered
+            .find(r#"id="context-upload-form""#)
+            .expect("upload form exists");
+        let footer_idx = rendered
+            .find(r#"class="context-panel-footer""#)
+            .expect("footer exists");
+        let header_end = rendered
+            .find("chat-panel-header")
+            .and_then(|i| rendered[i..].find("</div>").map(|e| i + e + "</div>".len()))
+            .expect("header exists and closes");
+        assert!(
+            form_idx > header_end,
+            "upload form must be after the header"
+        );
+        assert!(
+            form_idx > footer_idx,
+            "upload form must be inside the footer"
+        );
+    }
+
+    #[test]
+    fn context_panel_preview_toggle_updates_button_text() {
+        // The preview toggle's onclick handler must also update the button's
+        // text so the label matches its state ("Preview context" / "Hide preview").
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HTEST".to_string(),
+            attachments: vec![],
+        };
+        let rendered = tmpl.render().unwrap();
+        // Find the preview toggle button's onclick attribute.
+        assert!(
+            rendered.contains("id=\"context-preview-toggle\""),
+            "preview toggle should have a stable id"
+        );
+        assert!(
+            rendered.contains("this.textContent ="),
+            "preview toggle onclick must update textContent"
+        );
+        assert!(
+            rendered.contains("'Hide preview'"),
+            "preview toggle onclick must include the open-state label"
+        );
+    }
+
+    #[test]
+    fn render_markdown_does_not_passthrough_raw_script_tag() {
+        // Explicit safety test: pulldown-cmark is configured so raw HTML in
+        // markdown input does NOT reach the output as HTML tags.
+        let out = render_markdown("<script>x</script>");
+        assert!(
+            !out.contains("<script>"),
+            "raw <script> must not pass through: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn render_markdown_headers_list_and_paragraph() {
+        // Smoke-cover a few markdown features the summary panel will rely on.
+        assert!(render_markdown("# Heading").contains("<h1>Heading</h1>"));
+        let list = render_markdown("- a\n- b");
+        assert!(list.contains("<ul>") && list.contains("<li>a</li>"));
+        assert!(render_markdown("plain").contains("<p>plain</p>"));
     }
 
     #[test]
@@ -3414,8 +4558,14 @@ mod tests {
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("Awaiting activity"), "should show empty state");
-        assert!(rendered.contains("mission-ticker-feed"), "should contain ticker feed id");
+        assert!(
+            rendered.contains("Awaiting activity"),
+            "should show empty state"
+        );
+        assert!(
+            rendered.contains("mission-ticker-feed"),
+            "should contain ticker feed id"
+        );
     }
 
     #[test]
@@ -3439,8 +4589,14 @@ mod tests {
         };
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("Manager"), "should contain sender label");
-        assert!(rendered.contains("Analyzing requirements"), "should contain message content");
-        assert!(rendered.contains("ticker-entry"), "should contain ticker entry class");
+        assert!(
+            rendered.contains("Analyzing requirements"),
+            "should contain message content"
+        );
+        assert!(
+            rendered.contains("ticker-entry"),
+            "should contain ticker entry class"
+        );
     }
 
     #[test]
@@ -3455,7 +4611,10 @@ mod tests {
             }),
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("Should we proceed?"), "should contain question text");
+        assert!(
+            rendered.contains("Should we proceed?"),
+            "should contain question text"
+        );
         assert!(rendered.contains("Yes"), "should contain Yes button");
         assert!(rendered.contains("No"), "should contain No button");
     }
@@ -3468,10 +4627,22 @@ mod tests {
             started: true,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("led-active"), "should contain active LED class");
-        assert!(rendered.contains("led-manager"), "should contain manager LED");
-        assert!(rendered.contains("led-brainstormer"), "should contain brainstormer LED");
-        assert!(rendered.contains("led-planner"), "should contain planner LED");
+        assert!(
+            rendered.contains("led-active"),
+            "should contain active LED class"
+        );
+        assert!(
+            rendered.contains("led-manager"),
+            "should contain manager LED"
+        );
+        assert!(
+            rendered.contains("led-brainstormer"),
+            "should contain brainstormer LED"
+        );
+        assert!(
+            rendered.contains("led-planner"),
+            "should contain planner LED"
+        );
     }
 
     #[test]
@@ -3482,8 +4653,14 @@ mod tests {
             started: true,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("led-paused"), "should contain paused LED class");
-        assert!(!rendered.contains("led-active"), "should not contain active LED class");
+        assert!(
+            rendered.contains("led-paused"),
+            "should contain paused LED class"
+        );
+        assert!(
+            !rendered.contains("led-active"),
+            "should not contain active LED class"
+        );
     }
 
     #[test]
@@ -3495,8 +4672,14 @@ mod tests {
         };
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("led-off"), "should contain off LED class");
-        assert!(!rendered.contains("led-active"), "should not contain active LED class");
-        assert!(!rendered.contains("led-paused"), "should not contain paused LED class");
+        assert!(
+            !rendered.contains("led-active"),
+            "should not contain active LED class"
+        );
+        assert!(
+            !rendered.contains("led-paused"),
+            "should not contain paused LED class"
+        );
     }
 
     #[tokio::test]
@@ -3508,8 +4691,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+chat+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build a chat testing system"))
                     .unwrap(),
             )
             .await
@@ -3577,10 +4760,22 @@ mod tests {
             agent_count: 0,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("agent-status"), "should contain agent-status id");
-        assert!(rendered.contains("agent-pill-stopped"), "should have stopped pill class");
-        assert!(rendered.contains("Start agents"), "should show start agents text");
-        assert!(rendered.contains("/agents/start"), "should have start action URL");
+        assert!(
+            rendered.contains("agent-status"),
+            "should contain agent-status id"
+        );
+        assert!(
+            rendered.contains("agent-pill-stopped"),
+            "should have stopped pill class"
+        );
+        assert!(
+            rendered.contains("Start agents"),
+            "should show start agents text"
+        );
+        assert!(
+            rendered.contains("/agents/start"),
+            "should have start action URL"
+        );
     }
 
     #[test]
@@ -3592,9 +4787,18 @@ mod tests {
             agent_count: 4,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("agent-pill-running"), "should have running pill class");
-        assert!(rendered.contains("Agents active"), "should show active state");
-        assert!(rendered.contains("/agents/pause"), "should have pause action URL");
+        assert!(
+            rendered.contains("agent-pill-running"),
+            "should have running pill class"
+        );
+        assert!(
+            rendered.contains("Agents active"),
+            "should show active state"
+        );
+        assert!(
+            rendered.contains("/agents/pause"),
+            "should have pause action URL"
+        );
     }
 
     #[test]
@@ -3606,10 +4810,22 @@ mod tests {
             agent_count: 4,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("agent-pill-stopped"), "paused should render as stopped pill");
-        assert!(rendered.contains("Start agents"), "paused should show start agents text");
-        assert!(rendered.contains("/agents/resume"), "paused should resume on click");
-        assert!(!rendered.contains("agent-pill-paused"), "should not have separate paused state");
+        assert!(
+            rendered.contains("agent-pill-stopped"),
+            "paused should render as stopped pill"
+        );
+        assert!(
+            rendered.contains("Start agents"),
+            "paused should show start agents text"
+        );
+        assert!(
+            rendered.contains("/agents/resume"),
+            "paused should resume on click"
+        );
+        assert!(
+            !rendered.contains("agent-pill-paused"),
+            "should not have separate paused state"
+        );
     }
 
     #[tokio::test]
@@ -3621,8 +4837,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+an+agent+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build an agent testing system"))
                     .unwrap(),
             )
             .await
@@ -3650,7 +4866,11 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("Start agents"), "should show stopped pill when no swarm: {}", html);
+        assert!(
+            html.contains("Start agents"),
+            "should show stopped pill when no swarm: {}",
+            html
+        );
     }
 
     #[tokio::test]
@@ -3662,8 +4882,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+pause+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build a pause testing system"))
                     .unwrap(),
             )
             .await
@@ -3691,7 +4911,11 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("Start agents"), "pause with no swarm should show stopped pill: {}", html);
+        assert!(
+            html.contains("Start agents"),
+            "pause with no swarm should show stopped pill: {}",
+            html
+        );
     }
 
     #[tokio::test]
@@ -3703,8 +4927,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+resume+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build a resume testing system"))
                     .unwrap(),
             )
             .await
@@ -3732,7 +4956,11 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("Start agents"), "resume with no swarm should show stopped pill: {}", html);
+        assert!(
+            html.contains("Start agents"),
+            "resume with no swarm should show stopped pill: {}",
+            html
+        );
     }
 
     #[tokio::test]
@@ -3755,7 +4983,11 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("Start agents"), "nonexistent spec should show stopped pill: {}", html);
+        assert!(
+            html.contains("Start agents"),
+            "nonexistent spec should show stopped pill: {}",
+            html
+        );
     }
 
     #[test]
@@ -3764,9 +4996,21 @@ mod tests {
             default_provider: "anthropic".to_string(),
             default_model: None,
             providers: vec![
-                ProviderInfoView { name: "anthropic".to_string(), has_api_key: false, model: "claude-sonnet-4-5-20250929".to_string() },
-                ProviderInfoView { name: "openai".to_string(), has_api_key: false, model: "gpt-4o".to_string() },
-                ProviderInfoView { name: "gemini".to_string(), has_api_key: false, model: "gemini-2.0-flash".to_string() },
+                ProviderInfoView {
+                    name: "anthropic".to_string(),
+                    has_api_key: false,
+                    model: "claude-sonnet-4-5-20250929".to_string(),
+                },
+                ProviderInfoView {
+                    name: "openai".to_string(),
+                    has_api_key: false,
+                    model: "gpt-4o".to_string(),
+                },
+                ProviderInfoView {
+                    name: "gemini".to_string(),
+                    has_api_key: false,
+                    model: "gemini-2.0-flash".to_string(),
+                },
             ],
             any_available: false,
         };
@@ -3781,8 +5025,16 @@ mod tests {
             default_provider: "anthropic".to_string(),
             default_model: Some("claude-sonnet-4-5-20250929".to_string()),
             providers: vec![
-                ProviderInfoView { name: "anthropic".to_string(), has_api_key: true, model: "claude-sonnet-4-5-20250929".to_string() },
-                ProviderInfoView { name: "openai".to_string(), has_api_key: false, model: "gpt-4o".to_string() },
+                ProviderInfoView {
+                    name: "anthropic".to_string(),
+                    has_api_key: true,
+                    model: "claude-sonnet-4-5-20250929".to_string(),
+                },
+                ProviderInfoView {
+                    name: "openai".to_string(),
+                    has_api_key: false,
+                    model: "gpt-4o".to_string(),
+                },
             ],
             any_available: true,
         };
@@ -3797,7 +5049,11 @@ mod tests {
         let state = test_state();
         let app = create_router(state, None);
         let resp = app
-            .oneshot(Request::get("/web/provider-status").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/web/provider-status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), 200);
@@ -3829,8 +5085,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+system+without+agents"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build a system without agents"))
                     .unwrap(),
             )
             .await
@@ -3840,7 +5096,10 @@ mod tests {
         // Since provider_status.any_available is false, try_start_agents should
         // return early and no swarm should be created.
         let swarms = state.swarms.read().await;
-        assert!(swarms.is_empty(), "no swarm should be created without provider");
+        assert!(
+            swarms.is_empty(),
+            "no swarm should be created without provider"
+        );
     }
 
     #[tokio::test]
@@ -3873,7 +5132,10 @@ mod tests {
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("chat-panel"), "should contain chat-panel div");
+        assert!(
+            rendered.contains("chat-panel"),
+            "should contain chat-panel div"
+        );
     }
 
     #[test]
@@ -3913,12 +5175,30 @@ mod tests {
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("Hello from human"), "should contain human message content");
-        assert!(rendered.contains("Agent response here"), "should contain agent message content");
-        assert!(rendered.contains("chat-message"), "should have chat-message class");
-        assert!(rendered.contains("chat-avatar"), "should have avatar element");
-        assert!(rendered.contains("chat-sender"), "should have sender label element");
-        assert!(!rendered.contains("No messages yet"), "should not show empty state when entries exist");
+        assert!(
+            rendered.contains("Hello from human"),
+            "should contain human message content"
+        );
+        assert!(
+            rendered.contains("Agent response here"),
+            "should contain agent message content"
+        );
+        assert!(
+            rendered.contains("chat-message"),
+            "should have chat-message class"
+        );
+        assert!(
+            rendered.contains("chat-avatar"),
+            "should have avatar element"
+        );
+        assert!(
+            rendered.contains("chat-sender"),
+            "should have sender label element"
+        );
+        assert!(
+            !rendered.contains("No messages yet"),
+            "should not show empty state when entries exist"
+        );
     }
 
     #[test]
@@ -3931,9 +5211,18 @@ mod tests {
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("No messages yet"), "should show empty state message");
-        assert!(rendered.contains("chat-empty"), "should have chat-empty class");
-        assert!(rendered.contains("Type below to start a conversation"), "should show hint text");
+        assert!(
+            rendered.contains("No messages yet"),
+            "should show empty state message"
+        );
+        assert!(
+            rendered.contains("chat-empty"),
+            "should have chat-empty class"
+        );
+        assert!(
+            rendered.contains("Type below to start a conversation"),
+            "should show hint text"
+        );
     }
 
     #[test]
@@ -3946,11 +5235,26 @@ mod tests {
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("chat-input-area"), "should contain chat-input-area div");
-        assert!(rendered.contains("chat-input-row"), "should contain chat-input-row div");
-        assert!(rendered.contains(r#"hx-post="/web/specs/01HTEST/chat""#), "should post to chat endpoint");
-        assert!(rendered.contains(r##"hx-target="#chat-transcript""##), "chat form should target chat-transcript");
-        assert!(rendered.contains("Ask the agents anything"), "should have placeholder text");
+        assert!(
+            rendered.contains("chat-input-area"),
+            "should contain chat-input-area div"
+        );
+        assert!(
+            rendered.contains("chat-input-row"),
+            "should contain chat-input-row div"
+        );
+        assert!(
+            rendered.contains(r#"hx-post="/web/specs/01HTEST/chat""#),
+            "should post to chat endpoint"
+        );
+        assert!(
+            rendered.contains(r##"hx-target="#chat-transcript""##),
+            "chat form should target chat-transcript"
+        );
+        assert!(
+            rendered.contains("Ask the agents anything"),
+            "should have placeholder text"
+        );
     }
 
     #[test]
@@ -3963,9 +5267,18 @@ mod tests {
             pending_question: None,
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("chat-panel"), "should contain chat-panel wrapper");
-        assert!(rendered.contains("sse:transcript_appended"), "should listen for transcript_appended event");
-        assert!(rendered.contains("chat-input-area"), "should contain input area");
+        assert!(
+            rendered.contains("chat-panel"),
+            "should contain chat-panel wrapper"
+        );
+        assert!(
+            rendered.contains("sse:transcript_appended"),
+            "should listen for transcript_appended event"
+        );
+        assert!(
+            rendered.contains("chat-input-area"),
+            "should contain input area"
+        );
     }
 
     #[tokio::test]
@@ -3977,8 +5290,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+chat+panel+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build a chat panel testing system"))
                     .unwrap(),
             )
             .await
@@ -4034,8 +5347,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Chat+brainstorm+test"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Chat brainstorm test"))
                 .unwrap(),
         )
         .await
@@ -4076,8 +5389,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Chat+refining+test"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Chat refining test"))
                 .unwrap(),
         )
         .await
@@ -4134,7 +5447,10 @@ mod tests {
             dot_content: "digraph {}".to_string(),
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("artifacts-panel"), "should contain artifacts-panel div");
+        assert!(
+            rendered.contains("artifacts-panel"),
+            "should contain artifacts-panel div"
+        );
     }
 
     #[test]
@@ -4147,11 +5463,26 @@ mod tests {
             dot_content: "digraph {}".to_string(),
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("id=\"markdown-source\""), "should contain markdown-source section");
-        assert!(rendered.contains("id=\"yaml-source\""), "should contain yaml-source section");
-        assert!(rendered.contains("id=\"dot-source\""), "should contain dot-source section");
-        assert!(rendered.contains("# My Spec"), "should render markdown content");
-        assert!(rendered.contains("title: My Spec"), "should render yaml content");
+        assert!(
+            rendered.contains("id=\"markdown-source\""),
+            "should contain markdown-source section"
+        );
+        assert!(
+            rendered.contains("id=\"yaml-source\""),
+            "should contain yaml-source section"
+        );
+        assert!(
+            rendered.contains("id=\"dot-source\""),
+            "should contain dot-source section"
+        );
+        assert!(
+            rendered.contains("# My Spec"),
+            "should render markdown content"
+        );
+        assert!(
+            rendered.contains("title: My Spec"),
+            "should render yaml content"
+        );
         assert!(rendered.contains("digraph {}"), "should render dot content");
     }
 
@@ -4177,9 +5508,18 @@ mod tests {
             rendered.contains("/web/specs/01HTEST/export/dot"),
             "should contain dot download link"
         );
-        assert!(rendered.contains("download=\"test-spec.md\""), "should have slugged .md download attribute");
-        assert!(rendered.contains("download=\"test-spec.yaml\""), "should have slugged .yaml download attribute");
-        assert!(rendered.contains("download=\"test-spec.dot\""), "should have slugged .dot download attribute");
+        assert!(
+            rendered.contains("download=\"test-spec.md\""),
+            "should have slugged .md download attribute"
+        );
+        assert!(
+            rendered.contains("download=\"test-spec.yaml\""),
+            "should have slugged .yaml download attribute"
+        );
+        assert!(
+            rendered.contains("download=\"test-spec.dot\""),
+            "should have slugged .dot download attribute"
+        );
     }
 
     #[test]
@@ -4195,7 +5535,11 @@ mod tests {
         // Count actual copy button elements by matching the class attribute on button tags,
         // not bare "btn-copy" which also matches JS selector references.
         let copy_count = rendered.matches("class=\"btn btn-sm btn-copy\"").count();
-        assert_eq!(copy_count, 3, "should have exactly 3 copy buttons, found {}", copy_count);
+        assert_eq!(
+            copy_count, 3,
+            "should have exactly 3 copy buttons, found {}",
+            copy_count
+        );
     }
 
     #[tokio::test]
@@ -4207,8 +5551,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+an+artifacts+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build an artifacts testing system"))
                     .unwrap(),
             )
             .await
@@ -4312,8 +5656,14 @@ mod tests {
             spec_markdown: "# Test".to_string(),
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("spec-document"), "should contain spec-document class");
-        assert!(rendered.contains("spec-copy-md"), "should contain copy markdown button");
+        assert!(
+            rendered.contains("spec-document"),
+            "should contain spec-document class"
+        );
+        assert!(
+            rendered.contains("spec-copy-md"),
+            "should contain copy markdown button"
+        );
     }
 
     #[test]
@@ -4336,8 +5686,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+an+export+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build an export testing system"))
                     .unwrap(),
             )
             .await
@@ -4367,7 +5717,12 @@ mod tests {
             resp.headers().get("content-type").unwrap(),
             "text/markdown; charset=utf-8"
         );
-        let disposition = resp.headers().get("content-disposition").unwrap().to_str().unwrap();
+        let disposition = resp
+            .headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(
             disposition.contains("attachment") && disposition.contains("-spec.md"),
             "should have slugged filename in content-disposition, got: {}",
@@ -4395,7 +5750,12 @@ mod tests {
             resp.headers().get("content-type").unwrap(),
             "text/yaml; charset=utf-8"
         );
-        let disposition = resp.headers().get("content-disposition").unwrap().to_str().unwrap();
+        let disposition = resp
+            .headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(
             disposition.contains("attachment") && disposition.contains("-spec.yaml"),
             "should have slugged filename in content-disposition, got: {}",
@@ -4423,7 +5783,12 @@ mod tests {
             resp.headers().get("content-type").unwrap(),
             "text/plain; charset=utf-8"
         );
-        let disposition = resp.headers().get("content-disposition").unwrap().to_str().unwrap();
+        let disposition = resp
+            .headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(
             disposition.contains("attachment") && disposition.contains("-spec.dot"),
             "should have slugged filename in content-disposition, got: {}",
@@ -4545,8 +5910,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+container+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build a container testing system"))
                     .unwrap(),
             )
             .await
@@ -4589,8 +5954,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+a+container+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build a container testing system"))
                     .unwrap(),
             )
             .await
@@ -4633,14 +5998,20 @@ mod tests {
 
     #[test]
     fn sanitize_container_id_rejects_unknown_values() {
-        assert_eq!(sanitize_container_id("activity-transcript"), "activity-transcript");
+        assert_eq!(
+            sanitize_container_id("activity-transcript"),
+            "activity-transcript"
+        );
         assert_eq!(sanitize_container_id("chat-transcript"), "chat-transcript");
         assert_eq!(sanitize_container_id("mission-ticker"), "mission-ticker");
         assert_eq!(sanitize_container_id("brainstorm-chat"), "brainstorm-chat");
         // IDs that are DOM element IDs but not transcript container_ids should be rejected.
         assert_eq!(sanitize_container_id("canvas"), "chat-transcript");
         assert_eq!(sanitize_container_id("chat-rail"), "chat-transcript");
-        assert_eq!(sanitize_container_id("'); alert('xss'); //"), "chat-transcript");
+        assert_eq!(
+            sanitize_container_id("'); alert('xss'); //"),
+            "chat-transcript"
+        );
         assert_eq!(sanitize_container_id("malicious-id"), "chat-transcript");
         assert_eq!(sanitize_container_id(""), "chat-transcript");
     }
@@ -4684,9 +6055,15 @@ mod tests {
         let (label, is_human, role_class) = sender_display("CustomRole-01JTESTID");
         // The capitalization loop uppercases only the first character and keeps
         // the rest as-is, so "CustomRole" becomes "CustomRole" (already capitalized).
-        assert_eq!(label, "CustomRole", "unknown role should keep original casing except first char");
+        assert_eq!(
+            label, "CustomRole",
+            "unknown role should keep original casing except first char"
+        );
         assert!(!is_human);
-        assert_eq!(role_class, "customrole", "role_class should be normalized to lowercase");
+        assert_eq!(
+            role_class, "customrole",
+            "role_class should be normalized to lowercase"
+        );
     }
 
     #[test]
@@ -4695,7 +6072,10 @@ mod tests {
         assert!(!is_human);
         // No '-' separator, so the entire string is the role. Normalization:
         // lowercase + replace space/!/@ /# with hyphens → "my-agent---"
-        assert_eq!(role_class, "my-agent---", "special chars should be replaced with hyphens");
+        assert_eq!(
+            role_class, "my-agent---",
+            "special chars should be replaced with hyphens"
+        );
     }
 
     // ---- is_chat_participant tests ----
@@ -4747,8 +6127,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+an+HX+chat+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build an HX chat testing system"))
                     .unwrap(),
             )
             .await
@@ -4799,8 +6179,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Build+an+answer+testing+system"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Build an answer testing system"))
                     .unwrap(),
             )
             .await
@@ -5148,7 +6528,10 @@ mod tests {
             "should include question sub-container"
         );
         // Content from both
-        assert!(rendered.contains("Test message"), "should contain transcript entry");
+        assert!(
+            rendered.contains("Test message"),
+            "should contain transcript entry"
+        );
         assert!(rendered.contains("Ready?"), "should contain question");
     }
 
@@ -5188,8 +6571,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Feed+part+test"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Feed part test"))
                     .unwrap(),
             )
             .await
@@ -5238,8 +6621,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Question+part+test"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Question part test"))
                     .unwrap(),
             )
             .await
@@ -5288,8 +6671,8 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::post("/web/specs")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from("description=Answer+question+target+test"))
+                    .header("content-type", MP_CONTENT_TYPE)
+                    .body(mp_description_body("Answer question target test"))
                     .unwrap(),
             )
             .await
@@ -5402,8 +6785,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Phase+test+spec"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Phase test spec"))
                 .unwrap(),
         )
         .await
@@ -5433,8 +6816,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Phase+test+spec"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Phase test spec"))
                 .unwrap(),
         )
         .await
@@ -5476,8 +6859,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Phase+test+spec"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Phase test spec"))
                 .unwrap(),
         )
         .await
@@ -5507,8 +6890,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Phase+test+spec"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Phase test spec"))
                 .unwrap(),
         )
         .await
@@ -5567,8 +6950,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Phase+test+spec"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Phase test spec"))
                 .unwrap(),
         )
         .await
@@ -5601,8 +6984,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Brainstorming+UI+test"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Brainstorming UI test"))
                 .unwrap(),
         )
         .await
@@ -5630,17 +7013,10 @@ mod tests {
             html.contains("data-view=\"brainstorming\""),
             "should have brainstorming marker"
         );
-        assert!(
-            html.contains("phase-stepper"),
-            "should have phase stepper"
-        );
+        assert!(html.contains("phase-stepper"), "should have phase stepper");
         assert!(
             html.contains("step-active"),
             "should have active stepper step"
-        );
-        assert!(
-            html.contains("agent-canvas"),
-            "should have agent-canvas container"
         );
         assert!(
             !html.contains("view-toggles-row"),
@@ -5654,8 +7030,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Active+UI+test"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Active UI test"))
                 .unwrap(),
         )
         .await
@@ -5698,10 +7074,7 @@ mod tests {
             html.contains("view-toggles-row"),
             "refining should have view toggles row"
         );
-        assert!(
-            html.contains("phase-stepper"),
-            "should have phase stepper"
-        );
+        assert!(html.contains("phase-stepper"), "should have phase stepper");
         assert!(
             html.contains("step-completed"),
             "brainstorming step should be completed in refining phase"
@@ -5718,8 +7091,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Board+peek+test"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Board peek test"))
                 .unwrap(),
         )
         .await
@@ -5744,13 +7117,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spec_view_brainstorming_contains_canvas_listener() {
+    async fn spec_view_compositor_subscribes_to_phase_transitioned() {
+        // Without this subscription, htmx-ext-sse never listens for the event
+        // name on the EventSource, so phase transitions silently drop (issue #9).
         let state = test_state();
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Canvas+listener+test"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Phase transition sub test"))
                 .unwrap(),
         )
         .await
@@ -5775,75 +7150,12 @@ mod tests {
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(
-            html.contains("sse:canvas_updated"),
-            "should contain canvas_updated SSE listener"
+            html.contains("hx-trigger=\"sse:phase_transitioned\""),
+            "compositor must declare hx-trigger for sse:phase_transitioned"
         );
         assert!(
-            html.contains("agent-canvas"),
-            "should contain agent-canvas element"
-        );
-    }
-
-    #[tokio::test]
-    async fn spec_view_prepopulates_canvas_content() {
-        let state = test_state();
-        let app = create_router(Arc::clone(&state), None);
-        app.oneshot(
-            Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Canvas+prepopulate+test"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-        let spec_id = {
-            let actors = state.actors.read().await;
-            *actors.keys().next().unwrap()
-        };
-
-        // Send UpdateCanvas command to set canvas content and a question so canvas is visible
-        {
-            let actors = state.actors.read().await;
-            let handle = actors.get(&spec_id).unwrap();
-            handle
-                .send_command(Command::UpdateCanvas {
-                    content: "<p>Canvas pre-populated content</p>".to_string(),
-                })
-                .await
-                .unwrap();
-            handle
-                .send_command(Command::AskQuestion {
-                    question: barnstormer_core::UserQuestion::Boolean {
-                        question_id: ulid::Ulid::new(),
-                        question: "Test?".to_string(),
-                        default: Some(true),
-                    },
-                })
-                .await
-                .unwrap();
-        }
-
-        let app2 = create_router(Arc::clone(&state), None);
-        let resp = app2
-            .oneshot(
-                Request::get(&format!("/web/specs/{}", spec_id))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(
-            html.contains("<p>Canvas pre-populated content</p>"),
-            "should contain pre-populated canvas content"
-        );
-        assert!(
-            html.contains("display:block"),
-            "canvas should be visible when content is present"
+            html.contains("hx-target=\"#workspace\""),
+            "phase transition should re-fetch into #workspace"
         );
     }
 
@@ -5853,8 +7165,8 @@ mod tests {
         let app = create_router(Arc::clone(&state), None);
         app.oneshot(
             Request::post("/web/specs")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("description=Canvas+state+test"))
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Canvas state test"))
                 .unwrap(),
         )
         .await
@@ -5892,6 +7204,262 @@ mod tests {
         assert_eq!(
             json.get("canvas_content").and_then(|v| v.as_str()),
             Some("<p>Check</p>")
+        );
+    }
+
+    #[tokio::test]
+    async fn cards_feed_returns_empty_state_when_no_cards() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Cards feed empty"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}/cards-feed", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let html = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(
+            html.contains("No cards captured yet"),
+            "empty state must hint at expected behavior: {}",
+            html
+        );
+        assert!(
+            html.contains("sse:card_created"),
+            "must re-trigger on card SSE events"
+        );
+    }
+
+    #[tokio::test]
+    async fn cards_feed_renders_cards_newest_first() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Cards feed ordering"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        {
+            let actors = state.actors.read().await;
+            let handle = actors.get(&spec_id).unwrap();
+            for title in ["First", "Second", "Third"] {
+                handle
+                    .send_command(Command::CreateCard {
+                        card_type: "idea".to_string(),
+                        title: title.to_string(),
+                        body: None,
+                        lane: None,
+                        created_by: "manager".to_string(),
+                        source_attachment_id: None,
+                    })
+                    .await
+                    .unwrap();
+            }
+        }
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}/cards-feed", spec_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        let third_pos = html.find("Third").expect("Third missing");
+        let first_pos = html.find("First").expect("First missing");
+        assert!(
+            third_pos < first_pos,
+            "newest card must render first (reverse chrono)"
+        );
+    }
+
+    #[tokio::test]
+    async fn brainstorming_layout_has_sidebar_tabs_and_no_canvas() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Sidebar tabs test"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}", spec_id))
+                    .header("HX-Request", "true")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+
+        assert!(
+            html.contains("sidebar-tab-toggle"),
+            "must render tab toggles"
+        );
+        assert!(
+            html.contains("data-tab=\"cards\""),
+            "must have cards tab button"
+        );
+        assert!(
+            html.contains("data-tab=\"context\""),
+            "must have context tab button"
+        );
+        assert!(html.contains("cards-feed"), "cards panel must load feed");
+        assert!(
+            !html.contains("agent-canvas"),
+            "canvas is deleted — element must not render"
+        );
+
+        // SSE subscription contract: these event names MUST appear somewhere in the layout,
+        // otherwise htmx-ext-sse never subscribes to them and Task 3's notification wiring
+        // silently drops every event.
+        for ev in [
+            "sse:card_created",
+            "sse:card_updated",
+            "sse:card_moved",
+            "sse:card_deleted",
+        ] {
+            assert!(
+                html.contains(ev),
+                "cards panel must declare {} to wake SSE subscription: {}",
+                ev,
+                html
+            );
+        }
+        for ev in [
+            "sse:context_attached",
+            "sse:context_summarized",
+            "sse:context_notes_updated",
+            "sse:context_removed",
+        ] {
+            assert!(
+                html.contains(ev),
+                "context panel must declare {} to wake SSE subscription: {}",
+                ev,
+                html
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn brainstorming_sidebar_tabs_wire_notification_events() {
+        let state = test_state();
+        let app = create_router(Arc::clone(&state), None);
+        app.oneshot(
+            Request::post("/web/specs")
+                .header("content-type", MP_CONTENT_TYPE)
+                .body(mp_description_body("Tab notifications"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        let spec_id = {
+            let actors = state.actors.read().await;
+            *actors.keys().next().unwrap()
+        };
+
+        let app2 = create_router(Arc::clone(&state), None);
+        let resp = app2
+            .oneshot(
+                Request::get(&format!("/web/specs/{}", spec_id))
+                    .header("HX-Request", "true")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+
+        // The JS must register listeners for all 4 card events and all 4 context events.
+        // Match on the addEventListener pattern so we verify the *listener* is there, not
+        // just the panel's hx-trigger from Task 2.
+        for ev in [
+            "card_created",
+            "card_updated",
+            "card_moved",
+            "card_deleted",
+            "context_attached",
+            "context_summarized",
+            "context_notes_updated",
+            "context_removed",
+        ] {
+            let needle = format!("'sse:' + ");
+            // Either inline ('sse:card_created') or concatenated via loop/array
+            let found = html.contains(&format!("'sse:{}'", ev))
+                || html.contains(&format!("\"sse:{}\"", ev))
+                || (html.contains(&needle) && html.contains(&format!("'{}'", ev)));
+            assert!(found, "notification JS must reference sse:{} event", ev);
+        }
+
+        // Notification class is applied by click/event handlers
+        assert!(
+            html.contains("has-notification"),
+            "notification class must be referenced in JS"
+        );
+        // Tab switching targets must be discoverable via data-tab attribute
+        assert!(
+            html.contains(".sidebar-tab-toggle") || html.contains("sidebar-tab-toggle"),
+            "JS must query tab toggles"
         );
     }
 }

@@ -188,6 +188,7 @@ mod tests {
             lanes: vec!["Ideas".to_string(), "Plan".to_string(), "Spec".to_string()],
             phase: SpecPhase::Refining,
             canvas_content: None,
+            context_attachments: Vec::new(),
         }
     }
 
@@ -205,6 +206,7 @@ mod tests {
             updated_at: now,
             created_by: created_by.to_string(),
             updated_by: created_by.to_string(),
+            source_attachment_id: None,
         }
     }
 
@@ -373,7 +375,10 @@ mod tests {
         let state = SpecState::new();
         assert!(state.core.is_none());
         let result = export_yaml(&state);
-        assert!(result.is_err(), "export_yaml should return Err when core is None");
+        assert!(
+            result.is_err(),
+            "export_yaml should return Err when core is None"
+        );
     }
 
     #[test]

@@ -149,7 +149,6 @@ Export via the web UI (`/web/specs/{id}/export/markdown|yaml|dot`) or the API.
 | `GET` | `/api/specs/{id}/state` | Get full spec state |
 | `POST` | `/api/specs/{id}/commands` | Submit commands |
 | `POST` | `/api/specs/{id}/undo` | Undo last command |
-| `POST` | `/api/specs/import` | Import spec from any text via LLM |
 | `GET` | `/api/specs/{id}/events/stream` | SSE event stream |
 
 When `BARNSTORMER_AUTH_TOKEN` is set, API routes require `Authorization: Bearer <token>`.

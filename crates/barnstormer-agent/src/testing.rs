@@ -5,10 +5,8 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures::Stream;
-use mux::llm::{
-    ContentBlock, LlmClient, Request, Response, StopReason, StreamEvent, Usage,
-};
 use mux::error::LlmError;
+use mux::llm::{ContentBlock, LlmClient, Request, Response, StopReason, StreamEvent, Usage};
 
 /// A stub LLM client that returns a pre-configured text response.
 ///
@@ -98,9 +96,7 @@ mod tests {
 
         // Verify it has exactly one text content block.
         assert_eq!(resp.content.len(), 1);
-        assert!(
-            matches!(&resp.content[0], ContentBlock::Text { text } if text == "test output")
-        );
+        assert!(matches!(&resp.content[0], ContentBlock::Text { text } if text == "test output"));
 
         // Verify there are no tool-use blocks (agent should not loop).
         assert!(!resp.has_tool_use());

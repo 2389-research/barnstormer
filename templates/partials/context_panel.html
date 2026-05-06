@@ -1,0 +1,111 @@
+{# ABOUTME: Context panel — right rail of brainstorming view. #}
+{# ABOUTME: Each attachment is a <details>/<summary> pair that toggles collapsed/expanded. #}
+
+<div class="chat-panel" id="context-panel">
+    <div class="chat-panel-header">
+        <button class="btn btn-sm" id="context-preview-toggle"
+                hx-get="/web/specs/{{ spec_id }}/context-preview"
+                hx-target="#context-preview"
+                hx-swap="innerHTML"
+                onclick="var p=document.getElementById('context-preview'); p.classList.toggle('hidden'); this.textContent = p.classList.contains('hidden') ? 'Preview context' : 'Hide preview';">
+            Preview context
+        </button>
+        <span class="chat-panel-title">Context</span>
+    </div>
+
+    <div class="chat-transcript" style="overflow-y: auto; flex: 1; padding: var(--spacing-md);">
+        {% for att in attachments %}
+        <details class="card context-card" id="att-{{ att.attachment_id }}" style="margin-bottom: var(--spacing-sm);">
+            <summary class="context-card-head">
+                <span style="display: flex; align-items: center; gap: var(--spacing-sm);">
+                    <span class="card-type badge-note">{{ att.extension }}</span>
+                    <span style="flex: 1; font-weight: 500; word-break: break-word;">{{ att.filename }}</span>
+                    {% if att.card_count > 0 %}
+                    <span class="has-tooltip">
+                        <span class="card-type badge-note context-card-count">{{ att.card_count }} card{% if att.card_count != 1 %}s{% endif %}</span>
+                        <span class="tooltip context-pill-tooltip">Cards synthesized from this file</span>
+                    </span>
+                    {% endif %}
+                    {% match att.summary %}
+                    {% when Some with (_) %}
+                        <span class="has-tooltip">
+                            <span class="card-type badge-plan">in context</span>
+                            <span class="tooltip context-pill-tooltip">Included in agent context</span>
+                        </span>
+                    {% when None %}
+                        <span class="has-tooltip">
+                            <span class="card-type badge-note">summarizing&hellip;</span>
+                            <span class="tooltip context-pill-tooltip">Summary in progress</span>
+                        </span>
+                    {% endmatch %}
+                </span>
+                {% match att.user_notes %}
+                {% when Some with (n) %}
+                    <span class="collapsed-notes" style="display: block; font-size: 0.78rem; color: var(--text-muted); font-style: italic; margin-top: var(--spacing-xs); word-break: break-word;">{{ n }}</span>
+                {% when None %}
+                {% endmatch %}
+                {% if att.summary.is_some() && att.card_count == 0 %}
+                <span class="context-card-awaiting" style="display: block; font-size: 0.78rem; color: var(--text-muted); margin-top: var(--spacing-xs);">Not yet synthesized</span>
+                {% endif %}
+            </summary>
+
+            <div class="context-card-body" style="margin-top: var(--spacing-sm);">
+                <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: var(--spacing-sm);">
+                    {{ att.size_display }} &middot; added {{ att.added_display }}
+                </div>
+                {% match att.summary_html %}
+                {% when Some with (h) %}
+                    <div class="context-summary-rendered" style="font-size: 0.82rem; color: var(--text-secondary); margin-bottom: var(--spacing-sm);">
+                        {{ h|safe }}
+                    </div>
+                {% when None %}
+                    <div style="font-size: 0.82rem; color: var(--text-muted); font-style: italic; margin-bottom: var(--spacing-sm);">
+                        Summarizing&hellip;
+                    </div>
+                {% endmatch %}
+                <form hx-patch="/web/specs/{{ spec_id }}/context/{{ att.attachment_id }}/notes"
+                      hx-trigger="change from:find textarea, blur from:find textarea"
+                      hx-swap="none">
+                    <div class="form-group" style="margin: 0 0 var(--spacing-sm) 0;">
+                        <textarea name="notes" rows="2"
+                                  placeholder="Add notes about this file&hellip;"
+                                  style="font-size: 0.82rem;">{% match att.user_notes %}{% when Some with (n) %}{{ n }}{% when None %}{% endmatch %}</textarea>
+                    </div>
+                </form>
+                <div style="display: flex; justify-content: flex-end;">
+                    <button class="btn btn-sm btn-danger"
+                            hx-delete="/web/specs/{{ spec_id }}/context/{{ att.attachment_id }}"
+                            hx-target="#context-panel"
+                            hx-swap="outerHTML"
+                            hx-confirm="Remove this file?">Remove</button>
+                </div>
+            </div>
+        </details>
+        {% endfor %}
+        {% if attachments.is_empty() %}
+        <div style="color: var(--text-muted); font-size: 0.82rem; text-align: center; padding: var(--spacing-lg);">
+            No context files yet. Drop a file above to get started.
+        </div>
+        {% endif %}
+    </div>
+    <div id="context-preview" class="context-preview-overlay hidden"></div>
+    <div class="context-panel-footer">
+        <form id="context-upload-form"
+              hx-post="/web/specs/{{ spec_id }}/context"
+              hx-encoding="multipart/form-data"
+              enctype="multipart/form-data"
+              hx-target="#context-panel"
+              hx-swap="outerHTML">
+            {# `<label>` + visually-hidden (not display:none) `<input type="file">` so
+               the input stays keyboard-focusable. When the input is tabbed to,
+               `.context-add-btn:focus-within` paints the visible focus ring on the
+               label, and Space/Enter on the focused input opens the OS picker. #}
+            <label class="btn btn-primary context-add-btn">
+                + Add file
+                <input type="file" name="file" class="context-file-input"
+                       aria-label="Add context file"
+                       onchange="this.form.requestSubmit()">
+            </label>
+        </form>
+    </div>
+</div>

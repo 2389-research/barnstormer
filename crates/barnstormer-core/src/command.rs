@@ -32,6 +32,12 @@ pub enum Command {
         body: Option<String>,
         lane: Option<String>,
         created_by: String,
+        /// Optional link to the context attachment this card was synthesized
+        /// from. `None` for cards authored without reference to a specific
+        /// attachment. Deserializes as `None` when absent so JSON from clients
+        /// that don't know about the field continues to work.
+        #[serde(default)]
+        source_attachment_id: Option<Ulid>,
     },
     UpdateCard {
         card_id: Ulid,
@@ -76,6 +82,23 @@ pub enum Command {
     UpdateCanvas {
         content: String,
     },
+    AttachContext {
+        attachment_id: Ulid,
+        filename: String,
+        mime_type: String,
+        size_bytes: u64,
+    },
+    SummarizeContext {
+        attachment_id: Ulid,
+        summary: String,
+    },
+    UpdateContextNotes {
+        attachment_id: Ulid,
+        notes: String,
+    },
+    RemoveContext {
+        attachment_id: Ulid,
+    },
     Undo,
     StreamDelta {
         agent_id: String,
@@ -115,6 +138,15 @@ mod tests {
                 body: Some("Body text".to_string()),
                 lane: Some("Backlog".to_string()),
                 created_by: "human".to_string(),
+                source_attachment_id: None,
+            },
+            Command::CreateCard {
+                card_type: "idea".to_string(),
+                title: "Sourced card".to_string(),
+                body: Some("From the design doc".to_string()),
+                lane: None,
+                created_by: "manager-1".to_string(),
+                source_attachment_id: Some(Ulid::new()),
             },
             Command::UpdateCard {
                 card_id: Ulid::new(),
@@ -211,6 +243,97 @@ mod tests {
         let back: Command = serde_json::from_str(&json).unwrap();
         match back {
             Command::UpdateCanvas { content } => assert_eq!(content, "<h1>Test</h1>"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn attach_context_command_serializes() {
+        let id = Ulid::new();
+        let cmd = Command::AttachContext {
+            attachment_id: id,
+            filename: "notes.md".to_string(),
+            mime_type: "text/markdown".to_string(),
+            size_bytes: 1024,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"AttachContext\""));
+        assert!(json.contains("\"filename\":\"notes.md\""));
+    }
+
+    #[test]
+    fn summarize_context_command_serializes() {
+        let cmd = Command::SummarizeContext {
+            attachment_id: Ulid::new(),
+            summary: "Key points...".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"SummarizeContext\""));
+    }
+
+    #[test]
+    fn update_context_notes_command_serializes() {
+        let cmd = Command::UpdateContextNotes {
+            attachment_id: Ulid::new(),
+            notes: "From the kickoff".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"UpdateContextNotes\""));
+    }
+
+    #[test]
+    fn remove_context_command_serializes() {
+        let cmd = Command::RemoveContext {
+            attachment_id: Ulid::new(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"RemoveContext\""));
+    }
+
+    #[test]
+    fn create_card_deserializes_without_source_attachment_id_field() {
+        // Clients that don't know about the new field must still be able to
+        // emit a CreateCard command.
+        let json = r#"{
+            "type": "CreateCard",
+            "card_type": "idea",
+            "title": "No source",
+            "body": null,
+            "lane": null,
+            "created_by": "human"
+        }"#;
+        let cmd: Command = serde_json::from_str(json).expect("parse");
+        match cmd {
+            Command::CreateCard {
+                source_attachment_id,
+                ..
+            } => {
+                assert!(source_attachment_id.is_none());
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn create_card_round_trips_with_source_attachment_id() {
+        let att_id = Ulid::new();
+        let cmd = Command::CreateCard {
+            card_type: "idea".to_string(),
+            title: "From file".to_string(),
+            body: Some("body".to_string()),
+            lane: None,
+            created_by: "manager-1".to_string(),
+            source_attachment_id: Some(att_id),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: Command = serde_json::from_str(&json).unwrap();
+        match back {
+            Command::CreateCard {
+                source_attachment_id,
+                ..
+            } => {
+                assert_eq!(source_attachment_id, Some(att_id));
+            }
             _ => panic!("wrong variant"),
         }
     }
