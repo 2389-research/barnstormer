@@ -39,8 +39,14 @@ async fn upload_text_file_emits_attached_event() {
         .await
         .expect("read body");
     let body_str = std::str::from_utf8(&body).expect("utf-8 body");
-    assert!(body_str.contains("chat-panel"), "expected panel container in response body");
-    assert!(body_str.contains("notes.md"), "expected filename in response body");
+    assert!(
+        body_str.contains("chat-panel"),
+        "expected panel container in response body"
+    );
+    assert!(
+        body_str.contains("notes.md"),
+        "expected filename in response body"
+    );
 
     // Verify the event landed in state.
     let actors = ctx.state.actors.read().await;

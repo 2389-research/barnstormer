@@ -61,8 +61,8 @@ async fn summarize_and_record(
     filename: String,
     content: String,
 ) -> anyhow::Result<()> {
-    let provider = std::env::var("BARNSTORMER_DEFAULT_PROVIDER")
-        .unwrap_or_else(|_| "anthropic".into());
+    let provider =
+        std::env::var("BARNSTORMER_DEFAULT_PROVIDER").unwrap_or_else(|_| "anthropic".into());
     let (client, model) = barnstormer_agent::client::create_llm_client(&provider, None)?;
 
     let (bounded, truncated) = truncate_for_summary(&content);

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tokio::sync::{broadcast, Notify};
+use tokio::sync::{Notify, broadcast};
 use tracing;
 use ulid::Ulid;
 
@@ -25,7 +25,6 @@ use barnstormer_core::actor::SpecActorHandle;
 use barnstormer_core::command::Command;
 use barnstormer_core::event::{Event, EventPayload};
 use barnstormer_core::state::SpecPhase;
-
 
 /// System prompt for the Manager agent role.
 const MANAGER_SYSTEM_PROMPT: &str = "You are the manager agent for a product specification. \
@@ -169,18 +168,22 @@ fn full_system_prompt(role: &AgentRole, agent_id: &str, phase: &SpecPhase) -> St
 fn phase_context_block(phase: &SpecPhase) -> &'static str {
     match phase {
         SpecPhase::Brainstorming => "",
-        SpecPhase::Refining => "\n\n## Current phase: Refining\n\
+        SpecPhase::Refining => {
+            "\n\n## Current phase: Refining\n\
             The spec is in the Refining phase — brainstorming is over and the cards have been \
             captured. Your job here is to polish: review and reorganize cards, tighten descriptions, \
             fill gaps, and verify the spec is implementation-ready. Do NOT narrate about \
             'moving to refining' — you are already there.\n\n\
             To advance to the Complete phase, call propose_transition with a brief recap of what \
             has been refined. The runtime will append 'Ready to finalize?' itself; do not include \
-            any question in your summary.",
-        SpecPhase::Complete => "\n\n## Current phase: Complete\n\
+            any question in your summary."
+        }
+        SpecPhase::Complete => {
+            "\n\n## Current phase: Complete\n\
             The spec is finalized and read-only from the user's perspective. Do not call \
             propose_transition (there is no further phase). Focus on answering questions about \
-            the finished spec and helping the user export it.",
+            the finished spec and helping the user export it."
+        }
     }
 }
 
@@ -244,8 +247,8 @@ impl SwarmOrchestrator {
         actor: SpecActorHandle,
         home: PathBuf,
     ) -> Result<Self, anyhow::Error> {
-        let provider =
-            std::env::var("BARNSTORMER_DEFAULT_PROVIDER").unwrap_or_else(|_| "anthropic".to_string());
+        let provider = std::env::var("BARNSTORMER_DEFAULT_PROVIDER")
+            .unwrap_or_else(|_| "anthropic".to_string());
         let model_override = std::env::var("BARNSTORMER_DEFAULT_MODEL").ok();
 
         let (llm_client, resolved_model) =
@@ -453,19 +456,11 @@ impl SwarmOrchestrator {
         }
 
         // Create a fresh SubAgent
-        let mut sub_agent = SubAgent::new(
-            definition,
-            Arc::clone(client),
-            registry,
-        );
+        let mut sub_agent = SubAgent::new(definition, Arc::clone(client), registry);
 
         // Attach streaming hook for real-time event forwarding
         let hook_registry = Arc::new(HookRegistry::new());
-        let hook = StreamingHook::new(
-            Arc::clone(actor),
-            runner.agent_id.clone(),
-            is_manager,
-        );
+        let hook = StreamingHook::new(Arc::clone(actor), runner.agent_id.clone(), is_manager);
         hook_registry.register(hook).await;
         sub_agent = sub_agent.with_hooks(hook_registry);
 
@@ -600,7 +595,16 @@ async fn run_agent_by_index(
                 // buffered events so we drain them below.
                 let event_rx =
                     std::mem::replace(&mut s.event_receivers[index], actor_ref.subscribe());
-                Some((runner, event_rx, actor_ref, question_pending, pending_transition_question, client, model, home))
+                Some((
+                    runner,
+                    event_rx,
+                    actor_ref,
+                    question_pending,
+                    pending_transition_question,
+                    client,
+                    model,
+                    home,
+                ))
             }
             None => {
                 tracing::warn!(agent_index = index, "agent runner slot is empty, skipping");
@@ -608,7 +612,16 @@ async fn run_agent_by_index(
             }
         }
     };
-    let Some((mut runner, mut event_rx, actor_ref, question_pending, pending_transition_question, client, model, home)) = extracted
+    let Some((
+        mut runner,
+        mut event_rx,
+        actor_ref,
+        question_pending,
+        pending_transition_question,
+        client,
+        model,
+        home,
+    )) = extracted
     else {
         return false;
     };
@@ -700,7 +713,11 @@ async fn drain_transition_answers(
     phase_rx: &mut broadcast::Receiver<Event>,
 ) {
     while let Ok(event) = phase_rx.try_recv() {
-        if let EventPayload::QuestionAnswered { question_id, answer } = &event.payload {
+        if let EventPayload::QuestionAnswered {
+            question_id,
+            answer,
+        } = &event.payload
+        {
             let s = swarm.lock().await;
             if should_transition_on_answer(&s.pending_transition_question, *question_id, answer) {
                 let current_phase = s.actor.read_state().await.phase.clone();
@@ -879,10 +896,7 @@ fn build_task_prompt(ctx: &AgentContext) -> String {
             .iter()
             .map(|e| format!("  - {:?}", e.payload))
             .collect();
-        parts.push(format!(
-            "Recent events:\n{}",
-            event_descriptions.join("\n")
-        ));
+        parts.push(format!("Recent events:\n{}", event_descriptions.join("\n")));
     }
 
     if !ctx.recent_transcript.is_empty() {
@@ -906,10 +920,7 @@ fn build_task_prompt(ctx: &AgentContext) -> String {
             .iter()
             .map(|d| format!("  - {}", d))
             .collect();
-        parts.push(format!(
-            "Key decisions so far:\n{}",
-            decisions.join("\n")
-        ));
+        parts.push(format!("Key decisions so far:\n{}", decisions.join("\n")));
     }
 
     let context_section = render_context_files_section(&ctx.context_attachments);
@@ -1015,9 +1026,15 @@ mod tests {
 
         assert_eq!(swarm.agents.len(), 4);
         assert_eq!(swarm.agents[0].as_ref().unwrap().role, AgentRole::Manager);
-        assert_eq!(swarm.agents[1].as_ref().unwrap().role, AgentRole::Brainstormer);
+        assert_eq!(
+            swarm.agents[1].as_ref().unwrap().role,
+            AgentRole::Brainstormer
+        );
         assert_eq!(swarm.agents[2].as_ref().unwrap().role, AgentRole::Planner);
-        assert_eq!(swarm.agents[3].as_ref().unwrap().role, AgentRole::DotGenerator);
+        assert_eq!(
+            swarm.agents[3].as_ref().unwrap().role,
+            AgentRole::DotGenerator
+        );
 
         assert!(!swarm.is_paused());
         assert!(!swarm.has_pending_question());
@@ -1133,7 +1150,10 @@ mod tests {
         // propose_transition will do from here, and (c) explicitly forbid
         // narrating "move to refining" from within Refining.
         let block = phase_context_block(&SpecPhase::Refining);
-        assert!(block.contains("Refining"), "block should name the current phase");
+        assert!(
+            block.contains("Refining"),
+            "block should name the current phase"
+        );
         assert!(
             block.contains("Complete"),
             "block should name Complete as the propose_transition target from Refining"
@@ -1151,7 +1171,10 @@ mod tests {
     #[test]
     fn phase_context_block_complete_tells_agent_not_to_propose_transition() {
         let block = phase_context_block(&SpecPhase::Complete);
-        assert!(block.contains("Complete"), "block should name the current phase");
+        assert!(
+            block.contains("Complete"),
+            "block should name the current phase"
+        );
         assert!(
             block.contains("Do not call propose_transition")
                 || block.contains("not call propose_transition"),
@@ -1197,7 +1220,10 @@ mod tests {
         let a = AgentRunner::new(spec_id, AgentRole::Manager);
         let b = AgentRunner::new(spec_id, AgentRole::Manager);
 
-        assert_ne!(a.agent_id, b.agent_id, "each runner should get a unique agent_id");
+        assert_ne!(
+            a.agent_id, b.agent_id,
+            "each runner should get a unique agent_id"
+        );
         assert!(a.agent_id.starts_with("manager-"));
         assert!(b.agent_id.starts_with("manager-"));
     }
@@ -1206,7 +1232,10 @@ mod tests {
     fn build_task_prompt_empty_context() {
         let ctx = AgentContext::new(Ulid::new(), "test-agent".to_string(), AgentRole::Manager);
         let prompt = build_task_prompt(&ctx);
-        assert!(prompt.contains("just created"), "empty context should produce intro prompt");
+        assert!(
+            prompt.contains("just created"),
+            "empty context should produce intro prompt"
+        );
     }
 
     #[test]
@@ -1299,7 +1328,10 @@ mod tests {
     #[test]
     fn render_context_files_section_empty_when_no_attachments() {
         let section = render_context_files_section(&[]);
-        assert!(section.is_empty(), "no attachments should produce empty string");
+        assert!(
+            section.is_empty(),
+            "no attachments should produce empty string"
+        );
     }
 
     #[test]
@@ -1716,7 +1748,12 @@ mod tests {
                 panic!(
                     "phase never advanced from Brainstorming after Yes answer; \
                      pending_transition_question = {:?}",
-                    *swarm.lock().await.pending_transition_question.lock().unwrap()
+                    *swarm
+                        .lock()
+                        .await
+                        .pending_transition_question
+                        .lock()
+                        .unwrap()
                 );
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -1856,7 +1893,9 @@ mod tests {
         let mut brainstormer = AgentRunner::new(spec_id, AgentRole::Brainstormer);
         brainstormer.context.rolling_summary = "Brainstormer memory".to_string();
         brainstormer.context.last_event_seen = 12;
-        brainstormer.context.add_decision("Add caching layer".to_string());
+        brainstormer
+            .context
+            .add_decision("Add caching layer".to_string());
 
         let agents = vec![manager, brainstormer];
         let mut swarm = SwarmOrchestrator::with_agents(
@@ -1906,12 +1945,16 @@ mod tests {
         let mut original_manager = AgentRunner::new(spec_id, AgentRole::Manager);
         original_manager.context.rolling_summary = "Original manager context".to_string();
         original_manager.context.last_event_seen = 20;
-        original_manager.context.add_decision("Decision A".to_string());
+        original_manager
+            .context
+            .add_decision("Decision A".to_string());
 
         let mut original_planner = AgentRunner::new(spec_id, AgentRole::Planner);
         original_planner.context.rolling_summary = "Original planner context".to_string();
         original_planner.context.last_event_seen = 18;
-        original_planner.context.add_decision("Decision B".to_string());
+        original_planner
+            .context
+            .add_decision("Decision B".to_string());
 
         // Collect the snapshot from the originals
         let contexts: Vec<AgentContext> = vec![
@@ -2143,7 +2186,10 @@ mod tests {
         let id = Ulid::new();
         let pending = Mutex::new(Some(id));
         assert!(!should_transition_on_answer(&pending, id, "no"));
-        assert!(pending.lock().unwrap().is_none(), "should still clear pending");
+        assert!(
+            pending.lock().unwrap().is_none(),
+            "should still clear pending"
+        );
     }
 
     #[test]
@@ -2152,7 +2198,10 @@ mod tests {
         let wrong = Ulid::new();
         let pending = Mutex::new(Some(id));
         assert!(!should_transition_on_answer(&pending, wrong, "yes"));
-        assert!(pending.lock().unwrap().is_some(), "should NOT clear pending for wrong ID");
+        assert!(
+            pending.lock().unwrap().is_some(),
+            "should NOT clear pending for wrong ID"
+        );
     }
 
     #[test]
@@ -2163,7 +2212,8 @@ mod tests {
 
     #[test]
     fn manager_gets_brainstorming_prompt_in_brainstorming() {
-        let prompt = full_system_prompt(&AgentRole::Manager, "agent-123", &SpecPhase::Brainstorming);
+        let prompt =
+            full_system_prompt(&AgentRole::Manager, "agent-123", &SpecPhase::Brainstorming);
         assert!(prompt.contains("ONE question at a time"));
         assert!(prompt.contains("brainstorming mode"));
     }
@@ -2188,11 +2238,8 @@ mod tests {
             "agent-123",
             &SpecPhase::Brainstorming,
         );
-        let in_refining = full_system_prompt(
-            &AgentRole::Brainstormer,
-            "agent-123",
-            &SpecPhase::Refining,
-        );
+        let in_refining =
+            full_system_prompt(&AgentRole::Brainstormer, "agent-123", &SpecPhase::Refining);
         assert_ne!(
             in_brainstorming, in_refining,
             "brainstormer prompt should now carry phase awareness"

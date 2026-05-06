@@ -25,7 +25,10 @@ async fn delete_context_soft_removes_attachment() {
             &att.filename,
         )
     };
-    assert!(on_disk_path.exists(), "attachment file should exist before delete");
+    assert!(
+        on_disk_path.exists(),
+        "attachment file should exist before delete"
+    );
 
     let req = Request::builder()
         .method("DELETE")
@@ -45,7 +48,10 @@ async fn delete_context_soft_removes_attachment() {
         .await
         .expect("read body");
     let body_str = std::str::from_utf8(&body).expect("utf-8 body");
-    assert!(body_str.contains("chat-panel"), "expected panel container in response body");
+    assert!(
+        body_str.contains("chat-panel"),
+        "expected panel container in response body"
+    );
     assert!(
         body_str.contains("No context files yet"),
         "expected empty-state message in response body"

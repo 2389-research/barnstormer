@@ -26,7 +26,10 @@ async fn preview_contains_attachment_filename_and_summary_placeholder() {
     let html = std::str::from_utf8(&body).unwrap();
 
     // Filename (set by setup_with_attachment) must appear in the preview.
-    assert!(html.contains(&ctx.filename), "preview should include filename; got: {html}");
+    assert!(
+        html.contains(&ctx.filename),
+        "preview should include filename; got: {html}"
+    );
     // The attachment's summary is async — immediately after upload it is still
     // None, so the preview shows the "being summarized" placeholder.
     assert!(

@@ -4,9 +4,9 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use http::Request;
 use barnstormer_server::{AppState, ProviderStatus, create_router};
 use barnstormer_store::StorageManager;
+use http::Request;
 use tower::ServiceExt;
 
 /// Helper to create a test AppState with a temp directory.
@@ -179,5 +179,8 @@ async fn smoke_test_full_lifecycle() {
         html.contains("<!DOCTYPE html>"),
         "index should return valid HTML"
     );
-    assert!(html.contains("barnstormer"), "index should contain barnstormer");
+    assert!(
+        html.contains("barnstormer"),
+        "index should contain barnstormer"
+    );
 }

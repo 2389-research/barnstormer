@@ -117,9 +117,9 @@ mod tests {
     use super::*;
     use crate::jsonl::JsonlLog;
     use crate::snapshot::{SnapshotData, save_snapshot};
-    use chrono::Utc;
     use barnstormer_core::card::Card;
     use barnstormer_core::event::{Event, EventPayload};
+    use chrono::Utc;
     use std::collections::HashMap;
     use std::fs::{self, OpenOptions};
     use std::io::Write;

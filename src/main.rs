@@ -5,11 +5,11 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use clap::Parser;
 use barnstormer_agent::client::create_llm_client;
 use barnstormer_agent::import::{parse_with_llm, to_commands};
 use barnstormer_server::{AppState, ProviderStatus, create_router};
 use barnstormer_store::{JsonlLog, StorageManager};
+use clap::Parser;
 
 #[derive(Parser)]
 #[command(name = "barnstormer", about = "Agentic spec builder")]
@@ -72,7 +72,10 @@ async fn main() {
             tracing::info!("recovered {} specs", recovered_specs.len());
 
             // Create AppState and spawn actors for recovered specs
-            let state = Arc::new(AppState::new(barnstormer_home.clone(), ProviderStatus::detect()));
+            let state = Arc::new(AppState::new(
+                barnstormer_home.clone(),
+                ProviderStatus::detect(),
+            ));
             {
                 let mut actors = state.actors.write().await;
                 let mut persisters = state.event_persisters.write().await;
@@ -81,7 +84,9 @@ async fn main() {
                     // Subscribe a background persister so all future events
                     // (including agent-produced ones) are written to JSONL.
                     let persister = barnstormer_server::web::spawn_event_persister(
-                        &handle, spec_id, &barnstormer_home,
+                        &handle,
+                        spec_id,
+                        &barnstormer_home,
                     );
                     persisters.insert(spec_id, persister);
                     actors.insert(spec_id, handle);
@@ -188,7 +193,10 @@ async fn run_import(
         provider_status.default_model.as_deref(),
     )?;
 
-    println!("Importing via {} ({})...", provider_status.default_provider, model);
+    println!(
+        "Importing via {} ({})...",
+        provider_status.default_provider, model
+    );
 
     // Parse content via LLM
     let import_result = parse_with_llm(&content, source_hint, &client, &model).await?;

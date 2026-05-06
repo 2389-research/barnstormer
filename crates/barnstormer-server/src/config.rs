@@ -65,7 +65,8 @@ impl BarnstormerConfig {
                     .join(".barnstormer")
             });
 
-        let bind_str = std::env::var("BARNSTORMER_BIND").unwrap_or_else(|_| "127.0.0.1:7331".to_string());
+        let bind_str =
+            std::env::var("BARNSTORMER_BIND").unwrap_or_else(|_| "127.0.0.1:7331".to_string());
         let bind: SocketAddr = bind_str
             .parse()
             .map_err(|_| ConfigError::InvalidBind(bind_str))?;
@@ -78,15 +79,15 @@ impl BarnstormerConfig {
             .ok()
             .filter(|t| !t.is_empty());
 
-        let default_provider =
-            std::env::var("BARNSTORMER_DEFAULT_PROVIDER").unwrap_or_else(|_| "anthropic".to_string());
+        let default_provider = std::env::var("BARNSTORMER_DEFAULT_PROVIDER")
+            .unwrap_or_else(|_| "anthropic".to_string());
 
         let default_model = std::env::var("BARNSTORMER_DEFAULT_MODEL")
             .ok()
             .filter(|m| !m.is_empty());
 
-        let public_base_url =
-            std::env::var("BARNSTORMER_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{}", bind));
+        let public_base_url = std::env::var("BARNSTORMER_PUBLIC_BASE_URL")
+            .unwrap_or_else(|_| format!("http://{}", bind));
 
         // Security validation: if allowing remote access, require auth token
         if allow_remote && auth_token.is_none() {
@@ -151,10 +152,19 @@ mod tests {
     #[test]
     fn expand_tilde_expands_home() {
         let home = std::env::var("HOME").unwrap();
-        assert_eq!(expand_tilde("~/.barnstormer"), PathBuf::from(&home).join(".barnstormer"));
+        assert_eq!(
+            expand_tilde("~/.barnstormer"),
+            PathBuf::from(&home).join(".barnstormer")
+        );
         assert_eq!(expand_tilde("~"), PathBuf::from(&home));
-        assert_eq!(expand_tilde("/absolute/path"), PathBuf::from("/absolute/path"));
-        assert_eq!(expand_tilde("relative/path"), PathBuf::from("relative/path"));
+        assert_eq!(
+            expand_tilde("/absolute/path"),
+            PathBuf::from("/absolute/path")
+        );
+        assert_eq!(
+            expand_tilde("relative/path"),
+            PathBuf::from("relative/path")
+        );
     }
 
     #[test]

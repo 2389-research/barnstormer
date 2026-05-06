@@ -22,9 +22,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
+use barnstormer_core::actor::SpecActorHandle;
 use mux::tool::Registry;
 use ulid::Ulid;
-use barnstormer_core::actor::SpecActorHandle;
 
 /// Build a tool registry with all domain tools registered.
 ///

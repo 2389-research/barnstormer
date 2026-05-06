@@ -3,10 +3,10 @@
 
 use std::path::Path;
 
-use rusqlite::{Connection, params};
 use barnstormer_core::card::Card;
 use barnstormer_core::event::{Event, EventPayload};
 use barnstormer_core::model::SpecCore;
+use rusqlite::{Connection, params};
 use thiserror::Error;
 use ulid::Ulid;
 
@@ -376,9 +376,9 @@ pub struct CardRow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
     use barnstormer_core::card::Card;
     use barnstormer_core::model::SpecCore;
+    use chrono::Utc;
     use tempfile::TempDir;
 
     fn make_spec() -> SpecCore {

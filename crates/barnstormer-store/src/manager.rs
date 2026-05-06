@@ -136,10 +136,10 @@ impl StorageManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
     use barnstormer_core::card::Card;
     use barnstormer_core::model::SpecCore;
     use barnstormer_core::state::SpecPhase;
+    use chrono::Utc;
     use std::collections::BTreeMap;
     use tempfile::TempDir;
 
@@ -232,6 +232,9 @@ mod tests {
 
         let dot = fs::read_to_string(exports_dir.join("pipeline.dot")).unwrap();
         assert!(dot.contains("digraph export_spec"));
-        assert!(dot.contains("Export Card"), "Card title should appear in synthesized prompt");
+        assert!(
+            dot.contains("Export Card"),
+            "Card title should appear in synthesized prompt"
+        );
     }
 }

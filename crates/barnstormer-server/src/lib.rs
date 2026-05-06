@@ -13,6 +13,6 @@ pub mod web;
 
 pub use app_state::{AppState, SharedState};
 pub use auth::AuthLayer;
-pub use config::{ConfigError, BarnstormerConfig};
+pub use config::{BarnstormerConfig, ConfigError};
 pub use providers::ProviderStatus;
 pub use routes::create_router;

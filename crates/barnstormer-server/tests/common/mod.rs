@@ -93,10 +93,7 @@ pub async fn setup_with_spec_in_brainstorming() -> TestCtx {
 
     let spec_id = {
         let actors = state.actors.read().await;
-        *actors
-            .keys()
-            .next()
-            .expect("spec should have been created")
+        *actors.keys().next().expect("spec should have been created")
     };
 
     TestCtx {
@@ -177,7 +174,12 @@ pub async fn setup_with_attachment() -> AttachmentCtx {
         .body(Body::from(body))
         .unwrap();
 
-    let resp = ctx.router.clone().oneshot(req).await.expect("upload request");
+    let resp = ctx
+        .router
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("upload request");
     assert_eq!(
         resp.status(),
         http::StatusCode::OK,

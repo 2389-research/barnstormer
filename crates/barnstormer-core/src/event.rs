@@ -334,29 +334,37 @@ mod tests {
 
     #[test]
     fn is_ephemeral_returns_true_for_streaming_events() {
-        assert!(EventPayload::StreamingDelta {
-            agent_id: String::new(),
-            text: String::new(),
-        }
-        .is_ephemeral());
-        assert!(EventPayload::StreamingToolActivity {
-            agent_id: String::new(),
-            activity: String::new(),
-        }
-        .is_ephemeral());
+        assert!(
+            EventPayload::StreamingDelta {
+                agent_id: String::new(),
+                text: String::new(),
+            }
+            .is_ephemeral()
+        );
+        assert!(
+            EventPayload::StreamingToolActivity {
+                agent_id: String::new(),
+                activity: String::new(),
+            }
+            .is_ephemeral()
+        );
     }
 
     #[test]
     fn is_ephemeral_returns_false_for_durable_events() {
-        assert!(!EventPayload::SpecCreated {
-            title: String::new(),
-            one_liner: String::new(),
-            goal: String::new(),
-        }
-        .is_ephemeral());
-        assert!(!EventPayload::TranscriptAppended {
-            message: TranscriptMessage::new("x".into(), "y".into()),
-        }
-        .is_ephemeral());
+        assert!(
+            !EventPayload::SpecCreated {
+                title: String::new(),
+                one_liner: String::new(),
+                goal: String::new(),
+            }
+            .is_ephemeral()
+        );
+        assert!(
+            !EventPayload::TranscriptAppended {
+                message: TranscriptMessage::new("x".into(), "y".into()),
+            }
+            .is_ephemeral()
+        );
     }
 }

@@ -50,7 +50,11 @@ pub fn export_spec(state: &SpecState) -> String {
         ("Requirements", None, Some("task")),
         ("Implementation Plan", None, Some("plan")),
         ("Design Decisions", None, Some("decision")),
-        ("Constraints", core.constraints.as_deref(), Some("constraint")),
+        (
+            "Constraints",
+            core.constraints.as_deref(),
+            Some("constraint"),
+        ),
         ("Assumptions", None, Some("assumption")),
         ("Risks & Mitigations", core.risks.as_deref(), Some("risk")),
         ("Open Questions", None, Some("open_question")),

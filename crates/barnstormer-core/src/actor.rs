@@ -687,7 +687,9 @@ mod tests {
             .await
             .unwrap();
         handle
-            .send_command(Command::RemoveContext { attachment_id: att_id })
+            .send_command(Command::RemoveContext {
+                attachment_id: att_id,
+            })
             .await
             .unwrap();
 
@@ -1498,7 +1500,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_id, 0, "ephemeral events should get event_id 0");
+        assert_eq!(
+            events[0].event_id, 0,
+            "ephemeral events should get event_id 0"
+        );
 
         // Send a durable event — should get event_id 3 (no gap from ephemeral)
         let events = handle
@@ -1507,7 +1512,10 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(events[0].event_id, 3, "durable event ID should not be affected by ephemeral events");
+        assert_eq!(
+            events[0].event_id, 3,
+            "durable event ID should not be affected by ephemeral events"
+        );
     }
 
     #[tokio::test]

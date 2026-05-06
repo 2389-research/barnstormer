@@ -435,10 +435,7 @@ mod tests {
     fn extract_json_rejects_garbage() {
         let result = extract_json("this is not json at all");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("failed to parse"));
+        assert!(result.unwrap_err().to_string().contains("failed to parse"));
     }
 
     // -- ImportResult serde round-trip --

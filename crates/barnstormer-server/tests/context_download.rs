@@ -88,10 +88,7 @@ async fn get_raw_forces_text_plain_even_when_uploaded_mime_is_html() {
     // Look up the new attachment id from state.
     let attachment_id = {
         let actors = ctx.state.actors.read().await;
-        let handle = actors
-            .get(&ctx.spec_id)
-            .expect("actor present")
-            .clone();
+        let handle = actors.get(&ctx.spec_id).expect("actor present").clone();
         drop(actors);
         let s = handle.read_state().await;
         s.context_attachments

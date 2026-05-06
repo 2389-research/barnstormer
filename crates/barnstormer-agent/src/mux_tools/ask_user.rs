@@ -65,9 +65,11 @@ impl Tool for AskUserBooleanTool {
         let default = params.get("default").and_then(|v| v.as_bool());
 
         // Atomically check-and-set to avoid TOCTOU race between agents.
-        if self.question_pending.compare_exchange(
-            false, true, Ordering::SeqCst, Ordering::SeqCst,
-        ).is_err() {
+        if self
+            .question_pending
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
             return Ok(ToolResult::text("Question already pending, skipping"));
         }
 
@@ -77,7 +79,8 @@ impl Tool for AskUserBooleanTool {
             default,
         };
 
-        if let Err(e) = self.actor
+        if let Err(e) = self
+            .actor
             .send_command(Command::AskQuestion { question })
             .await
         {
@@ -159,9 +162,11 @@ impl Tool for AskUserMultipleChoiceTool {
             .unwrap_or(false);
 
         // Atomically check-and-set to avoid TOCTOU race between agents.
-        if self.question_pending.compare_exchange(
-            false, true, Ordering::SeqCst, Ordering::SeqCst,
-        ).is_err() {
+        if self
+            .question_pending
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
             return Ok(ToolResult::text("Question already pending, skipping"));
         }
 
@@ -172,7 +177,8 @@ impl Tool for AskUserMultipleChoiceTool {
             allow_multi,
         };
 
-        if let Err(e) = self.actor
+        if let Err(e) = self
+            .actor
             .send_command(Command::AskQuestion { question })
             .await
         {
@@ -249,9 +255,11 @@ impl Tool for AskUserFreeformTool {
             .map(String::from);
 
         // Atomically check-and-set to avoid TOCTOU race between agents.
-        if self.question_pending.compare_exchange(
-            false, true, Ordering::SeqCst, Ordering::SeqCst,
-        ).is_err() {
+        if self
+            .question_pending
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
             return Ok(ToolResult::text("Question already pending, skipping"));
         }
 
@@ -262,7 +270,8 @@ impl Tool for AskUserFreeformTool {
             validation_hint,
         };
 
-        if let Err(e) = self.actor
+        if let Err(e) = self
+            .actor
             .send_command(Command::AskQuestion { question })
             .await
         {
@@ -532,10 +541,7 @@ mod tests {
             agent_id: "test".to_string(),
         };
 
-        let result = tool
-            .execute(json!({ "question": "What?" }))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({ "question": "What?" })).await.unwrap();
         assert_eq!(result.content, "Question already pending, skipping");
     }
 }

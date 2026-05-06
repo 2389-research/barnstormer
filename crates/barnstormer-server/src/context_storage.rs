@@ -8,18 +8,32 @@ use ulid::Ulid;
 pub fn sanitize_filename(raw: &str) -> String {
     // Strip any directory components, then replace control chars and known
     // path-dangerous chars with '_'. Empty result becomes "file".
-    let base = Path::new(raw).file_name()
+    let base = Path::new(raw)
+        .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("file");
     let cleaned: String = base
         .chars()
-        .map(|c| if c.is_control() || matches!(c, '/' | '\\' | '\0') { '_' } else { c })
+        .map(|c| {
+            if c.is_control() || matches!(c, '/' | '\\' | '\0') {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
-    if cleaned.trim().is_empty() { "file".to_string() } else { cleaned }
+    if cleaned.trim().is_empty() {
+        "file".to_string()
+    } else {
+        cleaned
+    }
 }
 
 pub fn attachment_dir(home: &Path, spec_id: Ulid, attachment_id: Ulid) -> PathBuf {
-    home.join("specs").join(spec_id.to_string()).join("context").join(attachment_id.to_string())
+    home.join("specs")
+        .join(spec_id.to_string())
+        .join("context")
+        .join(attachment_id.to_string())
 }
 
 pub fn attachment_path(home: &Path, spec_id: Ulid, attachment_id: Ulid, filename: &str) -> PathBuf {

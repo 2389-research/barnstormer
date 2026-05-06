@@ -278,8 +278,8 @@ pub fn contexts_from_snapshot_map(map: &HashMap<String, serde_json::Value>) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
     use barnstormer_core::event::{Event, EventPayload};
+    use chrono::Utc;
 
     #[test]
     fn agent_context_creation() {
@@ -531,11 +531,19 @@ mod tests {
     fn describe_event_payload_non_ascii_content() {
         // Verify describe_event_payload doesn't panic on multi-byte content.
         // Build a message with 60 emoji characters to exceed the 50-char truncation limit.
-        let emoji_content: String = (0..60).map(|i| {
-            // Cycle through a few multi-byte emoji codepoints
-            let codepoints = ['\u{1F600}', '\u{1F525}', '\u{2728}', '\u{1F680}', '\u{1F4A5}'];
-            codepoints[i % codepoints.len()]
-        }).collect();
+        let emoji_content: String = (0..60)
+            .map(|i| {
+                // Cycle through a few multi-byte emoji codepoints
+                let codepoints = [
+                    '\u{1F600}',
+                    '\u{1F525}',
+                    '\u{2728}',
+                    '\u{1F680}',
+                    '\u{1F4A5}',
+                ];
+                codepoints[i % codepoints.len()]
+            })
+            .collect();
         let message = barnstormer_core::transcript::TranscriptMessage::new(
             "agent-1".to_string(),
             emoji_content,

@@ -63,10 +63,7 @@ fn multipart_body_with_files(
 
     body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
 
-    (
-        format!("multipart/form-data; boundary={boundary}"),
-        body,
-    )
+    (format!("multipart/form-data; boundary={boundary}"), body)
 }
 
 #[tokio::test]
@@ -115,7 +112,11 @@ async fn create_spec_with_binary_file_returns_415_and_creates_no_spec() {
 
     let (ct, body) = multipart_body_with_files(
         "Build a thing",
-        &[("payload.bin", "application/octet-stream", &[0xff, 0xfe, 0x00, 0x01])],
+        &[(
+            "payload.bin",
+            "application/octet-stream",
+            &[0xff, 0xfe, 0x00, 0x01],
+        )],
     );
 
     let resp = app
@@ -209,10 +210,7 @@ async fn create_spec_with_no_files_works_as_before() {
     let handle = actors.get(&spec_id).expect("actor present");
     let spec_state = handle.read_state().await;
 
-    assert!(
-        spec_state.core.is_some(),
-        "spec core should be created"
-    );
+    assert!(spec_state.core.is_some(), "spec core should be created");
     assert_eq!(
         spec_state.context_attachments.len(),
         0,

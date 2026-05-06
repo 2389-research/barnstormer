@@ -281,10 +281,7 @@ mod tests {
             .unwrap();
 
         // Second proposal should work
-        let result = tool
-            .execute(json!({"summary": "second"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"summary": "second"})).await.unwrap();
         assert!(result.content.contains("Transition proposal sent"));
         let q2 = *pending_transition.lock().unwrap();
         assert!(q2.is_some());

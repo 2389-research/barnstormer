@@ -304,7 +304,10 @@ mod tests {
         }"#;
         let cmd: Command = serde_json::from_str(json).expect("parse");
         match cmd {
-            Command::CreateCard { source_attachment_id, .. } => {
+            Command::CreateCard {
+                source_attachment_id,
+                ..
+            } => {
                 assert!(source_attachment_id.is_none());
             }
             _ => panic!("wrong variant"),
@@ -325,7 +328,10 @@ mod tests {
         let json = serde_json::to_string(&cmd).unwrap();
         let back: Command = serde_json::from_str(&json).unwrap();
         match back {
-            Command::CreateCard { source_attachment_id, .. } => {
+            Command::CreateCard {
+                source_attachment_id,
+                ..
+            } => {
                 assert_eq!(source_attachment_id, Some(att_id));
             }
             _ => panic!("wrong variant"),

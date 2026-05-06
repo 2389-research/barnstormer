@@ -375,7 +375,10 @@ mod tests {
         let state = SpecState::new();
         assert!(state.core.is_none());
         let result = export_yaml(&state);
-        assert!(result.is_err(), "export_yaml should return Err when core is None");
+        assert!(
+            result.is_err(),
+            "export_yaml should return Err when core is None"
+        );
     }
 
     #[test]
