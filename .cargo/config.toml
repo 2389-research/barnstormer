@@ -1,0 +1,10 @@
+# Use the system git CLI for fetching git dependencies. This lets cargo
+# transparently use the developer's existing auth (ssh-agent, credential
+# manager, GitHub CLI, etc.) and respects any `[url ... insteadOf]` rewrites
+# in their ~/.gitconfig — both common on dev machines that prefer SSH over
+# HTTPS for GitHub. Without this, libgit2 attempts ssh-agent on its own and
+# fails on machines configured for SSH (`failed to authenticate when
+# downloading repository`). CI runners (GitHub Actions) work fine with the
+# default, so this is purely a developer-experience fix.
+[net]
+git-fetch-with-cli = true

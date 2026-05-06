@@ -35,7 +35,7 @@ http = "1"
 pulldown-cmark = "0.12"
 reqwest = { version = "0.12", features = ["json"] }
 anyhow = "1"
-mux = { path = "../mux-rs" }
+mux = { git = "https://github.com/2389-research/mux-rs.git", tag = "v0.13.0" }
 
 barnstormer-core = { path = "crates/barnstormer-core" }
 barnstormer-store = { path = "crates/barnstormer-store" }
