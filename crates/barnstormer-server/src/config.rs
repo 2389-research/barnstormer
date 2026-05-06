@@ -149,6 +149,11 @@ mod tests {
         assert!(config.home.to_string_lossy().contains(".barnstormer"));
     }
 
+    // `expand_tilde` reads the `HOME` env var, which is only reliably set on
+    // Unix. On Windows the equivalent is `USERPROFILE`, so this test is
+    // gated to Unix targets to keep CI green there. The non-tilde branches
+    // are platform-independent and covered separately below.
+    #[cfg(unix)]
     #[test]
     fn expand_tilde_expands_home() {
         let home = std::env::var("HOME").unwrap();
@@ -157,6 +162,10 @@ mod tests {
             PathBuf::from(&home).join(".barnstormer")
         );
         assert_eq!(expand_tilde("~"), PathBuf::from(&home));
+    }
+
+    #[test]
+    fn expand_tilde_passes_through_non_tilde_paths() {
         assert_eq!(
             expand_tilde("/absolute/path"),
             PathBuf::from("/absolute/path")
