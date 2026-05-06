@@ -1160,6 +1160,8 @@ mod tests {
     fn long_prompts_are_truncated() {
         let mut state = make_state_with_core();
 
+        // 50 cards × ~47 chars/title ≫ MAX_PROMPT_LEN (500), so any prompt
+        // built from the full task list is guaranteed to need truncation.
         for i in 0..50 {
             let card = make_card(
                 "task",
@@ -1178,10 +1180,30 @@ mod tests {
             .find(|l| l.contains("implement [shape=box"))
             .expect("implement node not found");
 
+        // Pull just the prompt argument out of the line so we don't count
+        // the surrounding DOT attributes.
+        let prompt_start = implement_line
+            .find("prompt=\"")
+            .expect("implement line should carry a prompt= attribute")
+            + "prompt=\"".len();
+        let prompt_end = implement_line[prompt_start..]
+            .find("\", goal_gate=")
+            .expect("implement line should close the prompt before goal_gate")
+            + prompt_start;
+        let prompt_body = &implement_line[prompt_start..prompt_end];
+
+        // `state.cards` is a HashMap, so iteration order is non-deterministic.
+        // Asserting "task #49 must be missing" therefore depends on which task
+        // happens to land past the truncation cutoff this run — flaky on every
+        // platform, just less likely to bite Linux/Mac (it bit Windows in CI).
+        // Assert the truncation invariant directly: the prompt body must be
+        // bounded by MAX_PROMPT_LEN regardless of which tasks made it in.
         assert!(
-            !implement_line.contains("Number 49"),
-            "Expected truncated prompt, but found last task in:\n{}",
-            implement_line
+            prompt_body.chars().count() <= MAX_PROMPT_LEN,
+            "expected truncated prompt to be at most {} chars, got {} chars in:\n{}",
+            MAX_PROMPT_LEN,
+            prompt_body.chars().count(),
+            prompt_body
         );
     }
 
