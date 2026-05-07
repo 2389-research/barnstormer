@@ -2969,16 +2969,16 @@ pub async fn resummarize_context(
     }
 }
 
-/// GET /web/specs/{id}/context/{att_id}/raw - Stream the raw text content of
-/// a context attachment. Only live (non-removed) attachments are served; both
+/// GET /web/specs/{id}/context/{att_id}/raw - Stream the raw bytes of a
+/// context attachment. Only live (non-removed) attachments are served; both
 /// "unknown" and "soft-removed" cases return 404 so callers can't distinguish
 /// them.
 ///
-/// Security: the stored `mime_type` came from the multipart upload and is
-/// untrusted. We always serve the bytes as `text/plain; charset=utf-8` and
-/// add `X-Content-Type-Options: nosniff` so a `text/html` or `image/svg+xml`
-/// upload can't turn this same-origin endpoint into a stored-XSS sink.
-/// (Uploads are UTF-8 verified in `is_utf8_text` before they reach disk.)
+/// Security: the stored `mime_type` came from server-side magic-byte sniffing
+/// in the upload pipeline (see `context_storage::sniff_mime`) and was checked
+/// against a whitelist before it ever landed in state, so it's trustworthy as
+/// the `Content-Type`. We still send `X-Content-Type-Options: nosniff` as
+/// defense-in-depth so the browser doesn't override the declared type.
 pub async fn download_context(
     State(state): State<SharedState>,
     Path((id, att_id)): Path<(String, String)>,
@@ -3016,18 +3016,18 @@ pub async fn download_context(
         attachment_id,
         &att.filename,
     );
-    match crate::context_storage::read_text(&path) {
-        Ok(text) => (
-            [
-                (
-                    axum::http::header::CONTENT_TYPE,
-                    "text/plain; charset=utf-8",
-                ),
-                (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            ],
-            text,
-        )
-            .into_response(),
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            let mime = att.mime_type.clone();
+            (
+                [
+                    (axum::http::header::CONTENT_TYPE, mime.as_str()),
+                    (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
         Err(_) => (StatusCode::NOT_FOUND, "file not found on disk").into_response(),
     }
 }

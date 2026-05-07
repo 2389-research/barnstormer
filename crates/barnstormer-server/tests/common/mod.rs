@@ -253,6 +253,59 @@ pub async fn setup_with_attachment() -> AttachmentCtx {
     }
 }
 
+/// Build an `AttachmentCtx` from arbitrary bytes + claimed mime + filename,
+/// uploaded through the real HTTP endpoint. Generalization of
+/// `setup_with_attachment` for callers that need a non-text fixture (image,
+/// PDF, audio, video) so they can exercise download / preview behavior.
+///
+/// `file_content` on the returned ctx is empty since binary bytes aren't
+/// guaranteed to be UTF-8; callers should not rely on it.
+pub async fn setup_with_attachment_bytes(
+    filename: &str,
+    claimed_mime: &str,
+    bytes: &[u8],
+) -> AttachmentCtx {
+    let ctx = setup_with_spec_in_brainstorming().await;
+
+    let resp = upload_file(
+        ctx.router.clone(),
+        ctx.spec_id,
+        filename,
+        claimed_mime,
+        bytes,
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        http::StatusCode::OK,
+        "upload in setup_with_attachment_bytes must succeed"
+    );
+
+    let handle = {
+        let actors = ctx.state.actors.read().await;
+        actors.get(&ctx.spec_id).expect("actor present").clone()
+    };
+    let attachment_id = {
+        let spec_state = handle.read_state().await;
+        assert_eq!(
+            spec_state.context_attachments.len(),
+            1,
+            "setup_with_attachment_bytes expected exactly one attachment"
+        );
+        spec_state.context_attachments[0].attachment_id
+    };
+
+    AttachmentCtx {
+        router: create_router(Arc::clone(&ctx.state), None),
+        state: ctx.state,
+        spec_id: ctx.spec_id,
+        attachment_id,
+        filename: filename.to_string(),
+        file_content: "",
+        _tmp: ctx._tmp,
+    }
+}
+
 /// Snapshot the test-only `SUMMARIZE_SPAWN_COUNT` atomic. Lets event-driven
 /// tests (notes-update fan-out, manual Resummarize) assert that a summarize
 /// task was actually spawned without standing up a real LLM client.
