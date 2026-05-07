@@ -212,17 +212,34 @@ pub async fn create_spec(
 
     // 2. Validate files upfront so we fail before creating the spec. Better
     // UX than writing a spec then bouncing on file #3. Per-file size was
-    // already enforced while streaming the multipart field, so here we only
-    // need to verify the bytes are UTF-8 text.
-    for (filename, _, bytes) in &files {
-        if !crate::context_storage::is_utf8_text(bytes) {
+    // already enforced while streaming the multipart field, so here we
+    // sniff each file's bytes against the Phase 2 whitelist (images, PDFs,
+    // audio, video, SVG, plus UTF-8 text). Browser-claimed Content-Type is
+    // ignored — server-sniffed mime wins, same as `upload_context`.
+    let mut validated: Vec<(String, String, Vec<u8>)> = Vec::with_capacity(files.len());
+    for (filename, _claimed_mime, bytes) in files {
+        let detected = match crate::context_storage::sniff_mime(&bytes, &filename) {
+            Some(m) => m,
+            None => {
+                return (
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    format!(
+                        "'{filename}' couldn't be identified — uploads must be a recognized image, document, audio, video, or UTF-8 text file"
+                    ),
+                )
+                    .into_response();
+            }
+        };
+        if !crate::context_storage::is_whitelisted_mime(&detected) {
             return (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                format!("'{filename}' is binary — text files only for now"),
+                format!("'{filename}' has unsupported file type '{detected}'"),
             )
                 .into_response();
         }
+        validated.push((filename, detected, bytes));
     }
+    let files = validated;
 
     // 3. Create the spec.
     let spec_id = Ulid::new();
@@ -315,7 +332,11 @@ pub async fn create_spec(
     // `ContextSummarized` before the persister is listening, leaving the
     // summary in memory but absent from `events.jsonl` (so it disappears
     // after restart).
-    let mut summarize_jobs: Vec<(Ulid, String, String)> = Vec::new();
+    // Track attachments to summarize. We dispatch after the persister
+    // subscribes (a few lines below); the input is built from disk via
+    // `build_summarizer_input` so per-kind dispatch (text / media / SVG)
+    // matches `upload_context`.
+    let mut summarize_jobs: Vec<(Ulid, String)> = Vec::new();
     for (filename, mime, bytes) in files {
         let attachment_id = Ulid::new();
         let filename = crate::context_storage::sanitize_filename(&filename);
@@ -328,6 +349,28 @@ pub async fn create_spec(
         if let Err(e) = crate::context_storage::write_bytes(&path, &bytes) {
             tracing::error!("failed to write context file {filename}: {e}");
             continue;
+        }
+        // SVG branch: rasterize and cache `rasterized.png` next to the original.
+        // Failure degrades to markup-only summarization; original SVG is intact.
+        if mime == "image/svg+xml"
+            && let Ok(markup) = std::str::from_utf8(&bytes)
+        {
+            match crate::svg_raster::rasterize_svg(markup) {
+                Ok(png) => {
+                    let raster_path = crate::context_storage::attachment_dir(
+                        &state.barnstormer_home,
+                        spec_id,
+                        attachment_id,
+                    )
+                    .join("rasterized.png");
+                    if let Err(e) = crate::context_storage::write_bytes(&raster_path, &png) {
+                        tracing::warn!("failed to cache rasterized SVG: {e}");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("SVG rasterization failed for {filename}: {e}");
+                }
+            }
         }
         let size_bytes = bytes.len() as u64;
         let cmd = Command::AttachContext {
@@ -355,8 +398,7 @@ pub async fn create_spec(
                 tracing::error!("failed to persist attach event: {}", e);
             }
         }
-        let content = String::from_utf8(bytes).expect("utf-8 verified above");
-        summarize_jobs.push((attachment_id, filename, content));
+        summarize_jobs.push((attachment_id, filename));
     }
 
     // Subscribe the event persister BEFORE inserting the actor, starting
@@ -371,17 +413,39 @@ pub async fn create_spec(
         .insert(spec_id, persister_handle);
 
     // Now safe to dispatch the summarizer jobs queued above. Their
-    // `ContextSummarized` events will reach the persister. Notes are not yet
-    // available at spec-create time — they're populated later via PATCH and
-    // will trigger a re-summarize from that path.
-    for (attachment_id, filename, content) in summarize_jobs {
-        crate::summarizer::spawn_summarize(
-            handle.clone(),
-            attachment_id,
-            filename,
-            None,
-            crate::summarizer::SummarizerInput::Text { content },
-        );
+    // `ContextSummarized` (or `ContextSummarizeFailed`) events will reach the
+    // persister. Notes are not yet available at spec-create time — they're
+    // populated later via PATCH and will trigger a re-summarize from that
+    // path. Per-kind dispatch goes through `build_summarizer_input` so the
+    // shape (text / media / svg dual) lines up with `upload_context`.
+    for (attachment_id, filename) in summarize_jobs {
+        let attachment = handle
+            .read_state()
+            .await
+            .context_attachments
+            .iter()
+            .find(|a| a.attachment_id == attachment_id)
+            .cloned();
+        if let Some(att) = attachment {
+            match crate::context_storage::build_summarizer_input(
+                &state.barnstormer_home,
+                spec_id,
+                &att,
+            ) {
+                Ok(input) => {
+                    crate::summarizer::spawn_summarize(
+                        handle.clone(),
+                        attachment_id,
+                        filename,
+                        None,
+                        input,
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("could not build summarizer input for {attachment_id}: {e}");
+                }
+            }
+        }
     }
 
     state.actors.write().await.insert(spec_id, handle);
