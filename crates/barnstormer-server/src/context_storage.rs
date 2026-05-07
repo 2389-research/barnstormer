@@ -90,6 +90,30 @@ pub fn is_whitelisted_mime(mime: &str) -> bool {
     WHITELIST_MIME.iter().any(|w| *w == normalized) || normalized.starts_with("text/")
 }
 
+/// Map a mime type to the mux `MediaKind` variant the LLM client expects,
+/// or `None` for text and unknown formats. Used by the summarizer dispatch
+/// to decide whether to send a media block.
+pub fn media_kind_from_mime(mime: &str) -> Option<mux::llm::MediaKind> {
+    use mux::llm::MediaKind;
+    let normalized = mime
+        .split(';')
+        .next()
+        .unwrap_or(mime)
+        .trim()
+        .to_ascii_lowercase();
+    if normalized.starts_with("image/") {
+        Some(MediaKind::Image)
+    } else if normalized == "application/pdf" {
+        Some(MediaKind::Document)
+    } else if normalized.starts_with("audio/") {
+        Some(MediaKind::Audio)
+    } else if normalized.starts_with("video/") {
+        Some(MediaKind::Video)
+    } else {
+        None
+    }
+}
+
 pub fn sniff_mime(bytes: &[u8], filename: &str) -> Option<String> {
     // SVG carve-out must run before infer::get, because infer recognizes the
     // `<?xml ...` prolog as generic `text/xml` and would shadow the SVG signal.
@@ -260,6 +284,49 @@ mod tests {
                 "fixture {name} sniffed as {mime} but whitelist rejected it"
             );
         }
+    }
+
+    #[test]
+    fn media_kind_for_image_mimes() {
+        use mux::llm::MediaKind;
+        assert_eq!(media_kind_from_mime("image/png"), Some(MediaKind::Image));
+        assert_eq!(media_kind_from_mime("image/heic"), Some(MediaKind::Image));
+        assert_eq!(media_kind_from_mime("image/svg+xml"), Some(MediaKind::Image));
+    }
+
+    #[test]
+    fn media_kind_for_pdf() {
+        use mux::llm::MediaKind;
+        assert_eq!(media_kind_from_mime("application/pdf"), Some(MediaKind::Document));
+    }
+
+    #[test]
+    fn media_kind_for_audio_mimes() {
+        use mux::llm::MediaKind;
+        assert_eq!(media_kind_from_mime("audio/mpeg"), Some(MediaKind::Audio));
+        assert_eq!(media_kind_from_mime("audio/mp4"), Some(MediaKind::Audio));
+        assert_eq!(media_kind_from_mime("audio/x-aiff"), Some(MediaKind::Audio));
+        assert_eq!(media_kind_from_mime("audio/x-flac"), Some(MediaKind::Audio));
+    }
+
+    #[test]
+    fn media_kind_for_video_mimes() {
+        use mux::llm::MediaKind;
+        assert_eq!(media_kind_from_mime("video/mp4"), Some(MediaKind::Video));
+        assert_eq!(media_kind_from_mime("video/x-m4v"), Some(MediaKind::Video));
+    }
+
+    #[test]
+    fn media_kind_returns_none_for_text() {
+        assert_eq!(media_kind_from_mime("text/plain"), None);
+        assert_eq!(media_kind_from_mime("text/markdown"), None);
+    }
+
+    #[test]
+    fn media_kind_normalizes_input() {
+        use mux::llm::MediaKind;
+        // Strips parameters and lowercases — same convention as is_whitelisted_mime.
+        assert_eq!(media_kind_from_mime("IMAGE/PNG; charset=utf-8"), Some(MediaKind::Image));
     }
 
     #[test]
