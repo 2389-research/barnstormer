@@ -30,6 +30,10 @@ tokio-stream.workspace = true
 futures.workspace = true
 http.workspace = true
 pulldown-cmark.workspace = true
+infer.workspace = true
+resvg.workspace = true
+usvg.workspace = true
+tiny-skia.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
