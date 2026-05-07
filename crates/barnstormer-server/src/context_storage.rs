@@ -146,6 +146,45 @@ pub fn sniff_mime(bytes: &[u8], filename: &str) -> Option<String> {
     None
 }
 
+/// Build a [`crate::summarizer::SummarizerInput`] from disk for the given
+/// attachment, branching on its stored mime type. Used by upload, notes-update,
+/// and manual resummarize flows so disk→input dispatch lives in one place.
+///
+/// - `image/svg+xml` → `Svg { markup, raster_path }` (raster_path Some if the
+///   sibling `rasterized.png` exists; None means raster cache is missing and
+///   the summarizer will degrade to markup-only)
+/// - Other media (image/audio/video/PDF) → `Media { kind, mime, path }` with
+///   `MediaSource::Path` so mux reads the file at request time
+/// - Anything else (text/*, application/json, etc.) → `Text { content }` with
+///   the file read as UTF-8
+pub fn build_summarizer_input(
+    home: &Path,
+    spec_id: Ulid,
+    attachment: &barnstormer_core::state::ContextAttachment,
+) -> anyhow::Result<crate::summarizer::SummarizerInput> {
+    let dir = attachment_dir(home, spec_id, attachment.attachment_id);
+    let path = dir.join(&attachment.filename);
+    // Normalize mime: strip parameters (e.g. "; charset=utf-8"), trim, lowercase.
+    // Same convention as is_whitelisted_mime / media_kind_from_mime.
+    let raw = attachment.mime_type.to_ascii_lowercase();
+    let mime = raw.split(';').next().unwrap_or(&raw).trim().to_string();
+
+    if mime == "image/svg+xml" {
+        let markup = std::fs::read_to_string(&path)?;
+        let raster = dir.join("rasterized.png");
+        let raster_path = if raster.exists() { Some(raster) } else { None };
+        return Ok(crate::summarizer::SummarizerInput::Svg {
+            markup,
+            raster_path,
+        });
+    }
+    if let Some(kind) = media_kind_from_mime(&mime) {
+        return Ok(crate::summarizer::SummarizerInput::Media { kind, mime, path });
+    }
+    let content = std::fs::read_to_string(&path)?;
+    Ok(crate::summarizer::SummarizerInput::Text { content })
+}
+
 pub fn write_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -341,5 +380,155 @@ mod tests {
             is_whitelisted_mime(&mime),
             "FLAC sniffed as {mime} but whitelist rejected it"
         );
+    }
+
+    #[test]
+    fn build_input_for_text_attachment() {
+        use crate::summarizer::SummarizerInput;
+        use barnstormer_core::state::ContextAttachment;
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let spec_id = ulid::Ulid::new();
+        let att_id = ulid::Ulid::new();
+        let path = attachment_path(home, spec_id, att_id, "x.md");
+        write_bytes(&path, b"hi").unwrap();
+        let att = ContextAttachment {
+            attachment_id: att_id,
+            filename: "x.md".into(),
+            mime_type: "text/markdown".into(),
+            size_bytes: 2,
+            summary: None,
+            user_notes: None,
+            added_at: chrono::Utc::now(),
+            removed: false,
+            summary_error: None,
+        };
+        let input = build_summarizer_input(home, spec_id, &att).unwrap();
+        match input {
+            SummarizerInput::Text { content } => assert_eq!(content, "hi"),
+            other => panic!("expected Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_input_for_image_attachment_uses_path() {
+        use crate::summarizer::SummarizerInput;
+        use barnstormer_core::state::ContextAttachment;
+        use mux::llm::MediaKind;
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let spec_id = ulid::Ulid::new();
+        let att_id = ulid::Ulid::new();
+        let path = attachment_path(home, spec_id, att_id, "x.png");
+        write_bytes(&path, &[0x89, 0x50, 0x4E, 0x47]).unwrap();
+        let att = ContextAttachment {
+            attachment_id: att_id,
+            filename: "x.png".into(),
+            mime_type: "image/png".into(),
+            size_bytes: 4,
+            summary: None,
+            user_notes: None,
+            added_at: chrono::Utc::now(),
+            removed: false,
+            summary_error: None,
+        };
+        let input = build_summarizer_input(home, spec_id, &att).unwrap();
+        match input {
+            SummarizerInput::Media { kind, .. } => assert_eq!(kind, MediaKind::Image),
+            other => panic!("expected Media, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_input_for_svg_uses_dual_form_when_raster_present() {
+        use crate::summarizer::SummarizerInput;
+        use barnstormer_core::state::ContextAttachment;
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let spec_id = ulid::Ulid::new();
+        let att_id = ulid::Ulid::new();
+        let dir = attachment_dir(home, spec_id, att_id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("x.svg"), b"<svg></svg>").unwrap();
+        std::fs::write(dir.join("rasterized.png"), [0x89, 0x50, 0x4E, 0x47]).unwrap();
+        let att = ContextAttachment {
+            attachment_id: att_id,
+            filename: "x.svg".into(),
+            mime_type: "image/svg+xml".into(),
+            size_bytes: 11,
+            summary: None,
+            user_notes: None,
+            added_at: chrono::Utc::now(),
+            removed: false,
+            summary_error: None,
+        };
+        let input = build_summarizer_input(home, spec_id, &att).unwrap();
+        match input {
+            SummarizerInput::Svg {
+                raster_path: Some(_),
+                ..
+            } => {}
+            other => panic!("expected Svg with raster, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_input_for_svg_falls_back_when_raster_missing() {
+        use crate::summarizer::SummarizerInput;
+        use barnstormer_core::state::ContextAttachment;
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let spec_id = ulid::Ulid::new();
+        let att_id = ulid::Ulid::new();
+        let dir = attachment_dir(home, spec_id, att_id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("x.svg"), b"<svg></svg>").unwrap();
+        let att = ContextAttachment {
+            attachment_id: att_id,
+            filename: "x.svg".into(),
+            mime_type: "image/svg+xml".into(),
+            size_bytes: 11,
+            summary: None,
+            user_notes: None,
+            added_at: chrono::Utc::now(),
+            removed: false,
+            summary_error: None,
+        };
+        let input = build_summarizer_input(home, spec_id, &att).unwrap();
+        match input {
+            SummarizerInput::Svg {
+                raster_path: None, ..
+            } => {}
+            other => panic!("expected Svg without raster, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_input_for_audio_attachment() {
+        use crate::summarizer::SummarizerInput;
+        use barnstormer_core::state::ContextAttachment;
+        use mux::llm::MediaKind;
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let spec_id = ulid::Ulid::new();
+        let att_id = ulid::Ulid::new();
+        let path = attachment_path(home, spec_id, att_id, "x.mp3");
+        write_bytes(&path, &[0x49, 0x44, 0x33]).unwrap();
+        let att = ContextAttachment {
+            attachment_id: att_id,
+            filename: "x.mp3".into(),
+            mime_type: "audio/mpeg".into(),
+            size_bytes: 3,
+            summary: None,
+            user_notes: None,
+            added_at: chrono::Utc::now(),
+            removed: false,
+            summary_error: None,
+        };
+        let input = build_summarizer_input(home, spec_id, &att).unwrap();
+        match input {
+            SummarizerInput::Media { kind, .. } => assert_eq!(kind, MediaKind::Audio),
+            other => panic!("expected Media (Audio), got {other:?}"),
+        }
     }
 }
