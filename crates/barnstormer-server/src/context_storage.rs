@@ -63,6 +63,7 @@ const WHITELIST_MIME: &[&str] = &[
     "audio/x-aiff",
     "audio/aiff",
     "audio/flac",
+    "audio/x-flac",
     // Video
     "video/mp4",
     "video/x-m4v",
@@ -240,5 +241,35 @@ mod tests {
         assert!(!is_whitelisted_mime("application/x-msdownload"));
         assert!(!is_whitelisted_mime("application/zip"));
         assert!(!is_whitelisted_mime("application/octet-stream"));
+    }
+
+    #[test]
+    fn sniffed_fixtures_pass_whitelist() {
+        // Catches the class of bug where infer emits one mime spelling but the
+        // whitelist only contains another (e.g. audio/x-flac vs audio/flac).
+        let cases: &[(&[u8], &str)] = &[
+            (include_bytes!("../tests/fixtures/tiny.png"), "tiny.png"),
+            (include_bytes!("../tests/fixtures/tiny.pdf"), "tiny.pdf"),
+            (include_bytes!("../tests/fixtures/tiny.wav"), "tiny.wav"),
+            (include_bytes!("../tests/fixtures/tiny.mp4"), "tiny.mp4"),
+        ];
+        for (bytes, name) in cases {
+            let mime = sniff_mime(bytes, name).expect(name);
+            assert!(
+                is_whitelisted_mime(&mime),
+                "fixture {name} sniffed as {mime} but whitelist rejected it"
+            );
+        }
+    }
+
+    #[test]
+    fn flac_magic_bytes_pass_whitelist() {
+        // FLAC magic: "fLaC" + minimal stream info block
+        let bytes = b"fLaC\x80\x00\x00\x22\x10\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0a\xc4\x42\xf0\x00\x00\x00\x00";
+        let mime = sniff_mime(bytes, "x.flac").expect("infer should detect FLAC");
+        assert!(
+            is_whitelisted_mime(&mime),
+            "FLAC sniffed as {mime} but whitelist rejected it"
+        );
     }
 }
