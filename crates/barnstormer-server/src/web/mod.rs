@@ -2816,12 +2816,46 @@ pub async fn update_context_notes(
     };
     drop(actors);
 
+    let notes_for_summarizer = form.notes.clone();
     let cmd = Command::UpdateContextNotes {
         attachment_id,
         notes: form.notes,
     };
     match handle.send_command(cmd).await {
-        Ok(_) => render_context_panel_for(&state, spec_id).await,
+        Ok(_) => {
+            // Re-fire summarizer with the new notes. Latest-wins concurrency:
+            // if multiple PATCHes land in quick succession, each spawns its
+            // own task and whichever Command::SummarizeContext arrives last
+            // is the summary that sticks.
+            let attachment = handle
+                .read_state()
+                .await
+                .context_attachments
+                .iter()
+                .find(|a| a.attachment_id == attachment_id && !a.removed)
+                .cloned();
+            if let Some(att) = attachment {
+                match crate::context_storage::build_summarizer_input(
+                    &state.barnstormer_home,
+                    spec_id,
+                    &att,
+                ) {
+                    Ok(input) => {
+                        crate::summarizer::spawn_summarize(
+                            handle.clone(),
+                            attachment_id,
+                            att.filename.clone(),
+                            Some(notes_for_summarizer),
+                            input,
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!("could not build summarizer input on notes update: {e}")
+                    }
+                }
+            }
+            render_context_panel_for(&state, spec_id).await
+        }
         Err(ActorError::AttachmentNotFound(_)) => {
             (StatusCode::NOT_FOUND, "attachment not found").into_response()
         }

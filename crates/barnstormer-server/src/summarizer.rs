@@ -274,7 +274,12 @@ pub async fn summarize_now(
 /// called. Lets integration tests assert that an event-driven path (e.g.
 /// notes-update fan-out, manual Resummarize endpoint) actually fires the
 /// summarizer without needing to mock the LLM.
-#[cfg(test)]
+///
+/// Always-on (not `#[cfg(test)]`) so external integration tests under
+/// `crates/barnstormer-server/tests/` can read it — `cfg(test)` items aren't
+/// visible to integration tests, which compile against the library as a
+/// regular dependency. The cost in production is one relaxed atomic increment
+/// per upload/notes-update, well below noise.
 pub static SUMMARIZE_SPAWN_COUNT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
@@ -298,7 +303,6 @@ pub fn spawn_summarize(
     notes: Option<String>,
     input: SummarizerInput,
 ) {
-    #[cfg(test)]
     SUMMARIZE_SPAWN_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     tokio::spawn(async move {

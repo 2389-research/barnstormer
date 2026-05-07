@@ -84,3 +84,32 @@ async fn patch_notes_unknown_attachment_returns_404() {
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn updating_notes_triggers_resummarize() {
+    // Upload happens inside `setup_with_attachment`, which itself fires one
+    // `spawn_summarize`. The PATCH afterward should fire another, so we expect
+    // the spawn counter to have advanced.
+    let ctx = common::setup_with_attachment().await;
+
+    // Settle the upload's summarize spawn (synchronous increment, but the
+    // spawned task is async — sleep just lets any racing spawn flush).
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let count_before = common::summarize_spawn_count();
+
+    let resp = common::patch_notes(
+        ctx.router.clone(),
+        ctx.spec_id,
+        ctx.attachment_id,
+        "the vibes we want",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let count_after = common::summarize_spawn_count();
+    assert!(
+        count_after > count_before,
+        "PATCH notes should fire a fresh summarize; count was {count_before} before, {count_after} after",
+    );
+}

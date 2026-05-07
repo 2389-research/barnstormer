@@ -252,3 +252,52 @@ pub async fn setup_with_attachment() -> AttachmentCtx {
         _tmp: ctx._tmp,
     }
 }
+
+/// Snapshot the test-only `SUMMARIZE_SPAWN_COUNT` atomic. Lets event-driven
+/// tests (notes-update fan-out, manual Resummarize) assert that a summarize
+/// task was actually spawned without standing up a real LLM client.
+pub fn summarize_spawn_count() -> usize {
+    barnstormer_server::summarizer::SUMMARIZE_SPAWN_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// PATCH the notes endpoint with a url-encoded form body. Mirrors how the
+/// browser submits the auto-save blur from the context panel — the handler
+/// expects `Form<NotesForm>` (i.e. `application/x-www-form-urlencoded`).
+///
+/// The `notes` value is percent-encoded for the body so spaces, `&`, and `=`
+/// round-trip through the form decoder unchanged.
+pub async fn patch_notes(
+    router: Router,
+    spec_id: Ulid,
+    attachment_id: Ulid,
+    notes: &str,
+) -> http::Response<Body> {
+    let body = format!("notes={}", percent_encode_form_value(notes));
+    let req = Request::builder()
+        .method("PATCH")
+        .uri(format!(
+            "/web/specs/{spec_id}/context/{attachment_id}/notes"
+        ))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    router.oneshot(req).await.expect("patch notes request")
+}
+
+/// Minimal `application/x-www-form-urlencoded` value encoder — enough for the
+/// integration test surface. Spaces become `+`; everything outside the
+/// unreserved set becomes a `%HH` triple. Reaching for the `url` crate just
+/// for this would inflate dev-dependencies.
+fn percent_encode_form_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            b' ' => out.push('+'),
+            other => out.push_str(&format!("%{:02X}", other)),
+        }
+    }
+    out
+}
