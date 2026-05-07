@@ -131,6 +131,44 @@ pub async fn setup_with_spec_in_active() -> TestCtx {
     }
 }
 
+/// Upload a file via the real `POST /web/specs/{id}/context` endpoint using
+/// a synthesized multipart body. The browser-claimed `content_type` is what
+/// the multipart `Content-Type` header for the `file` part says — the server
+/// is expected to sniff and ignore it. Returns the raw `Response` so callers
+/// can inspect status and body.
+pub async fn upload_file(
+    router: Router,
+    spec_id: Ulid,
+    filename: &str,
+    claimed_mime: &str,
+    bytes: &[u8],
+) -> http::Response<Body> {
+    let boundary = "----BarnstormerUploadHelper";
+    let mut body: Vec<u8> = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\n\
+             Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n\
+             Content-Type: {claimed_mime}\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/web/specs/{spec_id}/context"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+
+    router.oneshot(req).await.expect("upload request")
+}
+
 /// Context returned from `setup_with_attachment`. Includes everything from
 /// `TestCtx` plus the attachment id, the expected filename on disk, and the
 /// exact bytes the upload endpoint received.

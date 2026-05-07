@@ -2601,8 +2601,9 @@ fn html_escape(s: &str) -> String {
 /// Accepts `multipart/form-data` with a single `file` part. Writes the file
 /// to disk under the spec's context directory and emits a `ContextAttached`
 /// event via `Command::AttachContext`. Gated to `SpecPhase::Brainstorming`;
-/// outside that phase returns 409 CONFLICT. Binary (non-UTF-8) content is
-/// rejected with 415, and uploads over 20MB are rejected with 413.
+/// outside that phase returns 409 CONFLICT. The MIME type is server-sniffed
+/// from the bytes (browser-claimed Content-Type is ignored); unrecognized
+/// or non-whitelisted types return 415. Uploads over 20MB return 413.
 pub async fn upload_context(
     State(state): State<SharedState>,
     Path(id): Path<String>,
@@ -2636,13 +2637,13 @@ pub async fn upload_context(
     // buffer up to the configured global body cap before we reject it.
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut filename: Option<String> = None;
-    let mut mime: Option<String> = None;
     loop {
         match multipart.next_field().await {
             Ok(Some(mut field)) => {
                 if field.name() == Some("file") {
                     filename = field.file_name().map(str::to_string);
-                    mime = field.content_type().map(str::to_string);
+                    // Browser-claimed content type is intentionally ignored;
+                    // the server sniffs the bytes below.
                     let bytes = match read_field_capped(&mut field).await {
                         Ok(Some(b)) => b,
                         Ok(None) => {
@@ -2669,16 +2670,31 @@ pub async fn upload_context(
         return (StatusCode::BAD_REQUEST, "missing file part").into_response();
     };
 
-    if !crate::context_storage::is_utf8_text(&bytes) {
+    // Sniff MIME from bytes. Browser-supplied content-type is not trusted —
+    // a client can claim anything, but we serve, summarize, and gate on what
+    // the bytes actually are.
+    let detected_mime = match crate::context_storage::sniff_mime(
+        &bytes,
+        filename.as_deref().unwrap_or("file"),
+    ) {
+        Some(m) => m,
+        None => {
+            return (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "couldn't identify file type — uploads must be a recognized image, document, audio, video, or UTF-8 text file",
+            )
+                .into_response();
+        }
+    };
+    if !crate::context_storage::is_whitelisted_mime(&detected_mime) {
         return (
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "binary files not yet supported — text files only for now",
+            format!("file type '{detected_mime}' is not supported"),
         )
             .into_response();
     }
 
     let filename = crate::context_storage::sanitize_filename(filename.as_deref().unwrap_or("file"));
-    let mime = mime.unwrap_or_else(|| "text/plain".to_string());
     let attachment_id = Ulid::new();
 
     let path = crate::context_storage::attachment_path(
@@ -2692,11 +2708,35 @@ pub async fn upload_context(
         return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
     }
 
+    // SVG-specific: rasterize and cache alongside the original. Failure
+    // degrades to markup-only summarization; the original SVG is still on
+    // disk and the upload still lands.
+    if detected_mime == "image/svg+xml"
+        && let Ok(markup) = std::str::from_utf8(&bytes)
+    {
+        match crate::svg_raster::rasterize_svg(markup) {
+            Ok(png) => {
+                let raster_path = crate::context_storage::attachment_dir(
+                    &state.barnstormer_home,
+                    spec_id,
+                    attachment_id,
+                )
+                .join("rasterized.png");
+                if let Err(e) = crate::context_storage::write_bytes(&raster_path, &png) {
+                    tracing::warn!("failed to cache rasterized SVG: {e}");
+                }
+            }
+            Err(e) => {
+                tracing::warn!("SVG rasterization failed for {filename}: {e}");
+            }
+        }
+    }
+
     let size_bytes = bytes.len() as u64;
     let cmd = Command::AttachContext {
         attachment_id,
         filename: filename.clone(),
-        mime_type: mime,
+        mime_type: detected_mime.clone(),
         size_bytes,
     };
     if let Err(e) = handle.send_command(cmd).await {
@@ -2713,15 +2753,33 @@ pub async fn upload_context(
             .into_response();
     }
 
-    // Spawn summarizer — fire-and-forget. Summary will land via SSE when done.
-    let content = String::from_utf8(bytes).expect("utf-8 verified above");
-    crate::summarizer::spawn_summarize(
-        handle.clone(),
-        attachment_id,
-        filename.clone(),
-        None,
-        crate::summarizer::SummarizerInput::Text { content },
-    );
+    // Build per-kind SummarizerInput from disk and dispatch — fire-and-forget.
+    // Summary will land via SSE when done. Notes aren't available at upload
+    // time; they're populated later via PATCH.
+    let attachment_opt = handle
+        .read_state()
+        .await
+        .context_attachments
+        .iter()
+        .find(|a| a.attachment_id == attachment_id)
+        .cloned();
+    if let Some(att) = attachment_opt {
+        match crate::context_storage::build_summarizer_input(&state.barnstormer_home, spec_id, &att)
+        {
+            Ok(input) => {
+                crate::summarizer::spawn_summarize(
+                    handle.clone(),
+                    attachment_id,
+                    filename.clone(),
+                    None,
+                    input,
+                );
+            }
+            Err(e) => {
+                tracing::warn!("could not build summarizer input for {attachment_id}: {e}");
+            }
+        }
+    }
 
     // Return the re-rendered panel partial so HTMX can swap it in place.
     render_context_panel_for(&state, spec_id).await

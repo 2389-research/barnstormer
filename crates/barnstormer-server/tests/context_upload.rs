@@ -96,6 +96,238 @@ async fn upload_binary_file_returns_415() {
 }
 
 #[tokio::test]
+async fn upload_png_succeeds_and_records_image_mime() {
+    let ctx = common::setup_with_spec_in_brainstorming().await;
+    let bytes = include_bytes!("fixtures/tiny.png");
+    let resp = common::upload_file(
+        ctx.router.clone(),
+        ctx.spec_id,
+        "tiny.png",
+        "application/octet-stream",
+        bytes,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let actors = ctx.state.actors.read().await;
+    let handle = actors.get(&ctx.spec_id).unwrap();
+    let spec_state = handle.read_state().await;
+    let att = spec_state
+        .context_attachments
+        .iter()
+        .find(|a| a.filename == "tiny.png")
+        .expect("png attachment present");
+    assert_eq!(att.mime_type, "image/png");
+}
+
+#[tokio::test]
+async fn upload_pdf_succeeds() {
+    let ctx = common::setup_with_spec_in_brainstorming().await;
+    let bytes = include_bytes!("fixtures/tiny.pdf");
+    let resp = common::upload_file(
+        ctx.router.clone(),
+        ctx.spec_id,
+        "tiny.pdf",
+        "application/octet-stream",
+        bytes,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let actors = ctx.state.actors.read().await;
+    let handle = actors.get(&ctx.spec_id).unwrap();
+    let spec_state = handle.read_state().await;
+    assert!(
+        spec_state
+            .context_attachments
+            .iter()
+            .any(|a| a.mime_type == "application/pdf"),
+        "expected an application/pdf attachment to be recorded"
+    );
+}
+
+#[tokio::test]
+async fn upload_audio_succeeds() {
+    let ctx = common::setup_with_spec_in_brainstorming().await;
+    let bytes = include_bytes!("fixtures/tiny.wav");
+    let resp = common::upload_file(
+        ctx.router.clone(),
+        ctx.spec_id,
+        "tiny.wav",
+        "application/octet-stream",
+        bytes,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let actors = ctx.state.actors.read().await;
+    let handle = actors.get(&ctx.spec_id).unwrap();
+    let spec_state = handle.read_state().await;
+    let att = spec_state
+        .context_attachments
+        .iter()
+        .find(|a| a.filename == "tiny.wav")
+        .expect("wav attachment present");
+    assert!(
+        att.mime_type.starts_with("audio/"),
+        "expected audio/* mime, got {}",
+        att.mime_type
+    );
+}
+
+#[tokio::test]
+async fn upload_video_succeeds() {
+    let ctx = common::setup_with_spec_in_brainstorming().await;
+    let bytes = include_bytes!("fixtures/tiny.mp4");
+    let resp = common::upload_file(
+        ctx.router.clone(),
+        ctx.spec_id,
+        "tiny.mp4",
+        "application/octet-stream",
+        bytes,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let actors = ctx.state.actors.read().await;
+    let handle = actors.get(&ctx.spec_id).unwrap();
+    let spec_state = handle.read_state().await;
+    let att = spec_state
+        .context_attachments
+        .iter()
+        .find(|a| a.filename == "tiny.mp4")
+        .expect("mp4 attachment present");
+    assert!(
+        att.mime_type.starts_with("video/"),
+        "expected video/* mime, got {}",
+        att.mime_type
+    );
+}
+
+#[tokio::test]
+async fn upload_svg_writes_rasterized_png() {
+    let ctx = common::setup_with_spec_in_brainstorming().await;
+    let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 16 16\"><rect width=\"16\" height=\"16\" fill=\"red\"/></svg>";
+    let resp = common::upload_file(
+        ctx.router.clone(),
+        ctx.spec_id,
+        "logo.svg",
+        "image/svg+xml",
+        svg,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let (attachment_id, mime) = {
+        let actors = ctx.state.actors.read().await;
+        let handle = actors.get(&ctx.spec_id).unwrap();
+        let spec_state = handle.read_state().await;
+        let att = spec_state
+            .context_attachments
+            .iter()
+            .find(|a| a.filename == "logo.svg")
+            .expect("svg attachment present");
+        (att.attachment_id, att.mime_type.clone())
+    };
+    assert_eq!(mime, "image/svg+xml");
+
+    let raster_path = ctx
+        .state
+        .barnstormer_home
+        .join("specs")
+        .join(ctx.spec_id.to_string())
+        .join("context")
+        .join(attachment_id.to_string())
+        .join("rasterized.png");
+    assert!(
+        raster_path.exists(),
+        "rasterized PNG should be cached on disk at {}",
+        raster_path.display()
+    );
+}
+
+#[tokio::test]
+async fn upload_executable_returns_415() {
+    let ctx = common::setup_with_spec_in_brainstorming().await;
+    // PE/DOS magic — `infer` recognizes this as application/vnd.microsoft.portable-executable.
+    let bytes: &[u8] =
+        b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xff\xff\x00\x00\xb8\x00\x00\x00";
+    let resp = common::upload_file(
+        ctx.router.clone(),
+        ctx.spec_id,
+        "evil.exe",
+        "application/octet-stream",
+        bytes,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+    let actors = ctx.state.actors.read().await;
+    let handle = actors.get(&ctx.spec_id).unwrap();
+    let spec_state = handle.read_state().await;
+    assert_eq!(
+        spec_state.context_attachments.len(),
+        0,
+        "no state mutation on executable reject"
+    );
+}
+
+#[tokio::test]
+async fn upload_zip_returns_415() {
+    let ctx = common::setup_with_spec_in_brainstorming().await;
+    // ZIP magic with a minimal local file header tail.
+    let bytes: &[u8] = b"PK\x03\x04\x14\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+    let resp = common::upload_file(
+        ctx.router.clone(),
+        ctx.spec_id,
+        "archive.zip",
+        "application/zip",
+        bytes,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+    let actors = ctx.state.actors.read().await;
+    let handle = actors.get(&ctx.spec_id).unwrap();
+    let spec_state = handle.read_state().await;
+    assert_eq!(
+        spec_state.context_attachments.len(),
+        0,
+        "no state mutation on zip reject"
+    );
+}
+
+#[tokio::test]
+async fn upload_browser_lies_about_content_type() {
+    // Browser claims image/png; payload is actually a PDF. Server must sniff
+    // the bytes and store application/pdf, not the claimed mime.
+    let ctx = common::setup_with_spec_in_brainstorming().await;
+    let bytes = include_bytes!("fixtures/tiny.pdf");
+    let resp = common::upload_file(
+        ctx.router.clone(),
+        ctx.spec_id,
+        "sneaky.png",
+        "image/png",
+        bytes,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let actors = ctx.state.actors.read().await;
+    let handle = actors.get(&ctx.spec_id).unwrap();
+    let spec_state = handle.read_state().await;
+    let att = spec_state
+        .context_attachments
+        .iter()
+        .find(|a| a.filename == "sneaky.png")
+        .expect("attachment present");
+    assert_eq!(
+        att.mime_type, "application/pdf",
+        "server should ignore browser-claimed mime and store the sniffed one"
+    );
+}
+
+#[tokio::test]
 async fn upload_outside_brainstorming_returns_409() {
     let ctx = common::setup_with_spec_in_active().await;
     let boundary = "----BarnstormerTest";
