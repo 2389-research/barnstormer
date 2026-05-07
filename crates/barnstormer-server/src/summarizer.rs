@@ -42,6 +42,26 @@ pub enum SummarizerInput {
     },
 }
 
+impl SummarizerInput {
+    /// Returns the MediaKind for non-text inputs; None for Text.
+    /// SVG counts as Image when raster is present (the rasterized PNG carries
+    /// the visual content). SVG without raster degrades to markup-only and
+    /// returns None — text path, no capability gate needed.
+    pub fn media_kind(&self) -> Option<mux::llm::MediaKind> {
+        match self {
+            SummarizerInput::Text { .. } => None,
+            SummarizerInput::Media { kind, .. } => Some(*kind),
+            SummarizerInput::Svg {
+                raster_path: Some(_),
+                ..
+            } => Some(mux::llm::MediaKind::Image),
+            SummarizerInput::Svg {
+                raster_path: None, ..
+            } => None,
+        }
+    }
+}
+
 /// Max bytes of attachment content to feed into the summarizer LLM call.
 /// Uploads themselves are capped at 20MB (see `web::create_spec` /
 /// `upload_context`), but feeding a 20MB file to the model would blow past
@@ -209,6 +229,46 @@ fn format_text_envelope(
         ));
     }
     s
+}
+
+/// Awaitable LLM call that produces a summary or question-answer text.
+///
+/// - Reads the configured provider via `BARNSTORMER_DEFAULT_PROVIDER` env
+///   (default `anthropic`), same as the rest of the agent stack.
+/// - Capability-gates media inputs via `client.supports_media(kind)`. Returns
+///   `Err` with a provider-named reason if the configured provider can't
+///   handle the kind — caller can convert to `MarkContextSummarizeFailed` or
+///   surface to the agent as a tool error.
+/// - Bails on empty/whitespace-only output.
+///
+/// Used by `spawn_summarize` (with `question = None`) and by the
+/// `retrieve_context(id, question)` tool.
+pub async fn summarize_now(
+    filename: &str,
+    notes: Option<&str>,
+    input: &SummarizerInput,
+    question: Option<&str>,
+) -> anyhow::Result<String> {
+    let provider =
+        std::env::var("BARNSTORMER_DEFAULT_PROVIDER").unwrap_or_else(|_| "anthropic".into());
+    let (client, model) = barnstormer_agent::client::create_llm_client(&provider, None)?;
+
+    if let Some(kind) = input.media_kind()
+        && !client.supports_media(kind)
+    {
+        anyhow::bail!(
+            "current provider ({provider}) doesn't support {kind} content — \
+             switch providers and click Resummarize"
+        );
+    }
+
+    let req = build_summarize_request(filename, notes, input, question, &model);
+    let resp = client.create_message(&req).await?;
+    let text = resp.text();
+    if text.trim().is_empty() {
+        anyhow::bail!("empty summary from LLM");
+    }
+    Ok(text)
 }
 
 /// Fire-and-forget summarization of an uploaded context file.
@@ -492,6 +552,68 @@ mod tests {
             !text.contains("</user_notes><inj>"),
             "notes brackets must be escaped"
         );
+    }
+
+    #[test]
+    fn summarizer_input_text_has_no_media_kind() {
+        let i = SummarizerInput::Text {
+            content: "x".into(),
+        };
+        assert!(i.media_kind().is_none());
+    }
+
+    #[test]
+    fn summarizer_input_image_has_image_kind() {
+        use mux::llm::MediaKind;
+        let i = SummarizerInput::Media {
+            kind: MediaKind::Image,
+            mime: "image/png".into(),
+            path: std::path::PathBuf::from("/tmp/x"),
+        };
+        assert_eq!(i.media_kind(), Some(MediaKind::Image));
+    }
+
+    #[test]
+    fn summarizer_input_svg_with_raster_has_image_kind() {
+        use mux::llm::MediaKind;
+        let i = SummarizerInput::Svg {
+            markup: "<svg/>".into(),
+            raster_path: Some(std::path::PathBuf::from("/tmp/x.png")),
+        };
+        assert_eq!(i.media_kind(), Some(MediaKind::Image));
+    }
+
+    #[test]
+    fn summarizer_input_svg_without_raster_has_no_media_kind() {
+        let i = SummarizerInput::Svg {
+            markup: "<svg/>".into(),
+            raster_path: None,
+        };
+        assert!(i.media_kind().is_none());
+    }
+
+    #[test]
+    fn summarizer_input_audio_has_audio_kind() {
+        use mux::llm::MediaKind;
+        let i = SummarizerInput::Media {
+            kind: MediaKind::Audio,
+            mime: "audio/mpeg".into(),
+            path: std::path::PathBuf::from("/tmp/x.mp3"),
+        };
+        assert_eq!(i.media_kind(), Some(MediaKind::Audio));
+    }
+
+    #[test]
+    fn summarize_now_signature_compiles() {
+        // Compile-only smoke — actually awaiting requires an LLM client.
+        fn _check<'a>(
+            filename: &'a str,
+            notes: Option<&'a str>,
+            input: &'a SummarizerInput,
+            question: Option<&'a str>,
+        ) -> impl std::future::Future<Output = anyhow::Result<String>> + 'a {
+            summarize_now(filename, notes, input, question)
+        }
     }
 
     #[test]
