@@ -9,6 +9,7 @@ pub mod context_storage;
 pub mod providers;
 pub mod routes;
 pub mod summarizer;
+pub mod svg_raster;
 pub mod web;
 
 pub use app_state::{AppState, SharedState};
