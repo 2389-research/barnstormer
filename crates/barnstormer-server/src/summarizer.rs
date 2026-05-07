@@ -2,7 +2,6 @@
 // ABOUTME: then emits SummarizeContext when the summary comes back.
 
 use barnstormer_core::{Command, SpecActorHandle};
-use mux::llm::{Message, Request};
 use std::path::PathBuf;
 use ulid::Ulid;
 
@@ -271,65 +270,67 @@ pub async fn summarize_now(
     Ok(text)
 }
 
-/// Fire-and-forget summarization of an uploaded context file.
+/// Test-only counter incremented synchronously each time `spawn_summarize` is
+/// called. Lets integration tests assert that an event-driven path (e.g.
+/// notes-update fan-out, manual Resummarize endpoint) actually fires the
+/// summarizer without needing to mock the LLM.
+#[cfg(test)]
+pub static SUMMARIZE_SPAWN_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Fire-and-forget summarization of an uploaded context attachment.
 ///
-/// Spawns a tokio task that calls the configured LLM with the file contents,
-/// then sends `Command::SummarizeContext` back to the actor on success. On any
-/// failure (LLM error, empty summary, actor send failure) we log a warning
-/// and drop the task — the attachment remains available without a summary.
+/// Spawns a tokio task that runs `summarize_now` against the configured
+/// provider for the supplied `SummarizerInput` and routes the outcome back to
+/// the actor:
+///
+/// - **Ok(summary)** → `Command::SummarizeContext { attachment_id, summary }`.
+/// - **Err(e)** → `Command::MarkContextSummarizeFailed { attachment_id,
+///   reason }` so the failure is durable and surfaceable in the UI rather
+///   than silently dropped.
+///
+/// Send failures on the actor channel itself are still only logged — at that
+/// point the actor is gone and there's nowhere to record the outcome.
 pub fn spawn_summarize(
     actor: SpecActorHandle,
     attachment_id: Ulid,
     filename: String,
-    content: String,
+    notes: Option<String>,
+    input: SummarizerInput,
 ) {
+    #[cfg(test)]
+    SUMMARIZE_SPAWN_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
     tokio::spawn(async move {
-        if let Err(e) = summarize_and_record(actor, attachment_id, filename, content).await {
-            tracing::warn!("summarization failed: {e}");
+        match summarize_now(&filename, notes.as_deref(), &input, None).await {
+            Ok(summary) => {
+                if let Err(e) = actor
+                    .send_command(Command::SummarizeContext {
+                        attachment_id,
+                        summary,
+                    })
+                    .await
+                {
+                    tracing::warn!("failed to record summary for {attachment_id}: {e}");
+                }
+            }
+            Err(e) => {
+                let reason = e.to_string();
+                tracing::warn!("summarization failed for {attachment_id}: {reason}");
+                if let Err(send_err) = actor
+                    .send_command(Command::MarkContextSummarizeFailed {
+                        attachment_id,
+                        reason,
+                    })
+                    .await
+                {
+                    tracing::warn!(
+                        "failed to record summarize failure for {attachment_id}: {send_err}"
+                    );
+                }
+            }
         }
     });
-}
-
-async fn summarize_and_record(
-    actor: SpecActorHandle,
-    attachment_id: Ulid,
-    filename: String,
-    content: String,
-) -> anyhow::Result<()> {
-    let provider =
-        std::env::var("BARNSTORMER_DEFAULT_PROVIDER").unwrap_or_else(|_| "anthropic".into());
-    let (client, model) = barnstormer_agent::client::create_llm_client(&provider, None)?;
-
-    let (bounded, truncated) = truncate_for_summary(&content);
-    let truncation_note = if truncated {
-        format!(
-            "\n<note>Content truncated to {} KB for summarization; the original file is {} KB.</note>",
-            MAX_SUMMARY_INPUT_BYTES / 1024,
-            content.len() / 1024,
-        )
-    } else {
-        String::new()
-    };
-
-    let req = Request::new(&model)
-        .system(SUMMARY_SYSTEM_PROMPT)
-        .message(Message::user(format!(
-            "<filename>{filename}</filename>{truncation_note}\n<content>\n{bounded}\n</content>"
-        )))
-        .max_tokens(512);
-
-    let resp = client.create_message(&req).await?;
-    let summary = resp.text();
-    if summary.trim().is_empty() {
-        anyhow::bail!("empty summary from LLM");
-    }
-    actor
-        .send_command(Command::SummarizeContext {
-            attachment_id,
-            summary,
-        })
-        .await?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -632,5 +633,26 @@ mod tests {
             !out.contains("🦀") || out.ends_with("🦀"),
             "output should not split the crab; it should either be excluded or end at it"
         );
+    }
+
+    #[tokio::test]
+    async fn spawn_summarize_increments_test_counter() {
+        // Synchronous increment seam — confirms that calling `spawn_summarize`
+        // bumps SUMMARIZE_SPAWN_COUNT before the spawned task even starts. The
+        // background task itself will fail (no real LLM credentials in unit
+        // tests) and that's fine; the counter is what other tests assert on.
+        let before = SUMMARIZE_SPAWN_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+        let actor = barnstormer_core::actor::spawn(Ulid::new(), barnstormer_core::SpecState::new());
+        spawn_summarize(
+            actor,
+            Ulid::new(),
+            "x.md".into(),
+            None,
+            SummarizerInput::Text {
+                content: "hi".into(),
+            },
+        );
+        let after = SUMMARIZE_SPAWN_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(after - before, 1);
     }
 }

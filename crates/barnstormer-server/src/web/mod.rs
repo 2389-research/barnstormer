@@ -371,9 +371,17 @@ pub async fn create_spec(
         .insert(spec_id, persister_handle);
 
     // Now safe to dispatch the summarizer jobs queued above. Their
-    // `ContextSummarized` events will reach the persister.
+    // `ContextSummarized` events will reach the persister. Notes are not yet
+    // available at spec-create time — they're populated later via PATCH and
+    // will trigger a re-summarize from that path.
     for (attachment_id, filename, content) in summarize_jobs {
-        crate::summarizer::spawn_summarize(handle.clone(), attachment_id, filename, content);
+        crate::summarizer::spawn_summarize(
+            handle.clone(),
+            attachment_id,
+            filename,
+            None,
+            crate::summarizer::SummarizerInput::Text { content },
+        );
     }
 
     state.actors.write().await.insert(spec_id, handle);
@@ -2707,7 +2715,13 @@ pub async fn upload_context(
 
     // Spawn summarizer — fire-and-forget. Summary will land via SSE when done.
     let content = String::from_utf8(bytes).expect("utf-8 verified above");
-    crate::summarizer::spawn_summarize(handle.clone(), attachment_id, filename.clone(), content);
+    crate::summarizer::spawn_summarize(
+        handle.clone(),
+        attachment_id,
+        filename.clone(),
+        None,
+        crate::summarizer::SummarizerInput::Text { content },
+    );
 
     // Return the re-rendered panel partial so HTMX can swap it in place.
     render_context_panel_for(&state, spec_id).await
