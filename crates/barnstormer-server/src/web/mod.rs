@@ -2976,9 +2976,20 @@ pub async fn resummarize_context(
 ///
 /// Security: the stored `mime_type` came from server-side magic-byte sniffing
 /// in the upload pipeline (see `context_storage::sniff_mime`) and was checked
-/// against a whitelist before it ever landed in state, so it's trustworthy as
-/// the `Content-Type`. We still send `X-Content-Type-Options: nosniff` as
-/// defense-in-depth so the browser doesn't override the declared type.
+/// against a whitelist before it ever landed in state, so it's mostly
+/// trustworthy as the `Content-Type`. We still send
+/// `X-Content-Type-Options: nosniff` as defense-in-depth so the browser
+/// doesn't override the declared type.
+///
+/// One narrow exception: stored `text/html` is downgraded to
+/// `text/plain; charset=utf-8` on the wire. HTML is on the upload whitelist
+/// (so users can attach pages they want to reference), but serving it back as
+/// `text/html` would let any `<script>` inside execute in this origin when a
+/// user navigates directly to the `/raw` URL — a stored-XSS foothold. Other
+/// sniffed mimes (`image/*`, `application/pdf`, `audio/*`, `video/*`,
+/// `text/plain`, `text/markdown`) don't execute JS, so they pass through with
+/// their real `Content-Type` so `<img>`, `<audio>`, `<video>`, and PDF
+/// viewers render correctly.
 pub async fn download_context(
     State(state): State<SharedState>,
     Path((id, att_id)): Path<(String, String)>,
@@ -3018,10 +3029,27 @@ pub async fn download_context(
     );
     match std::fs::read(&path) {
         Ok(bytes) => {
-            let mime = att.mime_type.clone();
+            let stored = att.mime_type.clone();
+            let normalized = stored
+                .split(';')
+                .next()
+                .unwrap_or(&stored)
+                .trim()
+                .to_ascii_lowercase();
+            // HTML uploads are stored as bytes but served back as text/plain
+            // to neuter stored-XSS via direct navigation to the /raw URL.
+            // Other types (image/*, application/pdf, audio/*, video/*,
+            // text/plain, text/markdown) don't execute JS so we serve their
+            // real mime so `<img>`, `<audio>`, `<video>`, and PDF viewers
+            // render correctly.
+            let served_mime: String = if normalized == "text/html" {
+                "text/plain; charset=utf-8".to_string()
+            } else {
+                stored
+            };
             (
                 [
-                    (axum::http::header::CONTENT_TYPE, mime.as_str()),
+                    (axum::http::header::CONTENT_TYPE, served_mime.as_str()),
                     (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
                 ],
                 bytes,

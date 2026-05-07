@@ -152,6 +152,52 @@ async fn download_text_still_serves_text_plain() {
 }
 
 #[tokio::test]
+async fn download_html_serves_text_plain_to_neuter_xss() {
+    // HTML uploads are stored as bytes but served back as text/plain to
+    // neuter stored-XSS via direct navigation to /raw. Other types
+    // (image/*, application/pdf, audio/*, video/*) keep their real mime.
+    let ctx = common::setup_with_attachment_bytes(
+        "evil.html",
+        "text/html",
+        b"<script>alert('xss')</script>",
+    )
+    .await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/web/specs/{}/context/{}/raw",
+            ctx.spec_id, ctx.attachment_id
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let ct = resp
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .expect("Content-Type header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        ct.starts_with("text/plain"),
+        "expected text/plain, got {ct}"
+    );
+
+    let nosniff = resp
+        .headers()
+        .get(http::header::X_CONTENT_TYPE_OPTIONS)
+        .expect("X-Content-Type-Options header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(nosniff, "nosniff");
+}
+
+#[tokio::test]
 async fn get_raw_on_removed_attachment_returns_404() {
     let ctx = common::setup_with_attachment().await;
 
