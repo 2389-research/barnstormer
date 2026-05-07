@@ -386,6 +386,7 @@ impl SpecActor {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 };
                 vec![EventPayload::ContextAttached { attachment }]
             }
@@ -407,6 +408,26 @@ impl SpecActor {
                 vec![EventPayload::ContextSummarized {
                     attachment_id,
                     summary,
+                }]
+            }
+
+            Command::MarkContextSummarizeFailed {
+                attachment_id,
+                reason,
+            } => {
+                let Some(att) = state
+                    .context_attachments
+                    .iter()
+                    .find(|a| a.attachment_id == attachment_id)
+                else {
+                    return Err(ActorError::AttachmentNotFound(attachment_id));
+                };
+                if att.removed {
+                    return Err(ActorError::AttachmentAlreadyRemoved(attachment_id));
+                }
+                vec![EventPayload::ContextSummarizeFailed {
+                    attachment_id,
+                    reason,
                 }]
             }
 
@@ -1402,6 +1423,120 @@ mod tests {
             .send_command(Command::SummarizeContext {
                 attachment_id,
                 summary: "late".into(),
+            })
+            .await;
+        assert!(
+            matches!(result, Err(ActorError::AttachmentAlreadyRemoved(id)) if id == attachment_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn actor_processes_mark_context_summarize_failed() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            })
+            .await
+            .unwrap();
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "img.png".into(),
+                mime_type: "image/png".into(),
+                size_bytes: 1,
+            })
+            .await
+            .unwrap();
+
+        let events = handle
+            .send_command(Command::MarkContextSummarizeFailed {
+                attachment_id,
+                reason: "provider does not support image".into(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(events.len(), 1);
+        match &events[0].payload {
+            EventPayload::ContextSummarizeFailed {
+                attachment_id: a,
+                reason,
+            } => {
+                assert_eq!(*a, attachment_id);
+                assert_eq!(reason, "provider does not support image");
+            }
+            _ => panic!("expected ContextSummarizeFailed"),
+        }
+
+        let state = handle.read_state().await;
+        assert_eq!(
+            state.context_attachments[0].summary_error.as_deref(),
+            Some("provider does not support image")
+        );
+    }
+
+    #[tokio::test]
+    async fn actor_rejects_mark_summarize_failed_on_unknown_attachment() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            })
+            .await
+            .unwrap();
+
+        let bad_id = Ulid::new();
+        let result = handle
+            .send_command(Command::MarkContextSummarizeFailed {
+                attachment_id: bad_id,
+                reason: "n/a".into(),
+            })
+            .await;
+
+        assert!(
+            matches!(result, Err(ActorError::AttachmentNotFound(id)) if id == bad_id),
+            "expected AttachmentNotFound, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn actor_rejects_mark_summarize_failed_on_removed_attachment() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            })
+            .await
+            .unwrap();
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "a".into(),
+                mime_type: "text/plain".into(),
+                size_bytes: 1,
+            })
+            .await
+            .unwrap();
+        handle
+            .send_command(Command::RemoveContext { attachment_id })
+            .await
+            .unwrap();
+        let result = handle
+            .send_command(Command::MarkContextSummarizeFailed {
+                attachment_id,
+                reason: "late".into(),
             })
             .await;
         assert!(

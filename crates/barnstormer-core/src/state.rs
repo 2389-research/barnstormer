@@ -33,6 +33,8 @@ pub struct ContextAttachment {
     pub user_notes: Option<String>,
     pub added_at: DateTime<Utc>,
     pub removed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_error: Option<String>,
 }
 
 /// Tracks which lifecycle phase a spec is in.
@@ -340,6 +342,23 @@ impl SpecState {
                 {
                     // no undo for summarization — it's idempotent replacement from the summarizer
                     att.summary = Some(summary.clone());
+                    // success clears any prior failure on the same attachment
+                    att.summary_error = None;
+                }
+            }
+
+            EventPayload::ContextSummarizeFailed {
+                attachment_id,
+                reason,
+            } => {
+                if let Some(att) = self
+                    .context_attachments
+                    .iter_mut()
+                    .find(|a| a.attachment_id == *attachment_id)
+                {
+                    // no undo — matches the no-undo posture of ContextSummarized.
+                    // Summarize-state events are idempotent replacement from the summarizer.
+                    att.summary_error = Some(reason.clone());
                 }
             }
 
@@ -474,6 +493,20 @@ impl SpecState {
                     .find(|a| a.attachment_id == *attachment_id)
                 {
                     att.summary = Some(summary.clone());
+                    // success clears any prior failure on the same attachment
+                    att.summary_error = None;
+                }
+            }
+            EventPayload::ContextSummarizeFailed {
+                attachment_id,
+                reason,
+            } => {
+                if let Some(att) = self
+                    .context_attachments
+                    .iter_mut()
+                    .find(|a| a.attachment_id == *attachment_id)
+                {
+                    att.summary_error = Some(reason.clone());
                 }
             }
             EventPayload::ContextNotesUpdated {
@@ -1149,6 +1182,7 @@ mod tests {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 },
             },
         );
@@ -1174,6 +1208,7 @@ mod tests {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 },
             },
         ));
@@ -1208,6 +1243,7 @@ mod tests {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 },
             },
         ));
@@ -1242,6 +1278,7 @@ mod tests {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 },
             },
         ));
@@ -1270,6 +1307,7 @@ mod tests {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 },
             },
         ));
@@ -1304,6 +1342,7 @@ mod tests {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 },
             },
         ));
@@ -1348,6 +1387,7 @@ mod tests {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 },
             },
         ));
@@ -1364,6 +1404,136 @@ mod tests {
             state.undo_stack.len(),
             undo_len_after_attach,
             "summarization should not push an undo entry"
+        );
+    }
+
+    #[test]
+    fn context_attachment_serializes_summary_error() {
+        let att = ContextAttachment {
+            attachment_id: Ulid::new(),
+            filename: "x.png".into(),
+            mime_type: "image/png".into(),
+            size_bytes: 0,
+            summary: None,
+            user_notes: None,
+            added_at: chrono::Utc::now(),
+            removed: false,
+            summary_error: Some("provider doesn't support image".into()),
+        };
+        let json = serde_json::to_string(&att).unwrap();
+        assert!(json.contains("summary_error"));
+        let round: ContextAttachment = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            round.summary_error.as_deref(),
+            Some("provider doesn't support image")
+        );
+    }
+
+    #[test]
+    fn context_attachment_summary_error_defaults_to_none_when_absent() {
+        // Backwards-compat: events from before this field existed deserialize cleanly.
+        let json = r#"{
+            "attachment_id":"01H8XGJWBWBAQ4WKDYR4MX5J7T",
+            "filename":"x.txt","mime_type":"text/plain","size_bytes":0,
+            "summary":null,"user_notes":null,
+            "added_at":"2026-05-07T00:00:00Z","removed":false
+        }"#;
+        let att: ContextAttachment = serde_json::from_str(json).unwrap();
+        assert!(att.summary_error.is_none());
+    }
+
+    #[test]
+    fn mark_context_summarize_failed_sets_summary_error() {
+        let mut state = SpecState::new();
+        let attachment_id = Ulid::new();
+        state.apply(&make_event(
+            1,
+            make_spec_id(),
+            EventPayload::ContextAttached {
+                attachment: ContextAttachment {
+                    attachment_id,
+                    filename: "a".into(),
+                    mime_type: "image/png".into(),
+                    size_bytes: 1,
+                    summary: None,
+                    user_notes: None,
+                    added_at: Utc::now(),
+                    removed: false,
+                    summary_error: None,
+                },
+            },
+        ));
+        let undo_len_after_attach = state.undo_stack.len();
+        state.apply(&make_event(
+            2,
+            make_spec_id(),
+            EventPayload::ContextSummarizeFailed {
+                attachment_id,
+                reason: "provider does not support image".into(),
+            },
+        ));
+        assert_eq!(
+            state.context_attachments[0].summary_error.as_deref(),
+            Some("provider does not support image")
+        );
+        assert!(state.context_attachments[0].summary.is_none());
+        assert_eq!(
+            state.undo_stack.len(),
+            undo_len_after_attach,
+            "summarize-failed should not push an undo entry"
+        );
+    }
+
+    #[test]
+    fn context_summarized_clears_prior_summary_error() {
+        let mut state = SpecState::new();
+        let attachment_id = Ulid::new();
+        state.apply(&make_event(
+            1,
+            make_spec_id(),
+            EventPayload::ContextAttached {
+                attachment: ContextAttachment {
+                    attachment_id,
+                    filename: "a".into(),
+                    mime_type: "text/plain".into(),
+                    size_bytes: 1,
+                    summary: None,
+                    user_notes: None,
+                    added_at: Utc::now(),
+                    removed: false,
+                    summary_error: None,
+                },
+            },
+        ));
+        // First a failure lands
+        state.apply(&make_event(
+            2,
+            make_spec_id(),
+            EventPayload::ContextSummarizeFailed {
+                attachment_id,
+                reason: "transient LLM error".into(),
+            },
+        ));
+        assert_eq!(
+            state.context_attachments[0].summary_error.as_deref(),
+            Some("transient LLM error")
+        );
+        // Then a successful summary lands and should clear the prior error
+        state.apply(&make_event(
+            3,
+            make_spec_id(),
+            EventPayload::ContextSummarized {
+                attachment_id,
+                summary: "brief".into(),
+            },
+        ));
+        assert_eq!(
+            state.context_attachments[0].summary.as_deref(),
+            Some("brief")
+        );
+        assert!(
+            state.context_attachments[0].summary_error.is_none(),
+            "successful summary must clear prior summary_error"
         );
     }
 
@@ -1385,6 +1555,7 @@ mod tests {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 },
             },
         ));

@@ -1,5 +1,5 @@
-// ABOUTME: retrieve_context mux tool — lets agents fetch the full text of a
-// ABOUTME: context attachment by ID when a summary isn't enough.
+// ABOUTME: retrieve_context mux tool — fetches the full text of a context
+// ABOUTME: attachment, or asks a focused question about it via the summarizer.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,6 +15,7 @@ use barnstormer_core::actor::SpecActorHandle;
 pub struct RetrieveContextTool {
     pub(crate) actor: Arc<SpecActorHandle>,
     pub(crate) home: PathBuf,
+    pub(crate) summarizer: Arc<dyn crate::AttachmentSummarizer>,
 }
 
 #[async_trait]
@@ -24,8 +25,10 @@ impl Tool for RetrieveContextTool {
     }
 
     fn description(&self) -> &str {
-        "Retrieve the full text of a context file attachment by ID. Use this when \
-         the summary isn't enough and you need to see the actual content."
+        "Retrieve content from a context file attachment, or ask a focused question about it. \
+         For text files, returns the full content (or a question-targeted answer). For images, \
+         PDFs, audio, and video, returns the stored summary (or a fresh summary answering your \
+         question)."
     }
 
     fn schema(&self) -> serde_json::Value {
@@ -35,6 +38,10 @@ impl Tool for RetrieveContextTool {
                 "attachment_id": {
                     "type": "string",
                     "description": "The ULID of the attachment to retrieve"
+                },
+                "question": {
+                    "type": "string",
+                    "description": "Optional. When provided, dispatches a fresh summarizer call with this question against the attachment. Use when you need a targeted answer the existing summary doesn't cover (e.g. 'what color palette is this?', 'what does this voice memo say about the deadline?', 'what's in section 3 of this PDF?')."
                 }
             },
             "required": ["attachment_id"]
@@ -49,28 +56,83 @@ impl Tool for RetrieveContextTool {
         let attachment_id: Ulid = id_str
             .parse()
             .map_err(|e| anyhow::anyhow!("bad attachment id: {e}"))?;
+        // Strict typing: a tool caller passing `question: 42` (number) or
+        // `question: ""` (empty) was almost certainly a mistake — surface as
+        // an error rather than silently dropping into the no-question path.
+        // `question: null` and an absent key both stay as None (text path).
+        let question = match params.get("question") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(q)) if !q.trim().is_empty() => Some(q.clone()),
+            Some(serde_json::Value::String(_)) => {
+                return Err(anyhow::anyhow!("'question' must not be empty"));
+            }
+            Some(_) => return Err(anyhow::anyhow!("'question' must be a string")),
+        };
 
         let state = self.actor.read_state().await;
-        let att = state
+        let att_opt = state
             .context_attachments
             .iter()
             .find(|a| a.attachment_id == attachment_id && !a.removed)
-            .ok_or_else(|| anyhow::anyhow!("attachment not found"))?;
-        let filename = att.filename.clone();
-        let spec_id = self.actor.spec_id;
+            .cloned();
         drop(state);
+        let att = att_opt.ok_or_else(|| anyhow::anyhow!("attachment not found"))?;
 
-        let path = self
-            .home
-            .join("specs")
-            .join(spec_id.to_string())
-            .join("context")
-            .join(attachment_id.to_string())
-            .join(&filename);
-        let text = tokio::fs::read_to_string(&path)
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to read attachment file: {e}"))?;
-        Ok(ToolResult::text(text))
+        // Normalize mime: strip parameters (e.g. "; charset=utf-8"), trim,
+        // lowercase. Same convention as build_summarizer_input.
+        let mime = att
+            .mime_type
+            .split(';')
+            .next()
+            .unwrap_or(&att.mime_type)
+            .trim()
+            .to_ascii_lowercase();
+        let is_text_kind = mime.starts_with("text/")
+            || mime == "application/json"
+            || mime == "application/yaml"
+            || mime == "text/x-yaml";
+
+        let spec_id = self.actor.spec_id;
+
+        match question {
+            None if is_text_kind => {
+                // Existing behavior: read text from disk.
+                let path = self
+                    .home
+                    .join("specs")
+                    .join(spec_id.to_string())
+                    .join("context")
+                    .join(attachment_id.to_string())
+                    .join(&att.filename);
+                let text = tokio::fs::read_to_string(&path)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("failed to read attachment file: {e}"))?;
+                Ok(ToolResult::text(text))
+            }
+            None => {
+                // Media without question: prefer the stored summary, fall through to
+                // the recorded error, otherwise emit a pending hint. summary wins over
+                // summary_error because the reducer doesn't clear summary on a later
+                // ContextSummarizeFailed — a stale-but-valid summary is more useful to
+                // the agent than a stale failure.
+                if let Some(s) = &att.summary {
+                    Ok(ToolResult::text(s.clone()))
+                } else if let Some(reason) = &att.summary_error {
+                    Ok(ToolResult::error(format!("summary unavailable: {reason}")))
+                } else {
+                    Ok(ToolResult::text(
+                        "(summary still being generated — retry shortly, or pass a 'question' parameter to fetch a fresh answer now)".to_string()
+                    ))
+                }
+            }
+            Some(q) => {
+                // Question mode — dispatch via the injected summarizer trait.
+                match self.summarizer.answer_question(spec_id, &att, &q).await {
+                    Ok(text) => Ok(ToolResult::text(text)),
+                    Err(e) => Ok(ToolResult::error(e)),
+                }
+            }
+        }
     }
 }
 
@@ -82,6 +144,27 @@ mod tests {
     use barnstormer_core::state::SpecState;
     use tempfile::TempDir;
 
+    /// Stub `AttachmentSummarizer` for unit tests — echoes the question back so
+    /// tests can assert that `execute` actually dispatched into the trait.
+    #[derive(Debug)]
+    struct StubSummarizer;
+
+    #[async_trait::async_trait]
+    impl crate::AttachmentSummarizer for StubSummarizer {
+        async fn answer_question(
+            &self,
+            _spec_id: Ulid,
+            _attachment: &barnstormer_core::state::ContextAttachment,
+            question: &str,
+        ) -> Result<String, String> {
+            Ok(format!("(stub answer to: {question})"))
+        }
+    }
+
+    fn stub() -> Arc<dyn crate::AttachmentSummarizer> {
+        Arc::new(StubSummarizer)
+    }
+
     #[tokio::test]
     async fn tool_name_is_retrieve_context() {
         let tmp = TempDir::new().unwrap();
@@ -90,6 +173,7 @@ mod tests {
         let tool = RetrieveContextTool {
             actor: Arc::new(handle),
             home: tmp.path().to_path_buf(),
+            summarizer: stub(),
         };
         assert_eq!(tool.name(), "retrieve_context");
     }
@@ -133,6 +217,7 @@ mod tests {
         let tool = RetrieveContextTool {
             actor: Arc::new(handle),
             home,
+            summarizer: stub(),
         };
 
         let result = tool
@@ -151,6 +236,7 @@ mod tests {
         let tool = RetrieveContextTool {
             actor: Arc::new(handle),
             home: tmp.path().to_path_buf(),
+            summarizer: stub(),
         };
 
         let err = tool.execute(json!({})).await.unwrap_err();
@@ -165,6 +251,7 @@ mod tests {
         let tool = RetrieveContextTool {
             actor: Arc::new(handle),
             home: tmp.path().to_path_buf(),
+            summarizer: stub(),
         };
 
         let err = tool
@@ -182,6 +269,7 @@ mod tests {
         let tool = RetrieveContextTool {
             actor: Arc::new(handle),
             home: tmp.path().to_path_buf(),
+            summarizer: stub(),
         };
 
         let unknown = Ulid::new();
@@ -226,6 +314,7 @@ mod tests {
         let tool = RetrieveContextTool {
             actor: Arc::new(handle),
             home,
+            summarizer: stub(),
         };
 
         let err = tool
@@ -233,5 +322,341 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("attachment not found"));
+    }
+
+    #[tokio::test]
+    async fn retrieve_context_no_question_on_media_with_summary_returns_summary() {
+        // Media attachment with a SummarizeContext recorded — no question:
+        // returns the stored summary text, no on-disk read.
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_path_buf();
+
+        let spec_id = Ulid::new();
+        let handle = actor::spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".to_string(),
+                one_liner: "o".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "diagram.png".to_string(),
+                mime_type: "image/png".to_string(),
+                size_bytes: 1024,
+            })
+            .await
+            .unwrap();
+        handle
+            .send_command(Command::SummarizeContext {
+                attachment_id,
+                summary: "the stored summary".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let tool = RetrieveContextTool {
+            actor: Arc::new(handle),
+            home,
+            summarizer: stub(),
+        };
+
+        let result = tool
+            .execute(json!({ "attachment_id": attachment_id.to_string() }))
+            .await
+            .unwrap();
+        assert_eq!(result.content, "the stored summary");
+        assert!(!result.is_error);
+    }
+
+    #[tokio::test]
+    async fn retrieve_context_no_question_on_media_with_error_returns_tool_error() {
+        // Media attachment with a recorded summarize failure — no question:
+        // returns an error result that surfaces the failure reason.
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_path_buf();
+
+        let spec_id = Ulid::new();
+        let handle = actor::spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".to_string(),
+                one_liner: "o".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "clip.mp4".to_string(),
+                mime_type: "video/mp4".to_string(),
+                size_bytes: 2048,
+            })
+            .await
+            .unwrap();
+        handle
+            .send_command(Command::MarkContextSummarizeFailed {
+                attachment_id,
+                reason: "provider X doesn't support video".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let tool = RetrieveContextTool {
+            actor: Arc::new(handle),
+            home,
+            summarizer: stub(),
+        };
+
+        let result = tool
+            .execute(json!({ "attachment_id": attachment_id.to_string() }))
+            .await
+            .unwrap();
+        assert!(result.is_error);
+        assert!(result.content.contains("provider X"));
+    }
+
+    #[tokio::test]
+    async fn retrieve_context_no_question_on_pending_media_returns_hint() {
+        // Media attachment with no summary and no error — returns a hint
+        // text result so the agent knows to retry or pass a question.
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_path_buf();
+
+        let spec_id = Ulid::new();
+        let handle = actor::spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".to_string(),
+                one_liner: "o".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "memo.mp3".to_string(),
+                mime_type: "audio/mpeg".to_string(),
+                size_bytes: 4096,
+            })
+            .await
+            .unwrap();
+
+        let tool = RetrieveContextTool {
+            actor: Arc::new(handle),
+            home,
+            summarizer: stub(),
+        };
+
+        let result = tool
+            .execute(json!({ "attachment_id": attachment_id.to_string() }))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("still being generated"));
+    }
+
+    #[tokio::test]
+    async fn retrieve_context_no_question_with_summary_and_error_returns_summary() {
+        // When a prior summarize succeeded and a later attempt failed, the agent
+        // should still see the stale summary rather than being blocked by the
+        // failure. summary takes precedence over summary_error.
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_path_buf();
+
+        let spec_id = Ulid::new();
+        let handle = actor::spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".to_string(),
+                one_liner: "o".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "x.png".to_string(),
+                mime_type: "image/png".to_string(),
+                size_bytes: 4,
+            })
+            .await
+            .unwrap();
+        handle
+            .send_command(Command::SummarizeContext {
+                attachment_id,
+                summary: "the prior summary".to_string(),
+            })
+            .await
+            .unwrap();
+        handle
+            .send_command(Command::MarkContextSummarizeFailed {
+                attachment_id,
+                reason: "later attempt failed".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let tool = RetrieveContextTool {
+            actor: Arc::new(handle),
+            home,
+            summarizer: stub(),
+        };
+
+        let result = tool
+            .execute(json!({ "attachment_id": attachment_id.to_string() }))
+            .await
+            .unwrap();
+        assert!(
+            !result.is_error,
+            "should return text, not error, when stale summary is available"
+        );
+        assert_eq!(result.content, "the prior summary");
+    }
+
+    #[tokio::test]
+    async fn retrieve_context_rejects_non_string_question() {
+        // The tool's JSON schema declares `question` as a string. A caller that
+        // sends a number or an empty string is almost certainly mis-using the
+        // tool; surface as an explicit error rather than silently dropping
+        // into the no-question (summary) path. `null` and absent both stay
+        // None (text-path / stored-summary path).
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_path_buf();
+
+        let spec_id = Ulid::new();
+        let handle = actor::spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".to_string(),
+                one_liner: "o".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "notes.md".to_string(),
+                mime_type: "text/markdown".to_string(),
+                size_bytes: 5,
+            })
+            .await
+            .unwrap();
+
+        // Write text content so the no-question text path would otherwise
+        // succeed if the validator missed.
+        let dir = home
+            .join("specs")
+            .join(spec_id.to_string())
+            .join("context")
+            .join(attachment_id.to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("notes.md"), "hello").unwrap();
+
+        let tool = RetrieveContextTool {
+            actor: Arc::new(handle),
+            home,
+            summarizer: stub(),
+        };
+
+        // Number — must error.
+        let err = tool
+            .execute(json!({
+                "attachment_id": attachment_id.to_string(),
+                "question": 42,
+            }))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("must be a string"),
+            "expected type-error, got: {err}"
+        );
+
+        // Whitespace-only string — must error as empty.
+        let err = tool
+            .execute(json!({
+                "attachment_id": attachment_id.to_string(),
+                "question": "   ",
+            }))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("must not be empty"),
+            "expected empty-error, got: {err}"
+        );
+
+        // Null — must be treated as None (text path).
+        let result = tool
+            .execute(json!({
+                "attachment_id": attachment_id.to_string(),
+                "question": serde_json::Value::Null,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(result.content, "hello");
+        assert!(!result.is_error);
+    }
+
+    #[tokio::test]
+    async fn retrieve_context_with_question_dispatches_to_summarizer() {
+        // Question mode — even on a text attachment, the question dispatches
+        // through the AttachmentSummarizer trait rather than reading the file.
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_path_buf();
+
+        let spec_id = Ulid::new();
+        let handle = actor::spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".to_string(),
+                one_liner: "o".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "notes.md".to_string(),
+                mime_type: "text/markdown".to_string(),
+                size_bytes: 5,
+            })
+            .await
+            .unwrap();
+
+        let tool = RetrieveContextTool {
+            actor: Arc::new(handle),
+            home,
+            summarizer: stub(),
+        };
+
+        let result = tool
+            .execute(json!({
+                "attachment_id": attachment_id.to_string(),
+                "question": "test?",
+            }))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("stub answer to: test?"));
     }
 }

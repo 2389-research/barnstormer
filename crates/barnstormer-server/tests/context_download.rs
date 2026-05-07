@@ -26,9 +26,9 @@ async fn get_raw_returns_file_content() {
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    // Content-Type is always forced to text/plain regardless of the uploaded
-    // mime_type — the stored mime is attacker-controlled and a `text/html` or
-    // `image/svg+xml` value would make /raw a same-origin XSS sink.
+    // Content-Type now reflects the server-sniffed mime (Phase 2). The
+    // `notes.md` fixture sniffs to `text/markdown` via the extension fallback
+    // in `sniff_mime`. We still send `nosniff` as defense-in-depth.
     let ct = resp
         .headers()
         .get(http::header::CONTENT_TYPE)
@@ -36,9 +36,11 @@ async fn get_raw_returns_file_content() {
         .to_str()
         .unwrap()
         .to_string();
-    assert_eq!(ct, "text/plain; charset=utf-8");
+    assert!(
+        ct.starts_with("text/"),
+        "expected a text/* mime for notes.md, got {ct}"
+    );
 
-    // And nosniff so the browser doesn't override the forced type.
     let nosniff = resp
         .headers()
         .get(http::header::X_CONTENT_TYPE_OPTIONS)
@@ -55,53 +57,18 @@ async fn get_raw_returns_file_content() {
 }
 
 #[tokio::test]
-async fn get_raw_forces_text_plain_even_when_uploaded_mime_is_html() {
-    // Regression: a UTF-8 file uploaded with mime_type=text/html (or
-    // image/svg+xml) used to be served back with that exact Content-Type,
-    // turning /raw into a same-origin stored-XSS sink. The endpoint must
-    // pin Content-Type to text/plain regardless of the stored mime.
-    let ctx = common::setup_with_spec_in_brainstorming().await;
-    let boundary = "----BarnstormerHtmlBoundary";
-    let body = format!(
-        "--{boundary}\r\n\
-         Content-Disposition: form-data; name=\"file\"; filename=\"evil.html\"\r\n\
-         Content-Type: text/html\r\n\r\n\
-         <script>alert('xss')</script>\r\n\
-         --{boundary}--\r\n"
-    );
-    let upload = Request::builder()
-        .method("POST")
-        .uri(format!("/web/specs/{}/context", ctx.spec_id))
-        .header(
-            "content-type",
-            format!("multipart/form-data; boundary={boundary}"),
-        )
-        .body(Body::from(body))
-        .unwrap();
-    let upload_resp = ctx.router.clone().oneshot(upload).await.unwrap();
-    assert_eq!(
-        upload_resp.status(),
-        StatusCode::OK,
-        "upload of UTF-8 bytes labelled as text/html must succeed (the bytes are valid UTF-8)"
-    );
-
-    // Look up the new attachment id from state.
-    let attachment_id = {
-        let actors = ctx.state.actors.read().await;
-        let handle = actors.get(&ctx.spec_id).expect("actor present").clone();
-        drop(actors);
-        let s = handle.read_state().await;
-        s.context_attachments
-            .last()
-            .expect("at least one attachment")
-            .attachment_id
-    };
+async fn download_image_serves_image_mime() {
+    // Phase 2: image uploads must come back with their real Content-Type so
+    // <img> tags render. `nosniff` still applies as defense-in-depth.
+    let bytes = include_bytes!("fixtures/tiny.png");
+    let ctx =
+        common::setup_with_attachment_bytes("tiny.png", "application/octet-stream", bytes).await;
 
     let req = Request::builder()
         .method("GET")
         .uri(format!(
             "/web/specs/{}/context/{}/raw",
-            ctx.spec_id, attachment_id
+            ctx.spec_id, ctx.attachment_id
         ))
         .body(Body::empty())
         .unwrap();
@@ -113,8 +80,7 @@ async fn get_raw_forces_text_plain_even_when_uploaded_mime_is_html() {
             .unwrap()
             .to_str()
             .unwrap(),
-        "text/plain; charset=utf-8",
-        "uploaded mime=text/html must NOT leak through as Content-Type"
+        "image/png"
     );
     assert_eq!(
         resp.headers()
@@ -122,8 +88,113 @@ async fn get_raw_forces_text_plain_even_when_uploaded_mime_is_html() {
             .unwrap()
             .to_str()
             .unwrap(),
-        "nosniff",
+        "nosniff"
     );
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(body.as_ref(), bytes.as_slice(), "PNG bytes round-trip");
+}
+
+#[tokio::test]
+async fn download_pdf_serves_pdf_mime() {
+    // PDFs render in <embed>/<iframe> only when served as application/pdf.
+    let bytes = include_bytes!("fixtures/tiny.pdf");
+    let ctx =
+        common::setup_with_attachment_bytes("tiny.pdf", "application/octet-stream", bytes).await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/web/specs/{}/context/{}/raw",
+            ctx.spec_id, ctx.attachment_id
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get(http::header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "application/pdf"
+    );
+}
+
+#[tokio::test]
+async fn download_text_still_serves_text_plain() {
+    // Pre-existing text-attachment behavior under Phase 2: mime should match
+    // what `sniff_mime` returns — `text/markdown` for `.md`, `text/plain` for
+    // unknown text extensions, etc. Either way it stays in the `text/*` family.
+    let ctx = common::setup_with_attachment_bytes("notes.md", "text/markdown", b"hi").await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/web/specs/{}/context/{}/raw",
+            ctx.spec_id, ctx.attachment_id
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ct = resp
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(ct.starts_with("text/"), "expected a text/* mime, got {ct}");
+}
+
+#[tokio::test]
+async fn download_html_serves_text_plain_to_neuter_xss() {
+    // HTML uploads are stored as bytes but served back as text/plain to
+    // neuter stored-XSS via direct navigation to /raw. Other types
+    // (image/*, application/pdf, audio/*, video/*) keep their real mime.
+    let ctx = common::setup_with_attachment_bytes(
+        "evil.html",
+        "text/html",
+        b"<script>alert('xss')</script>",
+    )
+    .await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/web/specs/{}/context/{}/raw",
+            ctx.spec_id, ctx.attachment_id
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let ct = resp
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .expect("Content-Type header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        ct.starts_with("text/plain"),
+        "expected text/plain, got {ct}"
+    );
+
+    let nosniff = resp
+        .headers()
+        .get(http::header::X_CONTENT_TYPE_OPTIONS)
+        .expect("X-Content-Type-Options header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(nosniff, "nosniff");
 }
 
 #[tokio::test]
@@ -168,4 +239,124 @@ async fn get_raw_unknown_attachment_returns_404() {
 
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn download_svg_serves_rasterized_png_to_neuter_xss() {
+    // SVG attachments are served back as the cached rasterized.png on the
+    // /raw endpoint to neuter direct-navigation script execution. The
+    // original SVG is preserved on disk; this only affects /raw output.
+    let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 16 16\"><rect width=\"16\" height=\"16\" fill=\"red\"/></svg>";
+    let ctx = common::setup_with_attachment_bytes("logo.svg", "image/svg+xml", svg).await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/web/specs/{}/context/{}/raw",
+            ctx.spec_id, ctx.attachment_id
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let ct = resp
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .expect("Content-Type header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        ct, "image/png",
+        "expected SVG to be served back as image/png from cached raster, got {ct}"
+    );
+
+    let nosniff = resp
+        .headers()
+        .get(http::header::X_CONTENT_TYPE_OPTIONS)
+        .expect("X-Content-Type-Options header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(nosniff, "nosniff");
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    // PNG magic: \x89 P N G \r \n \x1a \n
+    assert!(
+        body.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "response body should start with PNG magic; got: {:?}",
+        &body[..body.len().min(16)]
+    );
+}
+
+#[tokio::test]
+async fn download_svg_without_raster_serves_text_plain_fallback() {
+    // If the rasterized cache is missing (rasterization failed at upload),
+    // the /raw endpoint falls back to text/plain so direct nav can't
+    // execute the SVG's embedded scripts. We construct the attachment
+    // directly via Command::AttachContext so no auto-raster fires.
+    use barnstormer_core::SpecPhase;
+
+    let ctx = common::setup_with_spec_in_brainstorming().await;
+    let attachment_id = Ulid::new();
+
+    // Write the SVG bytes to disk where download_context expects them, but
+    // skip rasterized.png on purpose so we exercise the missing-cache path.
+    let dir = ctx
+        .state
+        .barnstormer_home
+        .join("specs")
+        .join(ctx.spec_id.to_string())
+        .join("context")
+        .join(attachment_id.to_string());
+    std::fs::create_dir_all(&dir).unwrap();
+    let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 16 16\"><rect/></svg>";
+    std::fs::write(dir.join("logo.svg"), svg).unwrap();
+
+    // Send AttachContext via the actor handle directly. Matches how
+    // setup_with_attachment_bytes leaves the actor state, minus the upload
+    // pipeline's auto-rasterization.
+    let handle = {
+        let actors = ctx.state.actors.read().await;
+        actors.get(&ctx.spec_id).expect("actor present").clone()
+    };
+    let phase = handle.read_state().await.phase.clone();
+    assert_eq!(phase, SpecPhase::Brainstorming);
+    handle
+        .send_command(Command::AttachContext {
+            attachment_id,
+            filename: "logo.svg".to_string(),
+            mime_type: "image/svg+xml".to_string(),
+            size_bytes: svg.len() as u64,
+        })
+        .await
+        .expect("attach via command");
+
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/web/specs/{}/context/{}/raw",
+            ctx.spec_id, attachment_id
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let ct = resp
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .expect("Content-Type header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        ct.starts_with("text/plain"),
+        "expected text/plain fallback when rasterized.png is missing, got {ct}"
+    );
 }

@@ -84,6 +84,10 @@ pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
             axum::routing::delete(web::remove_context),
         )
         .route(
+            "/web/specs/{id}/context/{att_id}/resummarize",
+            post(web::resummarize_context),
+        )
+        .route(
             "/web/specs/{id}/context/{att_id}/raw",
             get(web::download_context),
         )

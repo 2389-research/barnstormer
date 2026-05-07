@@ -237,6 +237,15 @@ fn describe_event_payload(payload: &EventPayload) -> String {
         EventPayload::ContextSummarized { attachment_id, .. } => {
             format!("context attachment {} summarized", attachment_id)
         }
+        EventPayload::ContextSummarizeFailed {
+            attachment_id,
+            reason,
+        } => {
+            format!(
+                "context attachment {} summarize failed: {}",
+                attachment_id, reason
+            )
+        }
         EventPayload::ContextNotesUpdated { attachment_id, .. } => {
             format!("context attachment {} notes updated", attachment_id)
         }
@@ -659,6 +668,13 @@ mod tests {
             (
                 EventPayload::SnapshotWritten { snapshot_id: 42 },
                 "snapshot #42 written",
+            ),
+            (
+                EventPayload::ContextSummarizeFailed {
+                    attachment_id: Ulid::new(),
+                    reason: "unsupported media kind".to_string(),
+                },
+                "summarize failed: unsupported media kind",
             ),
         ];
 

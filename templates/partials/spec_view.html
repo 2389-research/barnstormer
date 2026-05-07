@@ -51,7 +51,7 @@
         </div>
         <div class="sidebar-tab-panel" data-panel="context" style="display:none;"
              hx-get="/web/specs/{{ spec_id }}/context-panel"
-             hx-trigger="load, sse:context_attached, sse:context_summarized, sse:context_notes_updated, sse:context_removed"
+             hx-trigger="load, sse:context_attached, sse:context_summarized, sse:context_summarize_failed, sse:context_notes_updated, sse:context_removed"
              hx-swap="innerHTML">
         </div>
     </aside>
@@ -106,7 +106,7 @@
             ['card_created', 'card_updated', 'card_moved', 'card_deleted'].forEach(function(e) {
                 compositor.addEventListener('sse:' + e, function() { notify('cards'); });
             });
-            ['context_attached', 'context_summarized', 'context_notes_updated', 'context_removed'].forEach(function(e) {
+            ['context_attached', 'context_summarized', 'context_summarize_failed', 'context_notes_updated', 'context_removed'].forEach(function(e) {
                 compositor.addEventListener('sse:' + e, function() { notify('context'); });
             });
         }

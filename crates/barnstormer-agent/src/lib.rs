@@ -1,6 +1,7 @@
 // ABOUTME: Agent system for barnstormer, orchestrating AI-assisted spec refinement.
 // ABOUTME: Defines agent traits and step execution for spec exploration workflows.
 
+pub mod attachment_summarizer;
 pub mod client;
 pub mod context;
 pub mod import;
@@ -9,6 +10,7 @@ pub mod streaming_hook;
 pub mod swarm;
 pub mod testing;
 
+pub use attachment_summarizer::AttachmentSummarizer;
 pub use context::{AgentContext, AgentRole, contexts_from_snapshot_map, contexts_to_snapshot_map};
 pub use swarm::{
     AgentRunner, SwarmOrchestrator, render_context_files_section, run_loop, system_prompt_for_role,

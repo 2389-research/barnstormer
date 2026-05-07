@@ -212,17 +212,34 @@ pub async fn create_spec(
 
     // 2. Validate files upfront so we fail before creating the spec. Better
     // UX than writing a spec then bouncing on file #3. Per-file size was
-    // already enforced while streaming the multipart field, so here we only
-    // need to verify the bytes are UTF-8 text.
-    for (filename, _, bytes) in &files {
-        if !crate::context_storage::is_utf8_text(bytes) {
+    // already enforced while streaming the multipart field, so here we
+    // sniff each file's bytes against the Phase 2 whitelist (images, PDFs,
+    // audio, video, SVG, plus UTF-8 text). Browser-claimed Content-Type is
+    // ignored — server-sniffed mime wins, same as `upload_context`.
+    let mut validated: Vec<(String, String, Vec<u8>)> = Vec::with_capacity(files.len());
+    for (filename, _claimed_mime, bytes) in files {
+        let detected = match crate::context_storage::sniff_mime(&bytes, &filename) {
+            Some(m) => m,
+            None => {
+                return (
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    format!(
+                        "'{filename}' couldn't be identified — uploads must be a recognized image, document, audio, video, or UTF-8 text file"
+                    ),
+                )
+                    .into_response();
+            }
+        };
+        if !crate::context_storage::is_whitelisted_mime(&detected) {
             return (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                format!("'{filename}' is binary — text files only for now"),
+                format!("'{filename}' has unsupported file type '{detected}'"),
             )
                 .into_response();
         }
+        validated.push((filename, detected, bytes));
     }
+    let files = validated;
 
     // 3. Create the spec.
     let spec_id = Ulid::new();
@@ -315,7 +332,11 @@ pub async fn create_spec(
     // `ContextSummarized` before the persister is listening, leaving the
     // summary in memory but absent from `events.jsonl` (so it disappears
     // after restart).
-    let mut summarize_jobs: Vec<(Ulid, String, String)> = Vec::new();
+    // Track attachments to summarize. We dispatch after the persister
+    // subscribes (a few lines below); the input is built from disk via
+    // `build_summarizer_input` so per-kind dispatch (text / media / SVG)
+    // matches `upload_context`.
+    let mut summarize_jobs: Vec<(Ulid, String)> = Vec::new();
     for (filename, mime, bytes) in files {
         let attachment_id = Ulid::new();
         let filename = crate::context_storage::sanitize_filename(&filename);
@@ -329,6 +350,28 @@ pub async fn create_spec(
             tracing::error!("failed to write context file {filename}: {e}");
             continue;
         }
+        // SVG branch: rasterize and cache `rasterized.png` next to the original.
+        // Failure degrades to markup-only summarization; original SVG is intact.
+        if mime == "image/svg+xml"
+            && let Ok(markup) = std::str::from_utf8(&bytes)
+        {
+            match crate::svg_raster::rasterize_svg(markup) {
+                Ok(png) => {
+                    let raster_path = crate::context_storage::attachment_dir(
+                        &state.barnstormer_home,
+                        spec_id,
+                        attachment_id,
+                    )
+                    .join("rasterized.png");
+                    if let Err(e) = crate::context_storage::write_bytes(&raster_path, &png) {
+                        tracing::warn!("failed to cache rasterized SVG: {e}");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("SVG rasterization failed for {filename}: {e}");
+                }
+            }
+        }
         let size_bytes = bytes.len() as u64;
         let cmd = Command::AttachContext {
             attachment_id,
@@ -341,11 +384,16 @@ pub async fn create_spec(
             Err(e) => {
                 tracing::error!("failed to attach context {filename}: {e}");
                 // The bytes are on disk but no event references them — clean up
-                // so the filesystem doesn't drift from actor state.
-                if let Err(remove_err) = std::fs::remove_file(&path) {
-                    tracing::warn!(
-                        "failed to clean up orphaned context file {filename}: {remove_err}"
-                    );
+                // so the filesystem doesn't drift from actor state. Remove the
+                // whole attachment dir so we also drop SVG's `rasterized.png`
+                // sibling instead of leaving it orphaned.
+                let dir = crate::context_storage::attachment_dir(
+                    &state.barnstormer_home,
+                    spec_id,
+                    attachment_id,
+                );
+                if let Err(remove_err) = std::fs::remove_dir_all(&dir) {
+                    tracing::warn!("failed to clean up orphaned context dir {dir:?}: {remove_err}");
                 }
                 continue;
             }
@@ -355,8 +403,7 @@ pub async fn create_spec(
                 tracing::error!("failed to persist attach event: {}", e);
             }
         }
-        let content = String::from_utf8(bytes).expect("utf-8 verified above");
-        summarize_jobs.push((attachment_id, filename, content));
+        summarize_jobs.push((attachment_id, filename));
     }
 
     // Subscribe the event persister BEFORE inserting the actor, starting
@@ -371,9 +418,41 @@ pub async fn create_spec(
         .insert(spec_id, persister_handle);
 
     // Now safe to dispatch the summarizer jobs queued above. Their
-    // `ContextSummarized` events will reach the persister.
-    for (attachment_id, filename, content) in summarize_jobs {
-        crate::summarizer::spawn_summarize(handle.clone(), attachment_id, filename, content);
+    // `ContextSummarized` (or `ContextSummarizeFailed`) events will reach the
+    // persister. Notes are not yet available at spec-create time — they're
+    // populated later via PATCH and will trigger a re-summarize from that
+    // path. Per-kind dispatch goes through `build_summarizer_input` so the
+    // shape (text / media / svg dual) lines up with `upload_context`.
+    for (attachment_id, filename) in summarize_jobs {
+        let attachment = handle
+            .read_state()
+            .await
+            .context_attachments
+            .iter()
+            .find(|a| a.attachment_id == attachment_id)
+            .cloned();
+        if let Some(att) = attachment {
+            match crate::context_storage::build_summarizer_input(
+                &state.barnstormer_home,
+                spec_id,
+                &att,
+            )
+            .await
+            {
+                Ok(input) => {
+                    crate::summarizer::spawn_summarize(
+                        handle.clone(),
+                        attachment_id,
+                        filename,
+                        None,
+                        input,
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("could not build summarizer input for {attachment_id}: {e}");
+                }
+            }
+        }
     }
 
     state.actors.write().await.insert(spec_id, handle);
@@ -2426,13 +2505,59 @@ struct ContextPanelTemplate {
     attachments: Vec<ContextPanelItem>,
 }
 
+/// Coarse-grained kind of a context attachment, derived from its sniffed
+/// MIME type. Used by the context panel template to branch between
+/// browser-native preview affordances (raster `<img>`, SVG `<img>`, `<audio>`,
+/// `<video>`, PDF icon) and to pick a per-kind badge color in the collapsed
+/// header. `Text` is the catch-all for anything that doesn't render natively
+/// in a preview block (markdown, plaintext, code, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentKind {
+    Text,
+    ImageRaster,
+    ImageSvg,
+    Pdf,
+    Audio,
+    Video,
+}
+
+impl AttachmentKind {
+    /// Classify a stored MIME string. Any parameters after the first `;`
+    /// (e.g. `; charset=utf-8`) are dropped before matching, and the result
+    /// is lowercased so casing variation in the upload pipeline doesn't
+    /// flip an attachment between branches.
+    fn from_mime(mime: &str) -> Self {
+        let normalized = mime
+            .split(';')
+            .next()
+            .unwrap_or(mime)
+            .trim()
+            .to_ascii_lowercase();
+        if normalized == "image/svg+xml" {
+            Self::ImageSvg
+        } else if normalized.starts_with("image/") {
+            Self::ImageRaster
+        } else if normalized == "application/pdf" {
+            Self::Pdf
+        } else if normalized.starts_with("audio/") {
+            Self::Audio
+        } else if normalized.starts_with("video/") {
+            Self::Video
+        } else {
+            Self::Text
+        }
+    }
+}
+
 /// View model for a single context attachment row in the panel.
 ///
 /// `summary` holds the raw (plain-text) summary used for the collapsed-state
 /// tooltip (the native `title` attribute on the `<summary>` element). It's
 /// also used as the presence flag for rendering the "in context" pill.
 /// `summary_html` holds the pre-rendered HTML produced by `render_markdown`,
-/// displayed only when the card is expanded.
+/// displayed only when the card is expanded. `summary_error` is the
+/// last-attempt failure reason, used to drive the four-state summary UI
+/// (pending / ok / stale-with-error / failed).
 struct ContextPanelItem {
     attachment_id: String,
     filename: String,
@@ -2441,11 +2566,21 @@ struct ContextPanelItem {
     added_display: String,
     summary: Option<String>,
     summary_html: Option<String>,
+    summary_error: Option<String>,
     user_notes: Option<String>,
     /// Number of non-removed cards whose `source_attachment_id` points at this
     /// attachment. Rendered in the collapsed header so the user can see at a
     /// glance how much of an attachment the Manager has synthesized.
     card_count: usize,
+    /// Coarse classification of the attachment for per-kind preview rendering
+    /// and badge coloring in the template.
+    kind: AttachmentKind,
+    /// Original sniffed MIME type, forwarded to `<source type=...>` on the
+    /// `<audio>` / `<video>` preview elements.
+    mime_type: String,
+    /// `/web/specs/{spec_id}/context/{attachment_id}/raw` — the source URL for
+    /// inline `<img>` / `<audio>` / `<video>` previews.
+    raw_url: String,
 }
 
 /// Human-readable file size (B / KB / MB) for display in the context panel.
@@ -2494,8 +2629,12 @@ async fn render_context_panel_for(state: &SharedState, spec_id: Ulid) -> Respons
                 added_display: a.added_at.format("%H:%M").to_string(),
                 summary: a.summary.clone(),
                 summary_html: a.summary.as_deref().map(render_markdown),
+                summary_error: a.summary_error.clone(),
                 user_notes: a.user_notes.clone(),
                 card_count,
+                kind: AttachmentKind::from_mime(&a.mime_type),
+                mime_type: a.mime_type.clone(),
+                raw_url: format!("/web/specs/{}/context/{}/raw", spec_id, a.attachment_id),
             }
         })
         .collect();
@@ -2593,8 +2732,9 @@ fn html_escape(s: &str) -> String {
 /// Accepts `multipart/form-data` with a single `file` part. Writes the file
 /// to disk under the spec's context directory and emits a `ContextAttached`
 /// event via `Command::AttachContext`. Gated to `SpecPhase::Brainstorming`;
-/// outside that phase returns 409 CONFLICT. Binary (non-UTF-8) content is
-/// rejected with 415, and uploads over 20MB are rejected with 413.
+/// outside that phase returns 409 CONFLICT. The MIME type is server-sniffed
+/// from the bytes (browser-claimed Content-Type is ignored); unrecognized
+/// or non-whitelisted types return 415. Uploads over 20MB return 413.
 pub async fn upload_context(
     State(state): State<SharedState>,
     Path(id): Path<String>,
@@ -2628,13 +2768,13 @@ pub async fn upload_context(
     // buffer up to the configured global body cap before we reject it.
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut filename: Option<String> = None;
-    let mut mime: Option<String> = None;
     loop {
         match multipart.next_field().await {
             Ok(Some(mut field)) => {
                 if field.name() == Some("file") {
                     filename = field.file_name().map(str::to_string);
-                    mime = field.content_type().map(str::to_string);
+                    // Browser-claimed content type is intentionally ignored;
+                    // the server sniffs the bytes below.
                     let bytes = match read_field_capped(&mut field).await {
                         Ok(Some(b)) => b,
                         Ok(None) => {
@@ -2661,16 +2801,31 @@ pub async fn upload_context(
         return (StatusCode::BAD_REQUEST, "missing file part").into_response();
     };
 
-    if !crate::context_storage::is_utf8_text(&bytes) {
+    // Sniff MIME from bytes. Browser-supplied content-type is not trusted —
+    // a client can claim anything, but we serve, summarize, and gate on what
+    // the bytes actually are.
+    let detected_mime = match crate::context_storage::sniff_mime(
+        &bytes,
+        filename.as_deref().unwrap_or("file"),
+    ) {
+        Some(m) => m,
+        None => {
+            return (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "couldn't identify file type — uploads must be a recognized image, document, audio, video, or UTF-8 text file",
+            )
+                .into_response();
+        }
+    };
+    if !crate::context_storage::is_whitelisted_mime(&detected_mime) {
         return (
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "binary files not yet supported — text files only for now",
+            format!("file type '{detected_mime}' is not supported"),
         )
             .into_response();
     }
 
     let filename = crate::context_storage::sanitize_filename(filename.as_deref().unwrap_or("file"));
-    let mime = mime.unwrap_or_else(|| "text/plain".to_string());
     let attachment_id = Ulid::new();
 
     let path = crate::context_storage::attachment_path(
@@ -2684,19 +2839,47 @@ pub async fn upload_context(
         return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
     }
 
+    // SVG-specific: rasterize and cache alongside the original. Failure
+    // degrades to markup-only summarization; the original SVG is still on
+    // disk and the upload still lands.
+    if detected_mime == "image/svg+xml"
+        && let Ok(markup) = std::str::from_utf8(&bytes)
+    {
+        match crate::svg_raster::rasterize_svg(markup) {
+            Ok(png) => {
+                let raster_path = crate::context_storage::attachment_dir(
+                    &state.barnstormer_home,
+                    spec_id,
+                    attachment_id,
+                )
+                .join("rasterized.png");
+                if let Err(e) = crate::context_storage::write_bytes(&raster_path, &png) {
+                    tracing::warn!("failed to cache rasterized SVG: {e}");
+                }
+            }
+            Err(e) => {
+                tracing::warn!("SVG rasterization failed for {filename}: {e}");
+            }
+        }
+    }
+
     let size_bytes = bytes.len() as u64;
     let cmd = Command::AttachContext {
         attachment_id,
         filename: filename.clone(),
-        mime_type: mime,
+        mime_type: detected_mime.clone(),
         size_bytes,
     };
     if let Err(e) = handle.send_command(cmd).await {
         // Bytes already on disk — without the event referencing them they'd
         // leak and the filesystem would drift from actor state. Best-effort
         // cleanup (failure is logged but doesn't block the error response).
-        if let Err(remove_err) = std::fs::remove_file(&path) {
-            tracing::warn!("failed to clean up orphaned context file {filename}: {remove_err}");
+        // Remove the whole attachment dir so we also drop SVG's
+        // `rasterized.png` sibling instead of leaving it orphaned.
+        let dir =
+            crate::context_storage::attachment_dir(&state.barnstormer_home, spec_id, attachment_id);
+        if let Err(remove_err) = std::fs::remove_dir_all(&dir) {
+            tracing::warn!("failed to clean up orphaned context dir {dir:?}: {remove_err}");
         }
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -2705,9 +2888,34 @@ pub async fn upload_context(
             .into_response();
     }
 
-    // Spawn summarizer — fire-and-forget. Summary will land via SSE when done.
-    let content = String::from_utf8(bytes).expect("utf-8 verified above");
-    crate::summarizer::spawn_summarize(handle.clone(), attachment_id, filename.clone(), content);
+    // Build per-kind SummarizerInput from disk and dispatch — fire-and-forget.
+    // Summary will land via SSE when done. Notes aren't available at upload
+    // time; they're populated later via PATCH.
+    let attachment_opt = handle
+        .read_state()
+        .await
+        .context_attachments
+        .iter()
+        .find(|a| a.attachment_id == attachment_id)
+        .cloned();
+    if let Some(att) = attachment_opt {
+        match crate::context_storage::build_summarizer_input(&state.barnstormer_home, spec_id, &att)
+            .await
+        {
+            Ok(input) => {
+                crate::summarizer::spawn_summarize(
+                    handle.clone(),
+                    attachment_id,
+                    filename.clone(),
+                    None,
+                    input,
+                );
+            }
+            Err(e) => {
+                tracing::warn!("could not build summarizer input for {attachment_id}: {e}");
+            }
+        }
+    }
 
     // Return the re-rendered panel partial so HTMX can swap it in place.
     render_context_panel_for(&state, spec_id).await
@@ -2744,12 +2952,48 @@ pub async fn update_context_notes(
     };
     drop(actors);
 
+    let notes_for_summarizer = form.notes.clone();
     let cmd = Command::UpdateContextNotes {
         attachment_id,
         notes: form.notes,
     };
     match handle.send_command(cmd).await {
-        Ok(_) => render_context_panel_for(&state, spec_id).await,
+        Ok(_) => {
+            // Re-fire summarizer with the new notes. Latest-wins concurrency:
+            // if multiple PATCHes land in quick succession, each spawns its
+            // own task and whichever Command::SummarizeContext arrives last
+            // is the summary that sticks.
+            let attachment = handle
+                .read_state()
+                .await
+                .context_attachments
+                .iter()
+                .find(|a| a.attachment_id == attachment_id && !a.removed)
+                .cloned();
+            if let Some(att) = attachment {
+                match crate::context_storage::build_summarizer_input(
+                    &state.barnstormer_home,
+                    spec_id,
+                    &att,
+                )
+                .await
+                {
+                    Ok(input) => {
+                        crate::summarizer::spawn_summarize(
+                            handle.clone(),
+                            attachment_id,
+                            att.filename.clone(),
+                            Some(notes_for_summarizer),
+                            input,
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!("could not build summarizer input on notes update: {e}")
+                    }
+                }
+            }
+            render_context_panel_for(&state, spec_id).await
+        }
         Err(ActorError::AttachmentNotFound(_)) => {
             (StatusCode::NOT_FOUND, "attachment not found").into_response()
         }
@@ -2799,16 +3043,104 @@ pub async fn remove_context(
     }
 }
 
-/// GET /web/specs/{id}/context/{att_id}/raw - Stream the raw text content of
-/// a context attachment. Only live (non-removed) attachments are served; both
+/// POST /web/specs/{id}/context/{att_id}/resummarize - Manually trigger a
+/// fresh summarizer pass for an attachment. The summary command itself lands
+/// asynchronously; this returns the panel partial with the spinner state.
+///
+/// The 410-vs-404 ordering matters: a soft-removed attachment is "gone" (we
+/// know it existed) so we surface 410 Gone rather than collapsing to 404.
+/// `att.user_notes.clone()` is forwarded to the summarizer so manual rerun
+/// uses the same notes context as the auto-spawn from upload/notes-update.
+pub async fn resummarize_context(
+    State(state): State<SharedState>,
+    Path((id, att_id)): Path<(String, String)>,
+) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    let attachment_id = match att_id.parse::<Ulid>() {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad attachment id").into_response(),
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h.clone(),
+        None => return (StatusCode::NOT_FOUND, "spec not found").into_response(),
+    };
+    drop(actors);
+
+    let attachment_opt = handle
+        .read_state()
+        .await
+        .context_attachments
+        .iter()
+        .find(|a| a.attachment_id == attachment_id)
+        .cloned();
+    let att = match attachment_opt {
+        // Order matters: removed-but-known must return 410 before falling
+        // through to the generic Some(a) live path. Reordering these arms
+        // would surface 200 for soft-deleted attachments.
+        Some(a) if a.removed => {
+            return (StatusCode::GONE, "attachment is removed").into_response();
+        }
+        Some(a) => a,
+        None => return (StatusCode::NOT_FOUND, "attachment not found").into_response(),
+    };
+
+    match crate::context_storage::build_summarizer_input(&state.barnstormer_home, spec_id, &att)
+        .await
+    {
+        Ok(input) => {
+            crate::summarizer::spawn_summarize(
+                handle.clone(),
+                attachment_id,
+                att.filename.clone(),
+                att.user_notes.clone(),
+                input,
+            );
+            render_context_panel_for(&state, spec_id).await
+        }
+        Err(e) => {
+            tracing::warn!("could not build summarizer input for resummarize: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response()
+        }
+    }
+}
+
+/// GET /web/specs/{id}/context/{att_id}/raw - Stream the raw bytes of a
+/// context attachment. Only live (non-removed) attachments are served; both
 /// "unknown" and "soft-removed" cases return 404 so callers can't distinguish
 /// them.
 ///
-/// Security: the stored `mime_type` came from the multipart upload and is
-/// untrusted. We always serve the bytes as `text/plain; charset=utf-8` and
-/// add `X-Content-Type-Options: nosniff` so a `text/html` or `image/svg+xml`
-/// upload can't turn this same-origin endpoint into a stored-XSS sink.
-/// (Uploads are UTF-8 verified in `is_utf8_text` before they reach disk.)
+/// Security: the stored `mime_type` came from server-side magic-byte sniffing
+/// in the upload pipeline (see `context_storage::sniff_mime`) and was checked
+/// against a whitelist before it ever landed in state, so it's mostly
+/// trustworthy as the `Content-Type`. We still send
+/// `X-Content-Type-Options: nosniff` as defense-in-depth so the browser
+/// doesn't override the declared type.
+///
+/// Two narrow exceptions to neuter direct-navigation script execution:
+///
+/// - `text/html` is downgraded to `text/plain; charset=utf-8` on the wire.
+///   HTML is on the upload whitelist (so users can attach pages they want to
+///   reference), but serving it back as `text/html` would let any `<script>`
+///   inside execute in this origin when a user navigates directly to the
+///   `/raw` URL — a stored-XSS foothold.
+/// - `image/svg+xml` is served as `image/png` by reading the cached
+///   `rasterized.png` produced at upload time. SVG is a script-executable
+///   format (`<script>`, `<foreignObject>` w/ HTML, JS event handlers), so
+///   serving the original SVG bytes with `image/svg+xml` would have the same
+///   stored-XSS exposure as HTML. The original SVG is preserved on disk; this
+///   only affects what `/raw` returns. If the rasterized cache is missing
+///   (rasterization failed at upload), we fall back to
+///   `text/plain; charset=utf-8` so the bytes still surface but can't run.
+///
+/// Other sniffed mimes (`image/png`, `image/jpeg`, `application/pdf`,
+/// `audio/*`, `video/*`, `text/plain`, `text/markdown`) don't execute JS, so
+/// they pass through with their real `Content-Type` so `<img>`, `<audio>`,
+/// `<video>`, and PDF viewers render correctly.
 pub async fn download_context(
     State(state): State<SharedState>,
     Path((id, att_id)): Path<(String, String)>,
@@ -2846,18 +3178,57 @@ pub async fn download_context(
         attachment_id,
         &att.filename,
     );
-    match crate::context_storage::read_text(&path) {
-        Ok(text) => (
-            [
-                (
-                    axum::http::header::CONTENT_TYPE,
-                    "text/plain; charset=utf-8",
-                ),
-                (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            ],
-            text,
-        )
-            .into_response(),
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            let stored = att.mime_type.clone();
+            let normalized = stored
+                .split(';')
+                .next()
+                .unwrap_or(&stored)
+                .trim()
+                .to_ascii_lowercase();
+            // SVG and HTML are both script-executable formats. We never serve
+            // them back with their original mime on /raw — direct navigation
+            // would give stored XSS in this origin.
+            //
+            // - SVG: serve the cached rasterized PNG (produced at upload
+            //   time). If the raster is missing (rasterization failed),
+            //   fall back to text/plain so bytes still surface but can't run.
+            // - HTML: downgrade to text/plain (no rasterized form exists).
+            //
+            // Other types (image/png, image/jpeg, application/pdf, audio/*,
+            // video/*, text/plain, text/markdown) don't execute JS so we
+            // serve their real mime so `<img>`, `<audio>`, `<video>`, and
+            // PDF viewers render correctly.
+            let (final_bytes, final_mime): (Vec<u8>, String) = if normalized == "image/svg+xml" {
+                let raster_path = crate::context_storage::attachment_dir(
+                    &state.barnstormer_home,
+                    spec_id,
+                    attachment_id,
+                )
+                .join("rasterized.png");
+                if raster_path.exists() {
+                    match std::fs::read(&raster_path) {
+                        Ok(b) => (b, "image/png".to_string()),
+                        Err(_) => (bytes, "text/plain; charset=utf-8".to_string()),
+                    }
+                } else {
+                    (bytes, "text/plain; charset=utf-8".to_string())
+                }
+            } else if normalized == "text/html" {
+                (bytes, "text/plain; charset=utf-8".to_string())
+            } else {
+                (bytes, stored)
+            };
+            (
+                [
+                    (axum::http::header::CONTENT_TYPE, final_mime.as_str()),
+                    (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                ],
+                final_bytes,
+            )
+                .into_response()
+        }
         Err(_) => (StatusCode::NOT_FOUND, "file not found on disk").into_response(),
     }
 }
@@ -3076,6 +3447,9 @@ pub async fn start_agents(
         spec_id,
         swarm_actor_handle,
         state.barnstormer_home.clone(),
+        Arc::new(crate::attachment_summarizer::ServerSummarizer {
+            home: state.barnstormer_home.clone(),
+        }),
     ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {
@@ -3245,6 +3619,9 @@ pub async fn try_start_agents(
         spec_id,
         swarm_actor_handle,
         state.barnstormer_home.clone(),
+        Arc::new(crate::attachment_summarizer::ServerSummarizer {
+            home: state.barnstormer_home.clone(),
+        }),
     ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {
@@ -4152,7 +4529,7 @@ mod tests {
         };
         let rendered = tmpl.render().unwrap();
         assert!(
-            rendered.contains(r#"hx-trigger="load, sse:context_attached, sse:context_summarized, sse:context_notes_updated, sse:context_removed""#),
+            rendered.contains(r#"hx-trigger="load, sse:context_attached, sse:context_summarized, sse:context_summarize_failed, sse:context_notes_updated, sse:context_removed""#),
             "context rail must declare SSE triggers"
         );
         assert!(
@@ -4176,6 +4553,10 @@ mod tests {
                 summary: Some("a short summary".to_string()),
                 summary_html: Some("<p>a short summary</p>\n".to_string()),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 0,
             }],
         };
@@ -4214,6 +4595,10 @@ mod tests {
                 summary: None,
                 summary_html: None,
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 0,
             }],
         };
@@ -4243,6 +4628,10 @@ mod tests {
                 summary: Some("a short summary".to_string()),
                 summary_html: Some("<p>a short summary</p>\n".to_string()),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 0,
             }],
         };
@@ -4279,6 +4668,10 @@ mod tests {
                 summary: Some("**bold**".to_string()),
                 summary_html: Some(render_markdown("**bold**")),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 0,
             }],
         };
@@ -4306,6 +4699,10 @@ mod tests {
                 summary: Some("a summary".to_string()),
                 summary_html: Some("<p>a summary</p>\n".to_string()),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 0,
             }],
         };
@@ -4340,6 +4737,10 @@ mod tests {
                 summary: Some("design vibes".to_string()),
                 summary_html: Some("<p>design vibes</p>\n".to_string()),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 3,
             }],
         };
@@ -4364,6 +4765,10 @@ mod tests {
                 summary: Some("design vibes".to_string()),
                 summary_html: Some("<p>design vibes</p>\n".to_string()),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 1,
             }],
         };
@@ -4390,6 +4795,10 @@ mod tests {
                 summary: Some("design vibes".to_string()),
                 summary_html: Some("<p>design vibes</p>\n".to_string()),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 0,
             }],
         };
@@ -4414,6 +4823,10 @@ mod tests {
                 summary: None,
                 summary_html: None,
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 0,
             }],
         };
@@ -4439,6 +4852,10 @@ mod tests {
                 summary: Some("design vibes".to_string()),
                 summary_html: Some("<p>design vibes</p>\n".to_string()),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 2,
             }],
         };
@@ -4464,6 +4881,10 @@ mod tests {
                 summary: Some("design vibes".to_string()),
                 summary_html: Some("<p>design vibes</p>\n".to_string()),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 0,
             }],
         };
@@ -4471,6 +4892,278 @@ mod tests {
         assert!(
             !rendered.contains("0 cards") && !rendered.contains("0 card"),
             "panel should omit the count pill entirely when card_count is 0"
+        );
+    }
+
+    #[test]
+    fn attachment_kind_classifies_common_mimes() {
+        assert_eq!(
+            AttachmentKind::from_mime("image/png"),
+            AttachmentKind::ImageRaster
+        );
+        assert_eq!(
+            AttachmentKind::from_mime("image/JPEG"),
+            AttachmentKind::ImageRaster
+        );
+        assert_eq!(
+            AttachmentKind::from_mime("image/svg+xml"),
+            AttachmentKind::ImageSvg
+        );
+        assert_eq!(
+            AttachmentKind::from_mime("application/pdf"),
+            AttachmentKind::Pdf
+        );
+        assert_eq!(
+            AttachmentKind::from_mime("audio/mpeg"),
+            AttachmentKind::Audio
+        );
+        assert_eq!(
+            AttachmentKind::from_mime("video/mp4"),
+            AttachmentKind::Video
+        );
+        assert_eq!(
+            AttachmentKind::from_mime("text/markdown; charset=utf-8"),
+            AttachmentKind::Text
+        );
+        // Unknown / weird types fall through to Text.
+        assert_eq!(
+            AttachmentKind::from_mime("application/octet-stream"),
+            AttachmentKind::Text
+        );
+    }
+
+    #[test]
+    fn context_panel_renders_image_preview_for_raster_attachment() {
+        // Raster image attachments should render an inline `<img>` preview using
+        // the raw URL — that's what makes the panel multimodal-aware.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HSPEC".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "diagram.png".to_string(),
+                extension: "png".to_string(),
+                size_display: "10 KB".to_string(),
+                added_display: "12:00".to_string(),
+                summary: Some("a diagram".to_string()),
+                summary_html: Some("<p>a diagram</p>\n".to_string()),
+                summary_error: None,
+                user_notes: None,
+                card_count: 0,
+                kind: AttachmentKind::ImageRaster,
+                mime_type: "image/png".to_string(),
+                raw_url: "/web/specs/01HSPEC/context/01HATT/raw".to_string(),
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains(r#"class="context-preview-image""#),
+            "raster image should produce an <img> preview"
+        );
+        assert!(
+            rendered.contains(r#"src="/web/specs/01HSPEC/context/01HATT/raw""#),
+            "preview <img> must point at the /raw URL"
+        );
+        // Per-kind badge: image variant, not the generic note variant.
+        assert!(
+            rendered.contains("badge-image"),
+            "image attachments should use badge-image"
+        );
+    }
+
+    #[test]
+    fn context_panel_renders_pdf_icon_for_pdf_attachment() {
+        // PDF previews are an icon + filename rather than an inline render —
+        // browser PDF viewers are heavy and rarely useful at thumbnail size.
+        // Guards against a regression that lets PDFs fall through to <img src>.
+        let att_id = Ulid::new();
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HSPEC".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: att_id.to_string(),
+                filename: "spec-draft.pdf".to_string(),
+                extension: "pdf".to_string(),
+                size_display: "12.0 KB".to_string(),
+                added_display: "12:00".to_string(),
+                summary: Some("a brief draft".to_string()),
+                summary_html: Some("a brief draft".to_string()),
+                summary_error: None,
+                user_notes: None,
+                card_count: 0,
+                kind: AttachmentKind::Pdf,
+                mime_type: "application/pdf".to_string(),
+                raw_url: format!("/web/specs/01HSPEC/context/{}/raw", att_id),
+            }],
+        };
+        let rendered = tmpl.render().expect("template renders");
+
+        // PDF icon block present.
+        assert!(
+            rendered.contains("context-preview-pdf-icon"),
+            "expected PDF icon class in rendered HTML"
+        );
+        assert!(
+            rendered.contains("spec-draft.pdf"),
+            "expected filename in PDF icon block"
+        );
+
+        // No <img> tag — PDFs must not fall through to raster preview path.
+        assert!(
+            !rendered.contains("<img"),
+            "PDF preview must not render an <img> tag (would indicate kind classification regression)"
+        );
+
+        // The doc badge is used for PDFs.
+        assert!(
+            rendered.contains("badge-doc"),
+            "expected badge-doc on PDF attachment header"
+        );
+    }
+
+    #[test]
+    fn context_panel_renders_audio_preview_for_audio_attachment() {
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HSPEC".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "voice.mp3".to_string(),
+                extension: "mp3".to_string(),
+                size_display: "100 KB".to_string(),
+                added_display: "12:00".to_string(),
+                summary: Some("a voice memo".to_string()),
+                summary_html: Some("<p>a voice memo</p>\n".to_string()),
+                summary_error: None,
+                user_notes: None,
+                card_count: 0,
+                kind: AttachmentKind::Audio,
+                mime_type: "audio/mpeg".to_string(),
+                raw_url: "/web/specs/01HSPEC/context/01HATT/raw".to_string(),
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("<audio") && rendered.contains("controls"),
+            "audio attachment should produce an <audio controls> element"
+        );
+        assert!(
+            rendered.contains(r#"type="audio/mpeg""#),
+            "audio <source> must declare the original mime type"
+        );
+        assert!(rendered.contains("badge-audio"));
+    }
+
+    #[test]
+    fn context_panel_resummarize_button_targets_correct_endpoint() {
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HSPEC".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "notes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "1 KB".to_string(),
+                added_display: "12:00".to_string(),
+                summary: Some("a summary".to_string()),
+                summary_html: Some("<p>a summary</p>\n".to_string()),
+                summary_error: None,
+                user_notes: None,
+                card_count: 0,
+                kind: AttachmentKind::Text,
+                mime_type: "text/markdown".to_string(),
+                raw_url: "/raw".to_string(),
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains(r#"hx-post="/web/specs/01HSPEC/context/01HATT/resummarize""#),
+            "Resummarize button must POST to the resummarize endpoint"
+        );
+        assert!(
+            rendered.contains(">Resummarize<"),
+            "button label must be 'Resummarize'"
+        );
+    }
+
+    #[test]
+    fn context_panel_failure_state_no_summary_shows_card_error() {
+        // None summary + Some error: hard-failure state, no prior summary to
+        // fall back on. The error text should be the dominant content of the
+        // card body so the user knows to act.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HSPEC".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "broken.bin".to_string(),
+                extension: "bin".to_string(),
+                size_display: "1 KB".to_string(),
+                added_display: "12:00".to_string(),
+                summary: None,
+                summary_html: None,
+                summary_error: Some("provider rejected payload".to_string()),
+                user_notes: None,
+                card_count: 0,
+                kind: AttachmentKind::Text,
+                mime_type: "application/octet-stream".to_string(),
+                raw_url: "/raw".to_string(),
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains(r#"class="card-error""#),
+            "hard failure must render the .card-error block"
+        );
+        assert!(
+            rendered.contains("provider rejected payload"),
+            "error text must be visible to the user"
+        );
+        assert!(
+            rendered.contains("summary failed"),
+            "header pill should read 'summary failed'"
+        );
+        assert!(
+            !rendered.contains("Summarizing&hellip;"),
+            "must not show the pending spinner when there's an error"
+        );
+    }
+
+    #[test]
+    fn context_panel_stale_state_shows_summary_and_error_footnote() {
+        // Some summary + Some error: stale-with-error. Both the prior summary
+        // and the failure footnote must render so the user understands what's
+        // currently in context.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HSPEC".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "notes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "1 KB".to_string(),
+                added_display: "12:00".to_string(),
+                summary: Some("the original summary".to_string()),
+                summary_html: Some("<p>the original summary</p>\n".to_string()),
+                summary_error: Some("transient LLM error".to_string()),
+                user_notes: None,
+                card_count: 0,
+                kind: AttachmentKind::Text,
+                mime_type: "text/markdown".to_string(),
+                raw_url: "/raw".to_string(),
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("the original summary"),
+            "stale state must still render the prior summary"
+        );
+        assert!(
+            rendered.contains("context-summary-stale-error"),
+            "stale state must render the small footnote"
+        );
+        assert!(
+            rendered.contains("transient LLM error"),
+            "footnote must include the error text"
+        );
+        // Header pill flips to 'stale' for this combo.
+        assert!(
+            rendered.contains(">stale<"),
+            "header pill should read 'stale'"
         );
     }
 

@@ -3,12 +3,14 @@
 
 pub mod api;
 pub mod app_state;
+pub mod attachment_summarizer;
 pub mod auth;
 pub mod config;
 pub mod context_storage;
 pub mod providers;
 pub mod routes;
 pub mod summarizer;
+pub mod svg_raster;
 pub mod web;
 
 pub use app_state::{AppState, SharedState};

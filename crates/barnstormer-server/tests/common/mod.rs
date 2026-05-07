@@ -131,6 +131,44 @@ pub async fn setup_with_spec_in_active() -> TestCtx {
     }
 }
 
+/// Upload a file via the real `POST /web/specs/{id}/context` endpoint using
+/// a synthesized multipart body. The browser-claimed `content_type` is what
+/// the multipart `Content-Type` header for the `file` part says — the server
+/// is expected to sniff and ignore it. Returns the raw `Response` so callers
+/// can inspect status and body.
+pub async fn upload_file(
+    router: Router,
+    spec_id: Ulid,
+    filename: &str,
+    claimed_mime: &str,
+    bytes: &[u8],
+) -> http::Response<Body> {
+    let boundary = "----BarnstormerUploadHelper";
+    let mut body: Vec<u8> = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\n\
+             Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n\
+             Content-Type: {claimed_mime}\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/web/specs/{spec_id}/context"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+
+    router.oneshot(req).await.expect("upload request")
+}
+
 /// Context returned from `setup_with_attachment`. Includes everything from
 /// `TestCtx` plus the attachment id, the expected filename on disk, and the
 /// exact bytes the upload endpoint received.
@@ -213,4 +251,137 @@ pub async fn setup_with_attachment() -> AttachmentCtx {
         file_content: FILE_CONTENT,
         _tmp: ctx._tmp,
     }
+}
+
+/// Build an `AttachmentCtx` from arbitrary bytes + claimed mime + filename,
+/// uploaded through the real HTTP endpoint. Generalization of
+/// `setup_with_attachment` for callers that need a non-text fixture (image,
+/// PDF, audio, video) so they can exercise download / preview behavior.
+///
+/// `file_content` on the returned ctx is empty since binary bytes aren't
+/// guaranteed to be UTF-8; callers should not rely on it.
+pub async fn setup_with_attachment_bytes(
+    filename: &str,
+    claimed_mime: &str,
+    bytes: &[u8],
+) -> AttachmentCtx {
+    let ctx = setup_with_spec_in_brainstorming().await;
+
+    let resp = upload_file(
+        ctx.router.clone(),
+        ctx.spec_id,
+        filename,
+        claimed_mime,
+        bytes,
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        http::StatusCode::OK,
+        "upload in setup_with_attachment_bytes must succeed"
+    );
+
+    let handle = {
+        let actors = ctx.state.actors.read().await;
+        actors.get(&ctx.spec_id).expect("actor present").clone()
+    };
+    let attachment_id = {
+        let spec_state = handle.read_state().await;
+        assert_eq!(
+            spec_state.context_attachments.len(),
+            1,
+            "setup_with_attachment_bytes expected exactly one attachment"
+        );
+        spec_state.context_attachments[0].attachment_id
+    };
+
+    AttachmentCtx {
+        router: create_router(Arc::clone(&ctx.state), None),
+        state: ctx.state,
+        spec_id: ctx.spec_id,
+        attachment_id,
+        filename: filename.to_string(),
+        file_content: "",
+        _tmp: ctx._tmp,
+    }
+}
+
+/// Snapshot the test-only `SUMMARIZE_SPAWN_COUNT` atomic. Lets event-driven
+/// tests (notes-update fan-out, manual Resummarize) assert that a summarize
+/// task was actually spawned without standing up a real LLM client.
+pub fn summarize_spawn_count() -> usize {
+    barnstormer_server::summarizer::SUMMARIZE_SPAWN_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// PATCH the notes endpoint with a url-encoded form body. Mirrors how the
+/// browser submits the auto-save blur from the context panel — the handler
+/// expects `Form<NotesForm>` (i.e. `application/x-www-form-urlencoded`).
+///
+/// The `notes` value is percent-encoded for the body so spaces, `&`, and `=`
+/// round-trip through the form decoder unchanged.
+pub async fn patch_notes(
+    router: Router,
+    spec_id: Ulid,
+    attachment_id: Ulid,
+    notes: &str,
+) -> http::Response<Body> {
+    let body = format!("notes={}", percent_encode_form_value(notes));
+    let req = Request::builder()
+        .method("PATCH")
+        .uri(format!(
+            "/web/specs/{spec_id}/context/{attachment_id}/notes"
+        ))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .unwrap();
+    router.oneshot(req).await.expect("patch notes request")
+}
+
+/// POST a path with an empty body. Used by tests that need to hit a fire-and-
+/// forget endpoint (like `.../resummarize`) without crafting a multipart or
+/// form body. Returns the raw response for status / body inspection.
+pub async fn post(router: Router, path: &str) -> http::Response<Body> {
+    let req = Request::builder()
+        .method("POST")
+        .uri(path)
+        .body(Body::empty())
+        .unwrap();
+    router.oneshot(req).await.expect("post request")
+}
+
+/// DELETE the context attachment via the real HTTP endpoint. Mirrors the
+/// browser's "Remove" affordance — soft-removes the attachment and returns
+/// the re-rendered panel.
+pub async fn delete_attachment(
+    router: Router,
+    spec_id: Ulid,
+    attachment_id: Ulid,
+) -> http::Response<Body> {
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(format!("/web/specs/{spec_id}/context/{attachment_id}"))
+        .body(Body::empty())
+        .unwrap();
+    router
+        .oneshot(req)
+        .await
+        .expect("delete attachment request")
+}
+
+/// Minimal `application/x-www-form-urlencoded` value encoder — enough for the
+/// integration test surface. Spaces become `+`; everything outside the
+/// unreserved set becomes a `%HH` triple. Reaching for the `url` crate just
+/// for this would inflate dev-dependencies.
+fn percent_encode_form_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            b' ' => out.push('+'),
+            other => out.push_str(&format!("%{:02X}", other)),
+        }
+    }
+    out
 }

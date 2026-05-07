@@ -102,6 +102,10 @@ pub enum EventPayload {
         attachment_id: Ulid,
         summary: String,
     },
+    ContextSummarizeFailed {
+        attachment_id: Ulid,
+        reason: String,
+    },
     ContextNotesUpdated {
         attachment_id: Ulid,
         notes: String,
@@ -281,6 +285,7 @@ mod tests {
                 user_notes: None,
                 added_at: Utc::now(),
                 removed: false,
+                summary_error: None,
             },
         };
         let s = serde_json::to_string(&payload).unwrap();

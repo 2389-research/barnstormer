@@ -234,6 +234,9 @@ pub struct SwarmOrchestrator {
     /// Barnstormer data directory (home). Passed to tool registries so the
     /// retrieve_context tool can resolve attachment file paths.
     pub home: PathBuf,
+    /// Question-mode dispatcher for the retrieve_context tool. Implemented by
+    /// the server crate so the agent crate stays free of summarizer internals.
+    pub summarizer: Arc<dyn crate::AttachmentSummarizer>,
 }
 
 impl SwarmOrchestrator {
@@ -242,10 +245,14 @@ impl SwarmOrchestrator {
     ///
     /// `home` is the barnstormer data directory; it is passed to tool
     /// registries so tools like `retrieve_context` can resolve attachment files.
+    /// `summarizer` is the question-mode dispatcher used by the
+    /// `retrieve_context` tool; the server injects an impl that calls back into
+    /// its summarizer module.
     pub fn with_defaults(
         spec_id: Ulid,
         actor: SpecActorHandle,
         home: PathBuf,
+        summarizer: Arc<dyn crate::AttachmentSummarizer>,
     ) -> Result<Self, anyhow::Error> {
         let provider = std::env::var("BARNSTORMER_DEFAULT_PROVIDER")
             .unwrap_or_else(|_| "anthropic".to_string());
@@ -284,6 +291,7 @@ impl SwarmOrchestrator {
             human_message_notify: Arc::new(Notify::new()),
             pending_transition_question: Arc::new(Mutex::new(None)),
             home,
+            summarizer,
         })
     }
 
@@ -295,6 +303,7 @@ impl SwarmOrchestrator {
         client: Arc<dyn LlmClient>,
         model: String,
         home: PathBuf,
+        summarizer: Arc<dyn crate::AttachmentSummarizer>,
     ) -> Self {
         let actor = Arc::new(actor);
         let event_receivers = agents.iter().map(|_| actor.subscribe()).collect();
@@ -311,6 +320,7 @@ impl SwarmOrchestrator {
             human_message_notify: Arc::new(Notify::new()),
             pending_transition_question: Arc::new(Mutex::new(None)),
             home,
+            summarizer,
         }
     }
 
@@ -417,6 +427,7 @@ impl SwarmOrchestrator {
         model: &str,
         phase: &SpecPhase,
         home: &Path,
+        summarizer: &Arc<dyn crate::AttachmentSummarizer>,
     ) -> bool {
         // Start agent step
         let start_cmd = Command::StartAgentStep {
@@ -438,6 +449,7 @@ impl SwarmOrchestrator {
             Arc::clone(pending_transition_question),
             runner.agent_id.clone(),
             home.to_path_buf(),
+            Arc::clone(summarizer),
         )
         .await;
 
@@ -589,6 +601,7 @@ async fn run_agent_by_index(
         let client = Arc::clone(&s.client);
         let model = s.model.clone();
         let home = s.home.clone();
+        let summarizer = Arc::clone(&s.summarizer);
         match s.agents[index].take() {
             Some(runner) => {
                 // Swap out the receiver with a fresh one; the old one keeps its
@@ -604,6 +617,7 @@ async fn run_agent_by_index(
                     client,
                     model,
                     home,
+                    summarizer,
                 ))
             }
             None => {
@@ -621,6 +635,7 @@ async fn run_agent_by_index(
         client,
         model,
         home,
+        summarizer,
     )) = extracted
     else {
         return false;
@@ -660,6 +675,7 @@ async fn run_agent_by_index(
         &model,
         &phase,
         &home,
+        &summarizer,
     )
     .await;
 
@@ -999,6 +1015,27 @@ mod tests {
         Arc::new(StubLlmClient::done())
     }
 
+    /// No-op `AttachmentSummarizer` for swarm tests — never invoked, since
+    /// `retrieve_context(question=...)` isn't exercised by the stub LLM client.
+    #[derive(Debug)]
+    struct StubSummarizer;
+
+    #[async_trait::async_trait]
+    impl crate::AttachmentSummarizer for StubSummarizer {
+        async fn answer_question(
+            &self,
+            _spec_id: Ulid,
+            _attachment: &barnstormer_core::state::ContextAttachment,
+            _question: &str,
+        ) -> Result<String, String> {
+            Ok("stub".into())
+        }
+    }
+
+    fn make_test_summarizer() -> Arc<dyn crate::AttachmentSummarizer> {
+        Arc::new(StubSummarizer)
+    }
+
     #[tokio::test]
     async fn swarm_creates_default_agents() {
         let (spec_id, actor) = make_test_actor();
@@ -1022,6 +1059,7 @@ mod tests {
             make_test_client(),
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
         );
 
         assert_eq!(swarm.agents.len(), 4);
@@ -1050,6 +1088,7 @@ mod tests {
             make_test_client(),
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
         );
 
         assert!(!swarm.is_paused());
@@ -1072,6 +1111,7 @@ mod tests {
         let pending_transition = Arc::new(Mutex::new(None));
 
         let home = PathBuf::from("/tmp/barnstormer-test");
+        let summarizer = make_test_summarizer();
         let did_work = SwarmOrchestrator::run_agent_step(
             &mut runner,
             &actor_arc,
@@ -1081,6 +1121,7 @@ mod tests {
             "stub-model",
             &SpecPhase::Refining,
             &home,
+            &summarizer,
         )
         .await;
 
@@ -1263,6 +1304,7 @@ mod tests {
             user_notes: Some("from kickoff".to_string()),
             added_at: Utc::now(),
             removed: false,
+            summary_error: None,
         }];
 
         let prompt = build_task_prompt(&ctx);
@@ -1295,6 +1337,7 @@ mod tests {
             user_notes: None,
             added_at: Utc::now(),
             removed: false,
+            summary_error: None,
         }];
 
         let prompt = build_task_prompt(&ctx);
@@ -1318,6 +1361,7 @@ mod tests {
             user_notes: Some(String::new()),
             added_at: Utc::now(),
             removed: false,
+            summary_error: None,
         }];
 
         let prompt = build_task_prompt(&ctx);
@@ -1348,6 +1392,7 @@ mod tests {
             user_notes: Some("from kickoff".to_string()),
             added_at: Utc::now(),
             removed: false,
+            summary_error: None,
         };
         let section = render_context_files_section(std::slice::from_ref(&att));
         assert!(section.contains("## Context Files"));
@@ -1371,6 +1416,7 @@ mod tests {
             user_notes: None,
             added_at: Utc::now(),
             removed: false,
+            summary_error: None,
         };
         let section = render_context_files_section(std::slice::from_ref(&att));
         // New intro must frame attachments as source material for synthesis, not
@@ -1563,6 +1609,7 @@ mod tests {
             make_test_client(),
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
         );
         let actor_handle = Arc::clone(&swarm.actor);
         let pending = Arc::clone(&swarm.pending_transition_question);
@@ -1624,6 +1671,7 @@ mod tests {
             make_test_client(),
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
         );
         let actor_handle = Arc::clone(&swarm.actor);
 
@@ -1701,6 +1749,7 @@ mod tests {
             make_test_client(),
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
         );
 
         // Simulate what propose_transition does: ask a Boolean question and
@@ -1779,6 +1828,7 @@ mod tests {
             make_test_client(),
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
         );
         let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
 
@@ -1808,6 +1858,7 @@ mod tests {
             make_test_client(),
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
         );
         assert_eq!(swarm.agent_count(), 2);
     }
@@ -1826,6 +1877,7 @@ mod tests {
             make_test_client(),
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
         );
         // Each agent should have a dedicated event receiver
         assert_eq!(
@@ -1863,6 +1915,7 @@ mod tests {
             make_test_client(),
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
         );
 
         let map = swarm.collect_agent_contexts();
@@ -1905,6 +1958,7 @@ mod tests {
             make_test_client(),
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
         );
 
         // Collect contexts
@@ -1982,6 +2036,7 @@ mod tests {
             make_test_client(),
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
         );
 
         // Restore the old contexts onto the new agents
@@ -2015,6 +2070,7 @@ mod tests {
             make_test_client(),
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
         );
         let notify = Arc::clone(&swarm.human_message_notify);
         let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
@@ -2050,6 +2106,7 @@ mod tests {
             make_test_client(),
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
         );
         assert_eq!(find_manager_index(&swarm), Some(1));
     }
@@ -2068,6 +2125,7 @@ mod tests {
             make_test_client(),
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
         );
         assert_eq!(find_manager_index(&swarm), None);
     }
@@ -2115,6 +2173,7 @@ mod tests {
             make_test_client(),
             "test-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
         );
 
         // Verify: only Manager should run during brainstorming
@@ -2159,6 +2218,7 @@ mod tests {
             make_test_client(),
             "test-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
         );
 
         // All 3 agents should be present and none skipped in Active

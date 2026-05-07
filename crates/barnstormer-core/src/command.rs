@@ -92,6 +92,10 @@ pub enum Command {
         attachment_id: Ulid,
         summary: String,
     },
+    MarkContextSummarizeFailed {
+        attachment_id: Ulid,
+        reason: String,
+    },
     UpdateContextNotes {
         attachment_id: Ulid,
         notes: String,
@@ -288,6 +292,19 @@ mod tests {
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("\"type\":\"RemoveContext\""));
+    }
+
+    #[test]
+    fn mark_context_summarize_failed_command_serializes() {
+        let cmd = Command::MarkContextSummarizeFailed {
+            attachment_id: Ulid::new(),
+            reason: "unsupported media kind".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"MarkContextSummarizeFailed\""));
+        assert!(json.contains("\"reason\":\"unsupported media kind\""));
+        let round: Command = serde_json::from_str(&json).unwrap();
+        matches!(round, Command::MarkContextSummarizeFailed { .. });
     }
 
     #[test]
