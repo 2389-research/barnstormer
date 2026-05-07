@@ -669,6 +669,13 @@ mod tests {
                 EventPayload::SnapshotWritten { snapshot_id: 42 },
                 "snapshot #42 written",
             ),
+            (
+                EventPayload::ContextSummarizeFailed {
+                    attachment_id: Ulid::new(),
+                    reason: "unsupported media kind".to_string(),
+                },
+                "summarize failed: unsupported media kind",
+            ),
         ];
 
         for (payload, expected_substr) in &payloads_and_expected {

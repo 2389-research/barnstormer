@@ -157,7 +157,7 @@ pub fn sniff_mime(bytes: &[u8], filename: &str) -> Option<String> {
 ///   `MediaSource::Path` so mux reads the file at request time
 /// - Anything else (text/*, application/json, etc.) → `Text { content }` with
 ///   the file read as UTF-8
-pub fn build_summarizer_input(
+pub async fn build_summarizer_input(
     home: &Path,
     spec_id: Ulid,
     attachment: &barnstormer_core::state::ContextAttachment,
@@ -170,7 +170,7 @@ pub fn build_summarizer_input(
     let mime = raw.split(';').next().unwrap_or(&raw).trim().to_string();
 
     if mime == "image/svg+xml" {
-        let markup = std::fs::read_to_string(&path)?;
+        let markup = tokio::fs::read_to_string(&path).await?;
         let raster = dir.join("rasterized.png");
         let raster_path = if raster.exists() { Some(raster) } else { None };
         return Ok(crate::summarizer::SummarizerInput::Svg {
@@ -181,7 +181,7 @@ pub fn build_summarizer_input(
     if let Some(kind) = media_kind_from_mime(&mime) {
         return Ok(crate::summarizer::SummarizerInput::Media { kind, mime, path });
     }
-    let content = std::fs::read_to_string(&path)?;
+    let content = tokio::fs::read_to_string(&path).await?;
     Ok(crate::summarizer::SummarizerInput::Text { content })
 }
 
@@ -430,8 +430,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn build_input_for_text_attachment() {
+    #[tokio::test]
+    async fn build_input_for_text_attachment() {
         use crate::summarizer::SummarizerInput;
         use barnstormer_core::state::ContextAttachment;
         let tmp = tempfile::tempdir().unwrap();
@@ -451,15 +451,15 @@ mod tests {
             removed: false,
             summary_error: None,
         };
-        let input = build_summarizer_input(home, spec_id, &att).unwrap();
+        let input = build_summarizer_input(home, spec_id, &att).await.unwrap();
         match input {
             SummarizerInput::Text { content } => assert_eq!(content, "hi"),
             other => panic!("expected Text, got {other:?}"),
         }
     }
 
-    #[test]
-    fn build_input_for_image_attachment_uses_path() {
+    #[tokio::test]
+    async fn build_input_for_image_attachment_uses_path() {
         use crate::summarizer::SummarizerInput;
         use barnstormer_core::state::ContextAttachment;
         use mux::llm::MediaKind;
@@ -480,15 +480,15 @@ mod tests {
             removed: false,
             summary_error: None,
         };
-        let input = build_summarizer_input(home, spec_id, &att).unwrap();
+        let input = build_summarizer_input(home, spec_id, &att).await.unwrap();
         match input {
             SummarizerInput::Media { kind, .. } => assert_eq!(kind, MediaKind::Image),
             other => panic!("expected Media, got {other:?}"),
         }
     }
 
-    #[test]
-    fn build_input_for_svg_uses_dual_form_when_raster_present() {
+    #[tokio::test]
+    async fn build_input_for_svg_uses_dual_form_when_raster_present() {
         use crate::summarizer::SummarizerInput;
         use barnstormer_core::state::ContextAttachment;
         let tmp = tempfile::tempdir().unwrap();
@@ -510,7 +510,7 @@ mod tests {
             removed: false,
             summary_error: None,
         };
-        let input = build_summarizer_input(home, spec_id, &att).unwrap();
+        let input = build_summarizer_input(home, spec_id, &att).await.unwrap();
         match input {
             SummarizerInput::Svg {
                 raster_path: Some(_),
@@ -520,8 +520,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn build_input_for_svg_falls_back_when_raster_missing() {
+    #[tokio::test]
+    async fn build_input_for_svg_falls_back_when_raster_missing() {
         use crate::summarizer::SummarizerInput;
         use barnstormer_core::state::ContextAttachment;
         let tmp = tempfile::tempdir().unwrap();
@@ -542,7 +542,7 @@ mod tests {
             removed: false,
             summary_error: None,
         };
-        let input = build_summarizer_input(home, spec_id, &att).unwrap();
+        let input = build_summarizer_input(home, spec_id, &att).await.unwrap();
         match input {
             SummarizerInput::Svg {
                 raster_path: None, ..
@@ -551,8 +551,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn build_input_for_audio_attachment() {
+    #[tokio::test]
+    async fn build_input_for_audio_attachment() {
         use crate::summarizer::SummarizerInput;
         use barnstormer_core::state::ContextAttachment;
         use mux::llm::MediaKind;
@@ -573,7 +573,7 @@ mod tests {
             removed: false,
             summary_error: None,
         };
-        let input = build_summarizer_input(home, spec_id, &att).unwrap();
+        let input = build_summarizer_input(home, spec_id, &att).await.unwrap();
         match input {
             SummarizerInput::Media { kind, .. } => assert_eq!(kind, MediaKind::Audio),
             other => panic!("expected Media (Audio), got {other:?}"),

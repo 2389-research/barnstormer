@@ -27,6 +27,7 @@ impl AttachmentSummarizer for ServerSummarizer {
         question: &str,
     ) -> Result<String, String> {
         let input = crate::context_storage::build_summarizer_input(&self.home, spec_id, attachment)
+            .await
             .map_err(|e| format!("could not build summarizer input: {e}"))?;
         crate::summarizer::summarize_now(
             &attachment.filename,

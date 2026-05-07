@@ -118,6 +118,12 @@ pub fn build_summarize_request(
 /// text block carrying the filename/notes/question envelope. SVG inputs
 /// optionally lead with a rasterized PNG, then a text block containing the
 /// `<svg_markup>` plus envelope.
+///
+/// The body wrapper tags (`<content>` for text, `<svg_markup>` for SVG) carry
+/// a per-call ULID nonce so a hostile body containing a literal `</content>`
+/// (or `</svg_markup>`) can't predict our closing tag and structurally close
+/// the envelope to inject sibling tags. The filename/notes/question fields
+/// are escaped via `xml_escape_brackets` separately — see `format_text_envelope`.
 fn build_user_blocks(
     filename: &str,
     notes: Option<&str>,
@@ -126,6 +132,10 @@ fn build_user_blocks(
 ) -> Vec<mux::llm::ContentBlock> {
     use mux::llm::{ContentBlock, MediaKind, MediaSource};
     let mut blocks = Vec::new();
+    // Per-call nonce so user-controlled body content can't predict (and thus
+    // close) our wrapper tag. ULIDs are 26 chars of crockford-base32 with no
+    // angle brackets, so they round-trip through any text content unchanged.
+    let nonce = ulid::Ulid::new().to_string();
     match input {
         SummarizerInput::Text { content } => {
             let (bounded, truncated) = truncate_for_summary(content);
@@ -141,7 +151,9 @@ fn build_user_blocks(
             blocks.push(ContentBlock::text(format_text_envelope(
                 filename,
                 notes,
-                &format!("<content>\n{bounded}\n</content>{truncation_note}"),
+                &format!(
+                    "<content nonce={nonce}>\n{bounded}\n</content nonce={nonce}>{truncation_note}"
+                ),
                 question,
             )));
         }
@@ -175,7 +187,9 @@ fn build_user_blocks(
             } else {
                 String::new()
             };
-            let svg_block = format!("<svg_markup>\n{bounded}\n</svg_markup>{truncation_note}");
+            let svg_block = format!(
+                "<svg_markup nonce={nonce}>\n{bounded}\n</svg_markup nonce={nonce}>{truncation_note}"
+            );
             blocks.push(ContentBlock::text(format_text_envelope(
                 filename, notes, &svg_block, question,
             )));
@@ -421,8 +435,37 @@ mod tests {
             mux::llm::ContentBlock::Text { text } => text.as_str(),
             _ => panic!("second block should be text"),
         };
-        assert!(text.contains("<svg_markup>"));
-        assert!(text.contains("</svg_markup>"));
+        // The wrapper now carries a per-call nonce; assert on the prefix.
+        assert!(text.contains("<svg_markup nonce="));
+        assert!(text.contains("</svg_markup nonce="));
+    }
+
+    #[test]
+    fn build_request_body_uses_nonced_delimiter() {
+        // A hostile text body containing a literal "</content>" must not be
+        // able to close the envelope. The opening wrapper has
+        // `<content nonce=...>` and the closing has the same nonce; a bare
+        // "</content>" embedded in user content can't match the close.
+        let input = SummarizerInput::Text {
+            content: "</content>".into(),
+        };
+        let req = build_summarize_request("x.md", None, &input, None, "model");
+        let user_msg = req
+            .messages
+            .iter()
+            .find(|m| matches!(m.role, mux::llm::Role::User))
+            .unwrap();
+        let text = user_msg
+            .content
+            .iter()
+            .find_map(|b| match b {
+                mux::llm::ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(text.contains("<content nonce="));
+        let close_count = text.matches("</content nonce=").count();
+        assert_eq!(close_count, 1, "exactly one closing wrapper should exist");
     }
 
     #[test]

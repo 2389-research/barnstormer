@@ -295,6 +295,19 @@ mod tests {
     }
 
     #[test]
+    fn mark_context_summarize_failed_command_serializes() {
+        let cmd = Command::MarkContextSummarizeFailed {
+            attachment_id: Ulid::new(),
+            reason: "unsupported media kind".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"type\":\"MarkContextSummarizeFailed\""));
+        assert!(json.contains("\"reason\":\"unsupported media kind\""));
+        let round: Command = serde_json::from_str(&json).unwrap();
+        matches!(round, Command::MarkContextSummarizeFailed { .. });
+    }
+
+    #[test]
     fn create_card_deserializes_without_source_attachment_id_field() {
         // Clients that don't know about the new field must still be able to
         // emit a CreateCard command.

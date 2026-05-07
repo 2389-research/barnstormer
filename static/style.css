@@ -2298,7 +2298,7 @@ details[open] > .context-card-head .collapsed-notes {
     border-radius: var(--radius);
     margin-bottom: var(--spacing-sm);
     font-size: 0.9rem;
-    word-break: break-word;
+    overflow-wrap: break-word;
 }
 
 /* Stale-with-error footnote: shown alongside a still-valid summary when the
@@ -2321,5 +2321,5 @@ details[open] > .context-card-head .collapsed-notes {
     border-left: 3px solid var(--danger);
     font-size: 0.82rem;
     margin-bottom: var(--spacing-sm);
-    word-break: break-word;
+    overflow-wrap: break-word;
 }

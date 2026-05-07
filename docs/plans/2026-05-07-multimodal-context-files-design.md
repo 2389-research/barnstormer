@@ -140,7 +140,7 @@ can't produce a summary. Participates in the undo stack.
 
 Unchanged, except for SVG which gets a cached rasterized PNG:
 
-```
+```text
 ~/.barnstormer/specs/{spec_id}/context/{attachment_id}/
     {filename}              # original bytes
     rasterized.png          # SVG-only, cached at upload time

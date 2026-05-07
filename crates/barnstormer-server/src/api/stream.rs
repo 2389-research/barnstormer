@@ -212,5 +212,13 @@ mod tests {
             }),
             "undo_applied"
         );
+
+        assert_eq!(
+            event_type_name(&EventPayload::ContextSummarizeFailed {
+                attachment_id: Ulid::new(),
+                reason: String::new(),
+            }),
+            "context_summarize_failed"
+        );
     }
 }

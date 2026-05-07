@@ -56,10 +56,18 @@ impl Tool for RetrieveContextTool {
         let attachment_id: Ulid = id_str
             .parse()
             .map_err(|e| anyhow::anyhow!("bad attachment id: {e}"))?;
-        let question = params
-            .get("question")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
+        // Strict typing: a tool caller passing `question: 42` (number) or
+        // `question: ""` (empty) was almost certainly a mistake — surface as
+        // an error rather than silently dropping into the no-question path.
+        // `question: null` and an absent key both stay as None (text path).
+        let question = match params.get("question") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(q)) if !q.trim().is_empty() => Some(q.clone()),
+            Some(serde_json::Value::String(_)) => {
+                return Err(anyhow::anyhow!("'question' must not be empty"));
+            }
+            Some(_) => return Err(anyhow::anyhow!("'question' must be a string")),
+        };
 
         let state = self.actor.read_state().await;
         let att_opt = state
@@ -518,6 +526,92 @@ mod tests {
             "should return text, not error, when stale summary is available"
         );
         assert_eq!(result.content, "the prior summary");
+    }
+
+    #[tokio::test]
+    async fn retrieve_context_rejects_non_string_question() {
+        // The tool's JSON schema declares `question` as a string. A caller that
+        // sends a number or an empty string is almost certainly mis-using the
+        // tool; surface as an explicit error rather than silently dropping
+        // into the no-question (summary) path. `null` and absent both stay
+        // None (text-path / stored-summary path).
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_path_buf();
+
+        let spec_id = Ulid::new();
+        let handle = actor::spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".to_string(),
+                one_liner: "o".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "notes.md".to_string(),
+                mime_type: "text/markdown".to_string(),
+                size_bytes: 5,
+            })
+            .await
+            .unwrap();
+
+        // Write text content so the no-question text path would otherwise
+        // succeed if the validator missed.
+        let dir = home
+            .join("specs")
+            .join(spec_id.to_string())
+            .join("context")
+            .join(attachment_id.to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("notes.md"), "hello").unwrap();
+
+        let tool = RetrieveContextTool {
+            actor: Arc::new(handle),
+            home,
+            summarizer: stub(),
+        };
+
+        // Number — must error.
+        let err = tool
+            .execute(json!({
+                "attachment_id": attachment_id.to_string(),
+                "question": 42,
+            }))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("must be a string"),
+            "expected type-error, got: {err}"
+        );
+
+        // Whitespace-only string — must error as empty.
+        let err = tool
+            .execute(json!({
+                "attachment_id": attachment_id.to_string(),
+                "question": "   ",
+            }))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("must not be empty"),
+            "expected empty-error, got: {err}"
+        );
+
+        // Null — must be treated as None (text path).
+        let result = tool
+            .execute(json!({
+                "attachment_id": attachment_id.to_string(),
+                "question": serde_json::Value::Null,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(result.content, "hello");
+        assert!(!result.is_error);
     }
 
     #[tokio::test]

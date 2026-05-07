@@ -384,11 +384,16 @@ pub async fn create_spec(
             Err(e) => {
                 tracing::error!("failed to attach context {filename}: {e}");
                 // The bytes are on disk but no event references them — clean up
-                // so the filesystem doesn't drift from actor state.
-                if let Err(remove_err) = std::fs::remove_file(&path) {
-                    tracing::warn!(
-                        "failed to clean up orphaned context file {filename}: {remove_err}"
-                    );
+                // so the filesystem doesn't drift from actor state. Remove the
+                // whole attachment dir so we also drop SVG's `rasterized.png`
+                // sibling instead of leaving it orphaned.
+                let dir = crate::context_storage::attachment_dir(
+                    &state.barnstormer_home,
+                    spec_id,
+                    attachment_id,
+                );
+                if let Err(remove_err) = std::fs::remove_dir_all(&dir) {
+                    tracing::warn!("failed to clean up orphaned context dir {dir:?}: {remove_err}");
                 }
                 continue;
             }
@@ -431,7 +436,9 @@ pub async fn create_spec(
                 &state.barnstormer_home,
                 spec_id,
                 &att,
-            ) {
+            )
+            .await
+            {
                 Ok(input) => {
                     crate::summarizer::spawn_summarize(
                         handle.clone(),
@@ -2867,8 +2874,12 @@ pub async fn upload_context(
         // Bytes already on disk — without the event referencing them they'd
         // leak and the filesystem would drift from actor state. Best-effort
         // cleanup (failure is logged but doesn't block the error response).
-        if let Err(remove_err) = std::fs::remove_file(&path) {
-            tracing::warn!("failed to clean up orphaned context file {filename}: {remove_err}");
+        // Remove the whole attachment dir so we also drop SVG's
+        // `rasterized.png` sibling instead of leaving it orphaned.
+        let dir =
+            crate::context_storage::attachment_dir(&state.barnstormer_home, spec_id, attachment_id);
+        if let Err(remove_err) = std::fs::remove_dir_all(&dir) {
+            tracing::warn!("failed to clean up orphaned context dir {dir:?}: {remove_err}");
         }
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -2889,6 +2900,7 @@ pub async fn upload_context(
         .cloned();
     if let Some(att) = attachment_opt {
         match crate::context_storage::build_summarizer_input(&state.barnstormer_home, spec_id, &att)
+            .await
         {
             Ok(input) => {
                 crate::summarizer::spawn_summarize(
@@ -2963,7 +2975,9 @@ pub async fn update_context_notes(
                     &state.barnstormer_home,
                     spec_id,
                     &att,
-                ) {
+                )
+                .await
+                {
                     Ok(input) => {
                         crate::summarizer::spawn_summarize(
                             handle.clone(),
@@ -3075,7 +3089,9 @@ pub async fn resummarize_context(
         None => return (StatusCode::NOT_FOUND, "attachment not found").into_response(),
     };
 
-    match crate::context_storage::build_summarizer_input(&state.barnstormer_home, spec_id, &att) {
+    match crate::context_storage::build_summarizer_input(&state.barnstormer_home, spec_id, &att)
+        .await
+    {
         Ok(input) => {
             crate::summarizer::spawn_summarize(
                 handle.clone(),
@@ -3105,15 +3121,26 @@ pub async fn resummarize_context(
 /// `X-Content-Type-Options: nosniff` as defense-in-depth so the browser
 /// doesn't override the declared type.
 ///
-/// One narrow exception: stored `text/html` is downgraded to
-/// `text/plain; charset=utf-8` on the wire. HTML is on the upload whitelist
-/// (so users can attach pages they want to reference), but serving it back as
-/// `text/html` would let any `<script>` inside execute in this origin when a
-/// user navigates directly to the `/raw` URL — a stored-XSS foothold. Other
-/// sniffed mimes (`image/*`, `application/pdf`, `audio/*`, `video/*`,
-/// `text/plain`, `text/markdown`) don't execute JS, so they pass through with
-/// their real `Content-Type` so `<img>`, `<audio>`, `<video>`, and PDF
-/// viewers render correctly.
+/// Two narrow exceptions to neuter direct-navigation script execution:
+///
+/// - `text/html` is downgraded to `text/plain; charset=utf-8` on the wire.
+///   HTML is on the upload whitelist (so users can attach pages they want to
+///   reference), but serving it back as `text/html` would let any `<script>`
+///   inside execute in this origin when a user navigates directly to the
+///   `/raw` URL — a stored-XSS foothold.
+/// - `image/svg+xml` is served as `image/png` by reading the cached
+///   `rasterized.png` produced at upload time. SVG is a script-executable
+///   format (`<script>`, `<foreignObject>` w/ HTML, JS event handlers), so
+///   serving the original SVG bytes with `image/svg+xml` would have the same
+///   stored-XSS exposure as HTML. The original SVG is preserved on disk; this
+///   only affects what `/raw` returns. If the rasterized cache is missing
+///   (rasterization failed at upload), we fall back to
+///   `text/plain; charset=utf-8` so the bytes still surface but can't run.
+///
+/// Other sniffed mimes (`image/png`, `image/jpeg`, `application/pdf`,
+/// `audio/*`, `video/*`, `text/plain`, `text/markdown`) don't execute JS, so
+/// they pass through with their real `Content-Type` so `<img>`, `<audio>`,
+/// `<video>`, and PDF viewers render correctly.
 pub async fn download_context(
     State(state): State<SharedState>,
     Path((id, att_id)): Path<(String, String)>,
@@ -3160,23 +3187,45 @@ pub async fn download_context(
                 .unwrap_or(&stored)
                 .trim()
                 .to_ascii_lowercase();
-            // HTML uploads are stored as bytes but served back as text/plain
-            // to neuter stored-XSS via direct navigation to the /raw URL.
-            // Other types (image/*, application/pdf, audio/*, video/*,
-            // text/plain, text/markdown) don't execute JS so we serve their
-            // real mime so `<img>`, `<audio>`, `<video>`, and PDF viewers
-            // render correctly.
-            let served_mime: String = if normalized == "text/html" {
-                "text/plain; charset=utf-8".to_string()
+            // SVG and HTML are both script-executable formats. We never serve
+            // them back with their original mime on /raw — direct navigation
+            // would give stored XSS in this origin.
+            //
+            // - SVG: serve the cached rasterized PNG (produced at upload
+            //   time). If the raster is missing (rasterization failed),
+            //   fall back to text/plain so bytes still surface but can't run.
+            // - HTML: downgrade to text/plain (no rasterized form exists).
+            //
+            // Other types (image/png, image/jpeg, application/pdf, audio/*,
+            // video/*, text/plain, text/markdown) don't execute JS so we
+            // serve their real mime so `<img>`, `<audio>`, `<video>`, and
+            // PDF viewers render correctly.
+            let (final_bytes, final_mime): (Vec<u8>, String) = if normalized == "image/svg+xml" {
+                let raster_path = crate::context_storage::attachment_dir(
+                    &state.barnstormer_home,
+                    spec_id,
+                    attachment_id,
+                )
+                .join("rasterized.png");
+                if raster_path.exists() {
+                    match std::fs::read(&raster_path) {
+                        Ok(b) => (b, "image/png".to_string()),
+                        Err(_) => (bytes, "text/plain; charset=utf-8".to_string()),
+                    }
+                } else {
+                    (bytes, "text/plain; charset=utf-8".to_string())
+                }
+            } else if normalized == "text/html" {
+                (bytes, "text/plain; charset=utf-8".to_string())
             } else {
-                stored
+                (bytes, stored)
             };
             (
                 [
-                    (axum::http::header::CONTENT_TYPE, served_mime.as_str()),
+                    (axum::http::header::CONTENT_TYPE, final_mime.as_str()),
                     (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
                 ],
-                bytes,
+                final_bytes,
             )
                 .into_response()
         }

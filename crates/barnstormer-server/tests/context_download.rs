@@ -240,3 +240,123 @@ async fn get_raw_unknown_attachment_returns_404() {
     let resp = ctx.router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn download_svg_serves_rasterized_png_to_neuter_xss() {
+    // SVG attachments are served back as the cached rasterized.png on the
+    // /raw endpoint to neuter direct-navigation script execution. The
+    // original SVG is preserved on disk; this only affects /raw output.
+    let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 16 16\"><rect width=\"16\" height=\"16\" fill=\"red\"/></svg>";
+    let ctx = common::setup_with_attachment_bytes("logo.svg", "image/svg+xml", svg).await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/web/specs/{}/context/{}/raw",
+            ctx.spec_id, ctx.attachment_id
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let ct = resp
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .expect("Content-Type header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        ct, "image/png",
+        "expected SVG to be served back as image/png from cached raster, got {ct}"
+    );
+
+    let nosniff = resp
+        .headers()
+        .get(http::header::X_CONTENT_TYPE_OPTIONS)
+        .expect("X-Content-Type-Options header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(nosniff, "nosniff");
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    // PNG magic: \x89 P N G \r \n \x1a \n
+    assert!(
+        body.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "response body should start with PNG magic; got: {:?}",
+        &body[..body.len().min(16)]
+    );
+}
+
+#[tokio::test]
+async fn download_svg_without_raster_serves_text_plain_fallback() {
+    // If the rasterized cache is missing (rasterization failed at upload),
+    // the /raw endpoint falls back to text/plain so direct nav can't
+    // execute the SVG's embedded scripts. We construct the attachment
+    // directly via Command::AttachContext so no auto-raster fires.
+    use barnstormer_core::SpecPhase;
+
+    let ctx = common::setup_with_spec_in_brainstorming().await;
+    let attachment_id = Ulid::new();
+
+    // Write the SVG bytes to disk where download_context expects them, but
+    // skip rasterized.png on purpose so we exercise the missing-cache path.
+    let dir = ctx
+        .state
+        .barnstormer_home
+        .join("specs")
+        .join(ctx.spec_id.to_string())
+        .join("context")
+        .join(attachment_id.to_string());
+    std::fs::create_dir_all(&dir).unwrap();
+    let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 16 16\"><rect/></svg>";
+    std::fs::write(dir.join("logo.svg"), svg).unwrap();
+
+    // Send AttachContext via the actor handle directly. Matches how
+    // setup_with_attachment_bytes leaves the actor state, minus the upload
+    // pipeline's auto-rasterization.
+    let handle = {
+        let actors = ctx.state.actors.read().await;
+        actors.get(&ctx.spec_id).expect("actor present").clone()
+    };
+    let phase = handle.read_state().await.phase.clone();
+    assert_eq!(phase, SpecPhase::Brainstorming);
+    handle
+        .send_command(Command::AttachContext {
+            attachment_id,
+            filename: "logo.svg".to_string(),
+            mime_type: "image/svg+xml".to_string(),
+            size_bytes: svg.len() as u64,
+        })
+        .await
+        .expect("attach via command");
+
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/web/specs/{}/context/{}/raw",
+            ctx.spec_id, attachment_id
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = ctx.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let ct = resp
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .expect("Content-Type header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        ct.starts_with("text/plain"),
+        "expected text/plain fallback when rasterized.png is missing, got {ct}"
+    );
+}
