@@ -33,6 +33,8 @@ pub struct ContextAttachment {
     pub user_notes: Option<String>,
     pub added_at: DateTime<Utc>,
     pub removed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_error: Option<String>,
 }
 
 /// Tracks which lifecycle phase a spec is in.
@@ -1149,6 +1151,7 @@ mod tests {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 },
             },
         );
@@ -1174,6 +1177,7 @@ mod tests {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 },
             },
         ));
@@ -1208,6 +1212,7 @@ mod tests {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 },
             },
         ));
@@ -1242,6 +1247,7 @@ mod tests {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 },
             },
         ));
@@ -1270,6 +1276,7 @@ mod tests {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 },
             },
         ));
@@ -1304,6 +1311,7 @@ mod tests {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 },
             },
         ));
@@ -1348,6 +1356,7 @@ mod tests {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 },
             },
         ));
@@ -1368,6 +1377,41 @@ mod tests {
     }
 
     #[test]
+    fn context_attachment_serializes_summary_error() {
+        let att = ContextAttachment {
+            attachment_id: Ulid::new(),
+            filename: "x.png".into(),
+            mime_type: "image/png".into(),
+            size_bytes: 0,
+            summary: None,
+            user_notes: None,
+            added_at: chrono::Utc::now(),
+            removed: false,
+            summary_error: Some("provider doesn't support image".into()),
+        };
+        let json = serde_json::to_string(&att).unwrap();
+        assert!(json.contains("summary_error"));
+        let round: ContextAttachment = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            round.summary_error.as_deref(),
+            Some("provider doesn't support image")
+        );
+    }
+
+    #[test]
+    fn context_attachment_summary_error_defaults_to_none_when_absent() {
+        // Backwards-compat: events from before this field existed deserialize cleanly.
+        let json = r#"{
+            "attachment_id":"01H8XGJWBWBAQ4WKDYR4MX5J7T",
+            "filename":"x.txt","mime_type":"text/plain","size_bytes":0,
+            "summary":null,"user_notes":null,
+            "added_at":"2026-05-07T00:00:00Z","removed":false
+        }"#;
+        let att: ContextAttachment = serde_json::from_str(json).unwrap();
+        assert!(att.summary_error.is_none());
+    }
+
+    #[test]
     fn undo_context_notes_updated_restores_none_when_prior_was_none() {
         let mut state = SpecState::new();
         let attachment_id = Ulid::new();
@@ -1385,6 +1429,7 @@ mod tests {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 },
             },
         ));

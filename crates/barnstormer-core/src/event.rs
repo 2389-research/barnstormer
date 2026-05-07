@@ -281,6 +281,7 @@ mod tests {
                 user_notes: None,
                 added_at: Utc::now(),
                 removed: false,
+                summary_error: None,
             },
         };
         let s = serde_json::to_string(&payload).unwrap();

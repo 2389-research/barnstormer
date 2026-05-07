@@ -386,6 +386,7 @@ impl SpecActor {
                     user_notes: None,
                     added_at: Utc::now(),
                     removed: false,
+                    summary_error: None,
                 };
                 vec![EventPayload::ContextAttached { attachment }]
             }

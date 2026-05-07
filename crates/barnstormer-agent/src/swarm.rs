@@ -1263,6 +1263,7 @@ mod tests {
             user_notes: Some("from kickoff".to_string()),
             added_at: Utc::now(),
             removed: false,
+            summary_error: None,
         }];
 
         let prompt = build_task_prompt(&ctx);
@@ -1295,6 +1296,7 @@ mod tests {
             user_notes: None,
             added_at: Utc::now(),
             removed: false,
+            summary_error: None,
         }];
 
         let prompt = build_task_prompt(&ctx);
@@ -1318,6 +1320,7 @@ mod tests {
             user_notes: Some(String::new()),
             added_at: Utc::now(),
             removed: false,
+            summary_error: None,
         }];
 
         let prompt = build_task_prompt(&ctx);
@@ -1348,6 +1351,7 @@ mod tests {
             user_notes: Some("from kickoff".to_string()),
             added_at: Utc::now(),
             removed: false,
+            summary_error: None,
         };
         let section = render_context_files_section(std::slice::from_ref(&att));
         assert!(section.contains("## Context Files"));
@@ -1371,6 +1375,7 @@ mod tests {
             user_notes: None,
             added_at: Utc::now(),
             removed: false,
+            summary_error: None,
         };
         let section = render_context_files_section(std::slice::from_ref(&att));
         // New intro must frame attachments as source material for synthesis, not
