@@ -18,7 +18,20 @@
         <details class="card context-card" id="att-{{ att.attachment_id }}" style="margin-bottom: var(--spacing-sm);">
             <summary class="context-card-head">
                 <span style="display: flex; align-items: center; gap: var(--spacing-sm);">
-                    <span class="card-type badge-note">{{ att.extension }}</span>
+                    {% match att.kind %}
+                    {% when AttachmentKind::ImageRaster %}
+                        <span class="card-type badge-image">{{ att.extension }}</span>
+                    {% when AttachmentKind::ImageSvg %}
+                        <span class="card-type badge-image">svg</span>
+                    {% when AttachmentKind::Pdf %}
+                        <span class="card-type badge-doc">pdf</span>
+                    {% when AttachmentKind::Audio %}
+                        <span class="card-type badge-audio">{{ att.extension }}</span>
+                    {% when AttachmentKind::Video %}
+                        <span class="card-type badge-video">{{ att.extension }}</span>
+                    {% when AttachmentKind::Text %}
+                        <span class="card-type badge-note">{{ att.extension }}</span>
+                    {% endmatch %}
                     <span style="flex: 1; font-weight: 500; word-break: break-word;">{{ att.filename }}</span>
                     {% if att.card_count > 0 %}
                     <span class="has-tooltip">
@@ -26,17 +39,36 @@
                         <span class="tooltip context-pill-tooltip">Cards synthesized from this file</span>
                     </span>
                     {% endif %}
+                    {# Four-state pill: (summary, summary_error) — ok / stale-with-error / pending / failed.
+                       Nested matches are used instead of tuple matching for compatibility with the
+                       Askama version pinned in this workspace. #}
                     {% match att.summary %}
                     {% when Some with (_) %}
-                        <span class="has-tooltip">
-                            <span class="card-type badge-plan">in context</span>
-                            <span class="tooltip context-pill-tooltip">Included in agent context</span>
-                        </span>
+                        {% match att.summary_error %}
+                        {% when Some with (_) %}
+                            <span class="has-tooltip">
+                                <span class="card-type badge-note">stale</span>
+                                <span class="tooltip context-pill-tooltip">Last refresh failed; older summary in use</span>
+                            </span>
+                        {% when None %}
+                            <span class="has-tooltip">
+                                <span class="card-type badge-plan">in context</span>
+                                <span class="tooltip context-pill-tooltip">Included in agent context</span>
+                            </span>
+                        {% endmatch %}
                     {% when None %}
-                        <span class="has-tooltip">
-                            <span class="card-type badge-note">summarizing&hellip;</span>
-                            <span class="tooltip context-pill-tooltip">Summary in progress</span>
-                        </span>
+                        {% match att.summary_error %}
+                        {% when Some with (_) %}
+                            <span class="has-tooltip">
+                                <span class="card-type badge-error">summary failed</span>
+                                <span class="tooltip context-pill-tooltip">Couldn't summarize; click Resummarize to retry</span>
+                            </span>
+                        {% when None %}
+                            <span class="has-tooltip">
+                                <span class="card-type badge-note">summarizing&hellip;</span>
+                                <span class="tooltip context-pill-tooltip">Summary in progress</span>
+                            </span>
+                        {% endmatch %}
                     {% endmatch %}
                 </span>
                 {% match att.user_notes %}
@@ -53,15 +85,47 @@
                 <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: var(--spacing-sm);">
                     {{ att.size_display }} &middot; added {{ att.added_display }}
                 </div>
+                {# Per-kind preview block. Text attachments render no preview — the
+                   summary section below carries them. PDF gets a placeholder icon
+                   (browser-native PDF rendering inline is unreliable across vendors). #}
+                {% match att.kind %}
+                {% when AttachmentKind::ImageRaster %}
+                    <img src="{{ att.raw_url }}" alt="{{ att.filename }}" class="context-preview-image" loading="lazy" />
+                {% when AttachmentKind::ImageSvg %}
+                    <img src="{{ att.raw_url }}" alt="{{ att.filename }}" class="context-preview-image" loading="lazy" />
+                {% when AttachmentKind::Pdf %}
+                    <div class="context-preview-pdf-icon">PDF: {{ att.filename }}</div>
+                {% when AttachmentKind::Audio %}
+                    <audio controls preload="metadata" class="context-preview-audio">
+                        <source src="{{ att.raw_url }}" type="{{ att.mime_type }}">
+                    </audio>
+                {% when AttachmentKind::Video %}
+                    <video controls preload="metadata" class="context-preview-video">
+                        <source src="{{ att.raw_url }}" type="{{ att.mime_type }}">
+                    </video>
+                {% when AttachmentKind::Text %}
+                {% endmatch %}
+                {# Summary state machine: (summary_html, summary_error). Nested matches
+                   for Askama version compatibility. #}
                 {% match att.summary_html %}
                 {% when Some with (h) %}
                     <div class="context-summary-rendered" style="font-size: 0.82rem; color: var(--text-secondary); margin-bottom: var(--spacing-sm);">
                         {{ h|safe }}
                     </div>
+                    {% match att.summary_error %}
+                    {% when Some with (err) %}
+                        <div class="context-summary-stale-error">last attempt failed: {{ err }}</div>
+                    {% when None %}
+                    {% endmatch %}
                 {% when None %}
-                    <div style="font-size: 0.82rem; color: var(--text-muted); font-style: italic; margin-bottom: var(--spacing-sm);">
-                        Summarizing&hellip;
-                    </div>
+                    {% match att.summary_error %}
+                    {% when Some with (err) %}
+                        <div class="card-error">{{ err }}</div>
+                    {% when None %}
+                        <div class="context-summary-pending" style="font-size: 0.82rem; color: var(--text-muted); font-style: italic; margin-bottom: var(--spacing-sm);">
+                            Summarizing&hellip;
+                        </div>
+                    {% endmatch %}
                 {% endmatch %}
                 <form hx-patch="/web/specs/{{ spec_id }}/context/{{ att.attachment_id }}/notes"
                       hx-trigger="change from:find textarea, blur from:find textarea"
@@ -72,7 +136,11 @@
                                   style="font-size: 0.82rem;">{% match att.user_notes %}{% when Some with (n) %}{{ n }}{% when None %}{% endmatch %}</textarea>
                     </div>
                 </form>
-                <div style="display: flex; justify-content: flex-end;">
+                <div style="display: flex; justify-content: flex-end; gap: var(--spacing-sm);">
+                    <button class="btn btn-sm"
+                            hx-post="/web/specs/{{ spec_id }}/context/{{ att.attachment_id }}/resummarize"
+                            hx-target="#context-panel"
+                            hx-swap="outerHTML">Resummarize</button>
                     <button class="btn btn-sm btn-danger"
                             hx-delete="/web/specs/{{ spec_id }}/context/{{ att.attachment_id }}"
                             hx-target="#context-panel"

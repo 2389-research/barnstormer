@@ -2249,3 +2249,77 @@ details[open] > .context-card-head .collapsed-notes {
 .card-feed-title { flex: 1; font-weight: 500; word-break: break-word; }
 .card-feed-body { margin-top: var(--spacing-sm); font-size: 0.9rem; }
 .card-feed-meta { margin-top: var(--spacing-xs); font-size: 0.75rem; color: var(--text-muted); }
+
+/* ============================================================
+   Context panel — per-kind badges, previews, failure states
+   (Task 17 of multimodal context files)
+   ============================================================ */
+
+/* Per-kind badge variants. Color-coded so the user can scan the panel and
+   distinguish images/audio/video/PDF/text at a glance. Tones are chosen to
+   match the warm-light palette without overwhelming the rest of the UI. */
+.badge-image { background: hsl(265, 50%, 92%); color: hsl(265, 35%, 38%); }
+.badge-doc   { background: hsl(25, 55%, 90%);  color: hsl(25, 45%, 38%); }
+.badge-audio { background: hsl(175, 40%, 90%); color: hsl(175, 40%, 30%); }
+.badge-video { background: hsl(330, 45%, 92%); color: hsl(330, 35%, 38%); }
+.badge-error { background: hsl(0, 60%, 92%);   color: hsl(0, 55%, 40%); }
+
+/* Inline preview for raster + SVG attachments. `max-width: 100%` keeps it
+   inside the right-rail width budget; `height: auto` preserves aspect. */
+.context-preview-image {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius);
+    margin-bottom: var(--spacing-sm);
+    background: var(--bg-secondary);
+}
+
+.context-preview-audio {
+    width: 100%;
+    margin-bottom: var(--spacing-sm);
+}
+
+/* Cap video height so a tall portrait clip doesn't dominate the panel. */
+.context-preview-video {
+    display: block;
+    max-width: 100%;
+    max-height: 200px;
+    border-radius: var(--radius);
+    margin-bottom: var(--spacing-sm);
+    background: black;
+}
+
+/* PDF placeholder: browser-native PDF embedding is inconsistent across
+   vendors, so we show a compact label + filename instead. */
+.context-preview-pdf-icon {
+    padding: var(--spacing-md);
+    background: var(--bg-secondary);
+    border-radius: var(--radius);
+    margin-bottom: var(--spacing-sm);
+    font-size: 0.9rem;
+    word-break: break-word;
+}
+
+/* Stale-with-error footnote: shown alongside a still-valid summary when the
+   most recent re-summarize attempt failed. Subtle so it doesn't compete with
+   the summary text itself. */
+.context-summary-stale-error {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    font-style: italic;
+    margin-bottom: var(--spacing-sm);
+}
+
+/* Hard-failure state: no prior summary, only an error. Visually loud-ish
+   (red left border) since the user needs to act (Resummarize or Remove). */
+.card-error {
+    padding: var(--spacing-sm);
+    background: hsl(0, 60%, 96%);
+    color: hsl(0, 55%, 35%);
+    border-radius: var(--radius);
+    border-left: 3px solid var(--danger);
+    font-size: 0.82rem;
+    margin-bottom: var(--spacing-sm);
+    word-break: break-word;
+}

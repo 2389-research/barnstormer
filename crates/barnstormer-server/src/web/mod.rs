@@ -2434,13 +2434,59 @@ struct ContextPanelTemplate {
     attachments: Vec<ContextPanelItem>,
 }
 
+/// Coarse-grained kind of a context attachment, derived from its sniffed
+/// MIME type. Used by the context panel template to branch between
+/// browser-native preview affordances (raster `<img>`, SVG `<img>`, `<audio>`,
+/// `<video>`, PDF icon) and to pick a per-kind badge color in the collapsed
+/// header. `Text` is the catch-all for anything that doesn't render natively
+/// in a preview block (markdown, plaintext, code, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentKind {
+    Text,
+    ImageRaster,
+    ImageSvg,
+    Pdf,
+    Audio,
+    Video,
+}
+
+impl AttachmentKind {
+    /// Classify a stored MIME string. Any parameters after the first `;`
+    /// (e.g. `; charset=utf-8`) are dropped before matching, and the result
+    /// is lowercased so casing variation in the upload pipeline doesn't
+    /// flip an attachment between branches.
+    fn from_mime(mime: &str) -> Self {
+        let normalized = mime
+            .split(';')
+            .next()
+            .unwrap_or(mime)
+            .trim()
+            .to_ascii_lowercase();
+        if normalized == "image/svg+xml" {
+            Self::ImageSvg
+        } else if normalized.starts_with("image/") {
+            Self::ImageRaster
+        } else if normalized == "application/pdf" {
+            Self::Pdf
+        } else if normalized.starts_with("audio/") {
+            Self::Audio
+        } else if normalized.starts_with("video/") {
+            Self::Video
+        } else {
+            Self::Text
+        }
+    }
+}
+
 /// View model for a single context attachment row in the panel.
 ///
 /// `summary` holds the raw (plain-text) summary used for the collapsed-state
 /// tooltip (the native `title` attribute on the `<summary>` element). It's
 /// also used as the presence flag for rendering the "in context" pill.
 /// `summary_html` holds the pre-rendered HTML produced by `render_markdown`,
-/// displayed only when the card is expanded.
+/// displayed only when the card is expanded. `summary_error` is the
+/// last-attempt failure reason, used to drive the four-state summary UI
+/// (pending / ok / stale-with-error / failed).
 struct ContextPanelItem {
     attachment_id: String,
     filename: String,
@@ -2449,11 +2495,21 @@ struct ContextPanelItem {
     added_display: String,
     summary: Option<String>,
     summary_html: Option<String>,
+    summary_error: Option<String>,
     user_notes: Option<String>,
     /// Number of non-removed cards whose `source_attachment_id` points at this
     /// attachment. Rendered in the collapsed header so the user can see at a
     /// glance how much of an attachment the Manager has synthesized.
     card_count: usize,
+    /// Coarse classification of the attachment for per-kind preview rendering
+    /// and badge coloring in the template.
+    kind: AttachmentKind,
+    /// Original sniffed MIME type, forwarded to `<source type=...>` on the
+    /// `<audio>` / `<video>` preview elements.
+    mime_type: String,
+    /// `/web/specs/{spec_id}/context/{attachment_id}/raw` — the source URL for
+    /// inline `<img>` / `<audio>` / `<video>` previews.
+    raw_url: String,
 }
 
 /// Human-readable file size (B / KB / MB) for display in the context panel.
@@ -2502,8 +2558,12 @@ async fn render_context_panel_for(state: &SharedState, spec_id: Ulid) -> Respons
                 added_display: a.added_at.format("%H:%M").to_string(),
                 summary: a.summary.clone(),
                 summary_html: a.summary.as_deref().map(render_markdown),
+                summary_error: a.summary_error.clone(),
                 user_notes: a.user_notes.clone(),
                 card_count,
+                kind: AttachmentKind::from_mime(&a.mime_type),
+                mime_type: a.mime_type.clone(),
+                raw_url: format!("/web/specs/{}/context/{}/raw", spec_id, a.attachment_id),
             }
         })
         .collect();
@@ -4356,7 +4416,7 @@ mod tests {
         };
         let rendered = tmpl.render().unwrap();
         assert!(
-            rendered.contains(r#"hx-trigger="load, sse:context_attached, sse:context_summarized, sse:context_notes_updated, sse:context_removed""#),
+            rendered.contains(r#"hx-trigger="load, sse:context_attached, sse:context_summarized, sse:context_summarize_failed, sse:context_notes_updated, sse:context_removed""#),
             "context rail must declare SSE triggers"
         );
         assert!(
@@ -4380,6 +4440,10 @@ mod tests {
                 summary: Some("a short summary".to_string()),
                 summary_html: Some("<p>a short summary</p>\n".to_string()),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 0,
             }],
         };
@@ -4418,6 +4482,10 @@ mod tests {
                 summary: None,
                 summary_html: None,
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 0,
             }],
         };
@@ -4447,6 +4515,10 @@ mod tests {
                 summary: Some("a short summary".to_string()),
                 summary_html: Some("<p>a short summary</p>\n".to_string()),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 0,
             }],
         };
@@ -4483,6 +4555,10 @@ mod tests {
                 summary: Some("**bold**".to_string()),
                 summary_html: Some(render_markdown("**bold**")),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 0,
             }],
         };
@@ -4510,6 +4586,10 @@ mod tests {
                 summary: Some("a summary".to_string()),
                 summary_html: Some("<p>a summary</p>\n".to_string()),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 0,
             }],
         };
@@ -4544,6 +4624,10 @@ mod tests {
                 summary: Some("design vibes".to_string()),
                 summary_html: Some("<p>design vibes</p>\n".to_string()),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 3,
             }],
         };
@@ -4568,6 +4652,10 @@ mod tests {
                 summary: Some("design vibes".to_string()),
                 summary_html: Some("<p>design vibes</p>\n".to_string()),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 1,
             }],
         };
@@ -4594,6 +4682,10 @@ mod tests {
                 summary: Some("design vibes".to_string()),
                 summary_html: Some("<p>design vibes</p>\n".to_string()),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 0,
             }],
         };
@@ -4618,6 +4710,10 @@ mod tests {
                 summary: None,
                 summary_html: None,
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 0,
             }],
         };
@@ -4643,6 +4739,10 @@ mod tests {
                 summary: Some("design vibes".to_string()),
                 summary_html: Some("<p>design vibes</p>\n".to_string()),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 2,
             }],
         };
@@ -4668,6 +4768,10 @@ mod tests {
                 summary: Some("design vibes".to_string()),
                 summary_html: Some("<p>design vibes</p>\n".to_string()),
                 user_notes: None,
+                summary_error: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/plain".to_string(),
+                raw_url: "/raw".to_string(),
                 card_count: 0,
             }],
         };
@@ -4675,6 +4779,229 @@ mod tests {
         assert!(
             !rendered.contains("0 cards") && !rendered.contains("0 card"),
             "panel should omit the count pill entirely when card_count is 0"
+        );
+    }
+
+    #[test]
+    fn attachment_kind_classifies_common_mimes() {
+        assert_eq!(
+            AttachmentKind::from_mime("image/png"),
+            AttachmentKind::ImageRaster
+        );
+        assert_eq!(
+            AttachmentKind::from_mime("image/JPEG"),
+            AttachmentKind::ImageRaster
+        );
+        assert_eq!(
+            AttachmentKind::from_mime("image/svg+xml"),
+            AttachmentKind::ImageSvg
+        );
+        assert_eq!(
+            AttachmentKind::from_mime("application/pdf"),
+            AttachmentKind::Pdf
+        );
+        assert_eq!(
+            AttachmentKind::from_mime("audio/mpeg"),
+            AttachmentKind::Audio
+        );
+        assert_eq!(
+            AttachmentKind::from_mime("video/mp4"),
+            AttachmentKind::Video
+        );
+        assert_eq!(
+            AttachmentKind::from_mime("text/markdown; charset=utf-8"),
+            AttachmentKind::Text
+        );
+        // Unknown / weird types fall through to Text.
+        assert_eq!(
+            AttachmentKind::from_mime("application/octet-stream"),
+            AttachmentKind::Text
+        );
+    }
+
+    #[test]
+    fn context_panel_renders_image_preview_for_raster_attachment() {
+        // Raster image attachments should render an inline `<img>` preview using
+        // the raw URL — that's what makes the panel multimodal-aware.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HSPEC".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "diagram.png".to_string(),
+                extension: "png".to_string(),
+                size_display: "10 KB".to_string(),
+                added_display: "12:00".to_string(),
+                summary: Some("a diagram".to_string()),
+                summary_html: Some("<p>a diagram</p>\n".to_string()),
+                summary_error: None,
+                user_notes: None,
+                card_count: 0,
+                kind: AttachmentKind::ImageRaster,
+                mime_type: "image/png".to_string(),
+                raw_url: "/web/specs/01HSPEC/context/01HATT/raw".to_string(),
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains(r#"class="context-preview-image""#),
+            "raster image should produce an <img> preview"
+        );
+        assert!(
+            rendered.contains(r#"src="/web/specs/01HSPEC/context/01HATT/raw""#),
+            "preview <img> must point at the /raw URL"
+        );
+        // Per-kind badge: image variant, not the generic note variant.
+        assert!(
+            rendered.contains("badge-image"),
+            "image attachments should use badge-image"
+        );
+    }
+
+    #[test]
+    fn context_panel_renders_audio_preview_for_audio_attachment() {
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HSPEC".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "voice.mp3".to_string(),
+                extension: "mp3".to_string(),
+                size_display: "100 KB".to_string(),
+                added_display: "12:00".to_string(),
+                summary: Some("a voice memo".to_string()),
+                summary_html: Some("<p>a voice memo</p>\n".to_string()),
+                summary_error: None,
+                user_notes: None,
+                card_count: 0,
+                kind: AttachmentKind::Audio,
+                mime_type: "audio/mpeg".to_string(),
+                raw_url: "/web/specs/01HSPEC/context/01HATT/raw".to_string(),
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("<audio") && rendered.contains("controls"),
+            "audio attachment should produce an <audio controls> element"
+        );
+        assert!(
+            rendered.contains(r#"type="audio/mpeg""#),
+            "audio <source> must declare the original mime type"
+        );
+        assert!(rendered.contains("badge-audio"));
+    }
+
+    #[test]
+    fn context_panel_resummarize_button_targets_correct_endpoint() {
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HSPEC".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "notes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "1 KB".to_string(),
+                added_display: "12:00".to_string(),
+                summary: Some("a summary".to_string()),
+                summary_html: Some("<p>a summary</p>\n".to_string()),
+                summary_error: None,
+                user_notes: None,
+                card_count: 0,
+                kind: AttachmentKind::Text,
+                mime_type: "text/markdown".to_string(),
+                raw_url: "/raw".to_string(),
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains(r#"hx-post="/web/specs/01HSPEC/context/01HATT/resummarize""#),
+            "Resummarize button must POST to the resummarize endpoint"
+        );
+        assert!(
+            rendered.contains(">Resummarize<"),
+            "button label must be 'Resummarize'"
+        );
+    }
+
+    #[test]
+    fn context_panel_failure_state_no_summary_shows_card_error() {
+        // None summary + Some error: hard-failure state, no prior summary to
+        // fall back on. The error text should be the dominant content of the
+        // card body so the user knows to act.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HSPEC".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "broken.bin".to_string(),
+                extension: "bin".to_string(),
+                size_display: "1 KB".to_string(),
+                added_display: "12:00".to_string(),
+                summary: None,
+                summary_html: None,
+                summary_error: Some("provider rejected payload".to_string()),
+                user_notes: None,
+                card_count: 0,
+                kind: AttachmentKind::Text,
+                mime_type: "application/octet-stream".to_string(),
+                raw_url: "/raw".to_string(),
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains(r#"class="card-error""#),
+            "hard failure must render the .card-error block"
+        );
+        assert!(
+            rendered.contains("provider rejected payload"),
+            "error text must be visible to the user"
+        );
+        assert!(
+            rendered.contains("summary failed"),
+            "header pill should read 'summary failed'"
+        );
+        assert!(
+            !rendered.contains("Summarizing&hellip;"),
+            "must not show the pending spinner when there's an error"
+        );
+    }
+
+    #[test]
+    fn context_panel_stale_state_shows_summary_and_error_footnote() {
+        // Some summary + Some error: stale-with-error. Both the prior summary
+        // and the failure footnote must render so the user understands what's
+        // currently in context.
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HSPEC".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "notes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "1 KB".to_string(),
+                added_display: "12:00".to_string(),
+                summary: Some("the original summary".to_string()),
+                summary_html: Some("<p>the original summary</p>\n".to_string()),
+                summary_error: Some("transient LLM error".to_string()),
+                user_notes: None,
+                card_count: 0,
+                kind: AttachmentKind::Text,
+                mime_type: "text/markdown".to_string(),
+                raw_url: "/raw".to_string(),
+            }],
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("the original summary"),
+            "stale state must still render the prior summary"
+        );
+        assert!(
+            rendered.contains("context-summary-stale-error"),
+            "stale state must render the small footnote"
+        );
+        assert!(
+            rendered.contains("transient LLM error"),
+            "footnote must include the error text"
+        );
+        // Header pill flips to 'stale' for this combo.
+        assert!(
+            rendered.contains(">stale<"),
+            "header pill should read 'stale'"
         );
     }
 
