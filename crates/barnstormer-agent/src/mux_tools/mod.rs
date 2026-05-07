@@ -26,6 +26,8 @@ use barnstormer_core::actor::SpecActorHandle;
 use mux::tool::Registry;
 use ulid::Ulid;
 
+use crate::AttachmentSummarizer;
+
 /// Build a tool registry with all domain tools registered.
 ///
 /// The returned registry contains: read_state, write_commands, emit_narration,
@@ -37,6 +39,7 @@ pub async fn build_registry(
     pending_transition_question: Arc<Mutex<Option<Ulid>>>,
     agent_id: String,
     home: PathBuf,
+    summarizer: Arc<dyn AttachmentSummarizer>,
 ) -> Registry {
     let registry = Registry::new();
 
@@ -103,6 +106,7 @@ pub async fn build_registry(
         .register(retrieve_context::RetrieveContextTool {
             actor: Arc::clone(&actor),
             home,
+            summarizer,
         })
         .await;
 
@@ -122,6 +126,25 @@ mod tests {
         (spec_id, handle)
     }
 
+    #[derive(Debug)]
+    struct StubSummarizer;
+
+    #[async_trait::async_trait]
+    impl crate::AttachmentSummarizer for StubSummarizer {
+        async fn answer_question(
+            &self,
+            _spec_id: Ulid,
+            _attachment: &barnstormer_core::state::ContextAttachment,
+            _question: &str,
+        ) -> Result<String, String> {
+            Ok("stub".into())
+        }
+    }
+
+    fn stub_summarizer() -> Arc<dyn crate::AttachmentSummarizer> {
+        Arc::new(StubSummarizer)
+    }
+
     #[tokio::test]
     async fn build_registry_registers_all_9_tools() {
         let (_id, handle) = make_test_actor();
@@ -131,6 +154,7 @@ mod tests {
             Arc::new(Mutex::new(None)),
             "test-agent".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            stub_summarizer(),
         )
         .await;
 
@@ -157,6 +181,7 @@ mod tests {
             Arc::new(Mutex::new(None)),
             "test-agent".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
+            stub_summarizer(),
         )
         .await;
 

@@ -3246,6 +3246,9 @@ pub async fn start_agents(
         spec_id,
         swarm_actor_handle,
         state.barnstormer_home.clone(),
+        Arc::new(crate::attachment_summarizer::ServerSummarizer {
+            home: state.barnstormer_home.clone(),
+        }),
     ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {
@@ -3415,6 +3418,9 @@ pub async fn try_start_agents(
         spec_id,
         swarm_actor_handle,
         state.barnstormer_home.clone(),
+        Arc::new(crate::attachment_summarizer::ServerSummarizer {
+            home: state.barnstormer_home.clone(),
+        }),
     ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {

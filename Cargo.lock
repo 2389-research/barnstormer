@@ -324,6 +324,7 @@ dependencies = [
  "anyhow",
  "askama",
  "askama-derive-axum",
+ "async-trait",
  "axum",
  "axum-core",
  "barnstormer-agent",
