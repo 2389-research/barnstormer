@@ -342,6 +342,23 @@ impl SpecState {
                 {
                     // no undo for summarization — it's idempotent replacement from the summarizer
                     att.summary = Some(summary.clone());
+                    // success clears any prior failure on the same attachment
+                    att.summary_error = None;
+                }
+            }
+
+            EventPayload::ContextSummarizeFailed {
+                attachment_id,
+                reason,
+            } => {
+                if let Some(att) = self
+                    .context_attachments
+                    .iter_mut()
+                    .find(|a| a.attachment_id == *attachment_id)
+                {
+                    // no undo — matches the no-undo posture of ContextSummarized.
+                    // Summarize-state events are idempotent replacement from the summarizer.
+                    att.summary_error = Some(reason.clone());
                 }
             }
 
@@ -476,6 +493,20 @@ impl SpecState {
                     .find(|a| a.attachment_id == *attachment_id)
                 {
                     att.summary = Some(summary.clone());
+                    // success clears any prior failure on the same attachment
+                    att.summary_error = None;
+                }
+            }
+            EventPayload::ContextSummarizeFailed {
+                attachment_id,
+                reason,
+            } => {
+                if let Some(att) = self
+                    .context_attachments
+                    .iter_mut()
+                    .find(|a| a.attachment_id == *attachment_id)
+                {
+                    att.summary_error = Some(reason.clone());
                 }
             }
             EventPayload::ContextNotesUpdated {
@@ -1409,6 +1440,101 @@ mod tests {
         }"#;
         let att: ContextAttachment = serde_json::from_str(json).unwrap();
         assert!(att.summary_error.is_none());
+    }
+
+    #[test]
+    fn mark_context_summarize_failed_sets_summary_error() {
+        let mut state = SpecState::new();
+        let attachment_id = Ulid::new();
+        state.apply(&make_event(
+            1,
+            make_spec_id(),
+            EventPayload::ContextAttached {
+                attachment: ContextAttachment {
+                    attachment_id,
+                    filename: "a".into(),
+                    mime_type: "image/png".into(),
+                    size_bytes: 1,
+                    summary: None,
+                    user_notes: None,
+                    added_at: Utc::now(),
+                    removed: false,
+                    summary_error: None,
+                },
+            },
+        ));
+        let undo_len_after_attach = state.undo_stack.len();
+        state.apply(&make_event(
+            2,
+            make_spec_id(),
+            EventPayload::ContextSummarizeFailed {
+                attachment_id,
+                reason: "provider does not support image".into(),
+            },
+        ));
+        assert_eq!(
+            state.context_attachments[0].summary_error.as_deref(),
+            Some("provider does not support image")
+        );
+        assert!(state.context_attachments[0].summary.is_none());
+        assert_eq!(
+            state.undo_stack.len(),
+            undo_len_after_attach,
+            "summarize-failed should not push an undo entry"
+        );
+    }
+
+    #[test]
+    fn context_summarized_clears_prior_summary_error() {
+        let mut state = SpecState::new();
+        let attachment_id = Ulid::new();
+        state.apply(&make_event(
+            1,
+            make_spec_id(),
+            EventPayload::ContextAttached {
+                attachment: ContextAttachment {
+                    attachment_id,
+                    filename: "a".into(),
+                    mime_type: "text/plain".into(),
+                    size_bytes: 1,
+                    summary: None,
+                    user_notes: None,
+                    added_at: Utc::now(),
+                    removed: false,
+                    summary_error: None,
+                },
+            },
+        ));
+        // First a failure lands
+        state.apply(&make_event(
+            2,
+            make_spec_id(),
+            EventPayload::ContextSummarizeFailed {
+                attachment_id,
+                reason: "transient LLM error".into(),
+            },
+        ));
+        assert_eq!(
+            state.context_attachments[0].summary_error.as_deref(),
+            Some("transient LLM error")
+        );
+        // Then a successful summary lands and should clear the prior error
+        state.apply(&make_event(
+            3,
+            make_spec_id(),
+            EventPayload::ContextSummarized {
+                attachment_id,
+                summary: "brief".into(),
+            },
+        ));
+        assert_eq!(
+            state.context_attachments[0].summary.as_deref(),
+            Some("brief")
+        );
+        assert!(
+            state.context_attachments[0].summary_error.is_none(),
+            "successful summary must clear prior summary_error"
+        );
     }
 
     #[test]

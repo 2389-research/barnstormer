@@ -102,6 +102,10 @@ pub enum EventPayload {
         attachment_id: Ulid,
         summary: String,
     },
+    ContextSummarizeFailed {
+        attachment_id: Ulid,
+        reason: String,
+    },
     ContextNotesUpdated {
         attachment_id: Ulid,
         notes: String,

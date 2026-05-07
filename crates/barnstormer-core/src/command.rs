@@ -92,6 +92,10 @@ pub enum Command {
         attachment_id: Ulid,
         summary: String,
     },
+    MarkContextSummarizeFailed {
+        attachment_id: Ulid,
+        reason: String,
+    },
     UpdateContextNotes {
         attachment_id: Ulid,
         notes: String,
