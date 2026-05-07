@@ -372,6 +372,54 @@ mod tests {
     }
 
     #[test]
+    fn sniff_mime_detects_jpeg_via_magic_bytes() {
+        // JPEG SOI marker + JFIF APP0 segment.
+        let bytes = b"\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01";
+        assert_eq!(sniff_mime(bytes, "x.jpg").as_deref(), Some("image/jpeg"));
+        assert!(is_whitelisted_mime(&sniff_mime(bytes, "x.jpg").unwrap()));
+    }
+
+    #[test]
+    fn sniff_mime_detects_gif_via_magic_bytes() {
+        // GIF89a magic.
+        let bytes = b"GIF89a\x01\x00\x01\x00";
+        assert_eq!(sniff_mime(bytes, "x.gif").as_deref(), Some("image/gif"));
+        assert!(is_whitelisted_mime(&sniff_mime(bytes, "x.gif").unwrap()));
+    }
+
+    #[test]
+    fn sniff_mime_detects_webp_via_magic_bytes() {
+        // RIFF....WEBP container.
+        let bytes = b"RIFF\x24\x00\x00\x00WEBPVP8 ";
+        assert_eq!(sniff_mime(bytes, "x.webp").as_deref(), Some("image/webp"));
+        assert!(is_whitelisted_mime(&sniff_mime(bytes, "x.webp").unwrap()));
+    }
+
+    #[test]
+    fn sniff_mime_detects_heic_via_magic_bytes() {
+        // HEIC: ftyp box at offset 4 with "heic" brand.
+        let bytes = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic";
+        let m = sniff_mime(bytes, "x.heic");
+        // infer might return image/heic or image/heif — both are whitelisted.
+        assert!(m.is_some(), "infer should detect HEIC magic bytes");
+        assert!(is_whitelisted_mime(&m.unwrap()));
+    }
+
+    #[test]
+    fn sniff_mime_detects_mp3_via_magic_bytes() {
+        // MP3: ID3v2 tag header.
+        let bytes = b"ID3\x04\x00\x00\x00\x00\x00\x00";
+        let m = sniff_mime(bytes, "x.mp3");
+        assert!(m.is_some(), "infer should detect MP3");
+        let mime = m.unwrap();
+        assert!(
+            mime.starts_with("audio/"),
+            "expected audio mime, got {mime}"
+        );
+        assert!(is_whitelisted_mime(&mime));
+    }
+
+    #[test]
     fn flac_magic_bytes_pass_whitelist() {
         // FLAC magic: "fLaC" + minimal stream info block
         let bytes = b"fLaC\x80\x00\x00\x22\x10\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0a\xc4\x42\xf0\x00\x00\x00\x00";

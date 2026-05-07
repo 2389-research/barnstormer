@@ -184,6 +184,255 @@ async fn create_spec_rejects_oversize_file_with_413_before_buffering_full_part()
 }
 
 #[tokio::test]
+async fn create_spec_with_png_attaches_with_image_mime() {
+    let (state, _tmp) = fresh_state();
+    let app = create_router(Arc::clone(&state), None);
+
+    let bytes = include_bytes!("fixtures/tiny.png");
+    let (ct, body) = multipart_body_with_files(
+        "Build a thing with a PNG",
+        &[("tiny.png", "application/octet-stream", bytes)],
+    );
+
+    let resp = app
+        .oneshot(
+            Request::post("/web/specs")
+                .header("content-type", ct)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("request");
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let spec_id = {
+        let actors = state.actors.read().await;
+        *actors.keys().next().expect("one spec should exist")
+    };
+    let actors = state.actors.read().await;
+    let handle = actors.get(&spec_id).expect("actor present");
+    let spec_state = handle.read_state().await;
+
+    assert_eq!(spec_state.context_attachments.len(), 1);
+    assert_eq!(spec_state.context_attachments[0].mime_type, "image/png");
+}
+
+#[tokio::test]
+async fn create_spec_with_pdf_attaches_with_pdf_mime() {
+    let (state, _tmp) = fresh_state();
+    let app = create_router(Arc::clone(&state), None);
+
+    let bytes = include_bytes!("fixtures/tiny.pdf");
+    let (ct, body) = multipart_body_with_files(
+        "Build a thing with a PDF",
+        &[("tiny.pdf", "application/octet-stream", bytes)],
+    );
+
+    let resp = app
+        .oneshot(
+            Request::post("/web/specs")
+                .header("content-type", ct)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("request");
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let spec_id = {
+        let actors = state.actors.read().await;
+        *actors.keys().next().expect("one spec should exist")
+    };
+    let actors = state.actors.read().await;
+    let handle = actors.get(&spec_id).expect("actor present");
+    let spec_state = handle.read_state().await;
+
+    assert_eq!(spec_state.context_attachments.len(), 1);
+    assert_eq!(
+        spec_state.context_attachments[0].mime_type,
+        "application/pdf"
+    );
+}
+
+#[tokio::test]
+async fn create_spec_with_audio_attaches_with_audio_mime() {
+    let (state, _tmp) = fresh_state();
+    let app = create_router(Arc::clone(&state), None);
+
+    let bytes = include_bytes!("fixtures/tiny.wav");
+    let (ct, body) = multipart_body_with_files(
+        "Build a thing with audio",
+        &[("tiny.wav", "application/octet-stream", bytes)],
+    );
+
+    let resp = app
+        .oneshot(
+            Request::post("/web/specs")
+                .header("content-type", ct)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("request");
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let spec_id = {
+        let actors = state.actors.read().await;
+        *actors.keys().next().expect("one spec should exist")
+    };
+    let actors = state.actors.read().await;
+    let handle = actors.get(&spec_id).expect("actor present");
+    let spec_state = handle.read_state().await;
+
+    assert_eq!(spec_state.context_attachments.len(), 1);
+    let mime = &spec_state.context_attachments[0].mime_type;
+    assert!(
+        mime.starts_with("audio/"),
+        "expected audio/* mime, got {mime}"
+    );
+}
+
+#[tokio::test]
+async fn create_spec_with_video_attaches_with_video_mime() {
+    let (state, _tmp) = fresh_state();
+    let app = create_router(Arc::clone(&state), None);
+
+    let bytes = include_bytes!("fixtures/tiny.mp4");
+    let (ct, body) = multipart_body_with_files(
+        "Build a thing with video",
+        &[("tiny.mp4", "application/octet-stream", bytes)],
+    );
+
+    let resp = app
+        .oneshot(
+            Request::post("/web/specs")
+                .header("content-type", ct)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("request");
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let spec_id = {
+        let actors = state.actors.read().await;
+        *actors.keys().next().expect("one spec should exist")
+    };
+    let actors = state.actors.read().await;
+    let handle = actors.get(&spec_id).expect("actor present");
+    let spec_state = handle.read_state().await;
+
+    assert_eq!(spec_state.context_attachments.len(), 1);
+    let mime = &spec_state.context_attachments[0].mime_type;
+    assert!(
+        mime.starts_with("video/"),
+        "expected video/* mime, got {mime}"
+    );
+}
+
+#[tokio::test]
+async fn create_spec_with_svg_writes_rasterized_png() {
+    let (state, tmp) = fresh_state();
+    let app = create_router(Arc::clone(&state), None);
+
+    let svg: &[u8] = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 16 16\"><rect width=\"16\" height=\"16\" fill=\"red\"/></svg>";
+    let (ct, body) = multipart_body_with_files(
+        "Build a thing with an SVG",
+        &[("logo.svg", "image/svg+xml", svg)],
+    );
+
+    let resp = app
+        .oneshot(
+            Request::post("/web/specs")
+                .header("content-type", ct)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("request");
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let spec_id = {
+        let actors = state.actors.read().await;
+        *actors.keys().next().expect("one spec should exist")
+    };
+    let (attachment_id, mime) = {
+        let actors = state.actors.read().await;
+        let handle = actors.get(&spec_id).expect("actor present");
+        let spec_state = handle.read_state().await;
+        let att = spec_state
+            .context_attachments
+            .iter()
+            .find(|a| a.filename == "logo.svg")
+            .expect("svg attachment present");
+        (att.attachment_id, att.mime_type.clone())
+    };
+    assert_eq!(mime, "image/svg+xml");
+
+    let raster_path = tmp
+        .path()
+        .join("specs")
+        .join(spec_id.to_string())
+        .join("context")
+        .join(attachment_id.to_string())
+        .join("rasterized.png");
+    assert!(
+        raster_path.exists(),
+        "rasterized PNG should be cached on disk at {}",
+        raster_path.display()
+    );
+}
+
+#[tokio::test]
+async fn create_spec_browser_lies_about_content_type_server_sniffs_wins() {
+    // Browser claims image/png but sends PDF bytes. Server must sniff the
+    // bytes and store application/pdf, not the claimed mime.
+    let (state, _tmp) = fresh_state();
+    let app = create_router(Arc::clone(&state), None);
+
+    let bytes = include_bytes!("fixtures/tiny.pdf");
+    let (ct, body) = multipart_body_with_files(
+        "Build a thing with a sneaky upload",
+        &[("sneaky.png", "image/png", bytes)],
+    );
+
+    let resp = app
+        .oneshot(
+            Request::post("/web/specs")
+                .header("content-type", ct)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("request");
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let spec_id = {
+        let actors = state.actors.read().await;
+        *actors.keys().next().expect("one spec should exist")
+    };
+    let actors = state.actors.read().await;
+    let handle = actors.get(&spec_id).expect("actor present");
+    let spec_state = handle.read_state().await;
+
+    let att = spec_state
+        .context_attachments
+        .iter()
+        .find(|a| a.filename == "sneaky.png")
+        .expect("attachment present");
+    assert_eq!(
+        att.mime_type, "application/pdf",
+        "server should ignore browser-claimed mime and store the sniffed one"
+    );
+}
+
+#[tokio::test]
 async fn create_spec_with_no_files_works_as_before() {
     let (state, _tmp) = fresh_state();
     let app = create_router(Arc::clone(&state), None);
