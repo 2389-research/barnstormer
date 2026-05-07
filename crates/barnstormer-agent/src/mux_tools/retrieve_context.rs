@@ -102,11 +102,15 @@ impl Tool for RetrieveContextTool {
                 Ok(ToolResult::text(text))
             }
             None => {
-                // Media without question: return stored summary, error, or pending hint.
-                if let Some(reason) = &att.summary_error {
-                    Ok(ToolResult::error(format!("summary unavailable: {reason}")))
-                } else if let Some(s) = &att.summary {
+                // Media without question: prefer the stored summary, fall through to
+                // the recorded error, otherwise emit a pending hint. summary wins over
+                // summary_error because the reducer doesn't clear summary on a later
+                // ContextSummarizeFailed — a stale-but-valid summary is more useful to
+                // the agent than a stale failure.
+                if let Some(s) = &att.summary {
                     Ok(ToolResult::text(s.clone()))
+                } else if let Some(reason) = &att.summary_error {
+                    Ok(ToolResult::error(format!("summary unavailable: {reason}")))
                 } else {
                     Ok(ToolResult::text(
                         "(summary still being generated — retry shortly, or pass a 'question' parameter to fetch a fresh answer now)".to_string()
@@ -453,6 +457,67 @@ mod tests {
             .unwrap();
         assert!(!result.is_error);
         assert!(result.content.contains("still being generated"));
+    }
+
+    #[tokio::test]
+    async fn retrieve_context_no_question_with_summary_and_error_returns_summary() {
+        // When a prior summarize succeeded and a later attempt failed, the agent
+        // should still see the stale summary rather than being blocked by the
+        // failure. summary takes precedence over summary_error.
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_path_buf();
+
+        let spec_id = Ulid::new();
+        let handle = actor::spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "t".to_string(),
+                one_liner: "o".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let attachment_id = Ulid::new();
+        handle
+            .send_command(Command::AttachContext {
+                attachment_id,
+                filename: "x.png".to_string(),
+                mime_type: "image/png".to_string(),
+                size_bytes: 4,
+            })
+            .await
+            .unwrap();
+        handle
+            .send_command(Command::SummarizeContext {
+                attachment_id,
+                summary: "the prior summary".to_string(),
+            })
+            .await
+            .unwrap();
+        handle
+            .send_command(Command::MarkContextSummarizeFailed {
+                attachment_id,
+                reason: "later attempt failed".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let tool = RetrieveContextTool {
+            actor: Arc::new(handle),
+            home,
+            summarizer: stub(),
+        };
+
+        let result = tool
+            .execute(json!({ "attachment_id": attachment_id.to_string() }))
+            .await
+            .unwrap();
+        assert!(
+            !result.is_error,
+            "should return text, not error, when stale summary is available"
+        );
+        assert_eq!(result.content, "the prior summary");
     }
 
     #[tokio::test]
