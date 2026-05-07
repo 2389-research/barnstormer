@@ -2905,6 +2905,70 @@ pub async fn remove_context(
     }
 }
 
+/// POST /web/specs/{id}/context/{att_id}/resummarize - Manually trigger a
+/// fresh summarizer pass for an attachment. The summary command itself lands
+/// asynchronously; this returns the panel partial with the spinner state.
+///
+/// The 410-vs-404 ordering matters: a soft-removed attachment is "gone" (we
+/// know it existed) so we surface 410 Gone rather than collapsing to 404.
+/// `att.user_notes.clone()` is forwarded to the summarizer so manual rerun
+/// uses the same notes context as the auto-spawn from upload/notes-update.
+pub async fn resummarize_context(
+    State(state): State<SharedState>,
+    Path((id, att_id)): Path<(String, String)>,
+) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    let attachment_id = match att_id.parse::<Ulid>() {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "bad attachment id").into_response(),
+    };
+
+    let actors = state.actors.read().await;
+    let handle = match actors.get(&spec_id) {
+        Some(h) => h.clone(),
+        None => return (StatusCode::NOT_FOUND, "spec not found").into_response(),
+    };
+    drop(actors);
+
+    let attachment_opt = handle
+        .read_state()
+        .await
+        .context_attachments
+        .iter()
+        .find(|a| a.attachment_id == attachment_id)
+        .cloned();
+    let att = match attachment_opt {
+        // Order matters: removed-but-known must return 410 before falling
+        // through to the generic Some(a) live path. Reordering these arms
+        // would surface 200 for soft-deleted attachments.
+        Some(a) if a.removed => {
+            return (StatusCode::GONE, "attachment is removed").into_response();
+        }
+        Some(a) => a,
+        None => return (StatusCode::NOT_FOUND, "attachment not found").into_response(),
+    };
+
+    match crate::context_storage::build_summarizer_input(&state.barnstormer_home, spec_id, &att) {
+        Ok(input) => {
+            crate::summarizer::spawn_summarize(
+                handle.clone(),
+                attachment_id,
+                att.filename.clone(),
+                att.user_notes.clone(),
+                input,
+            );
+            render_context_panel_for(&state, spec_id).await
+        }
+        Err(e) => {
+            tracing::warn!("could not build summarizer input for resummarize: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response()
+        }
+    }
+}
+
 /// GET /web/specs/{id}/context/{att_id}/raw - Stream the raw text content of
 /// a context attachment. Only live (non-removed) attachments are served; both
 /// "unknown" and "soft-removed" cases return 404 so callers can't distinguish

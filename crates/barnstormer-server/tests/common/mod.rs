@@ -284,6 +284,37 @@ pub async fn patch_notes(
     router.oneshot(req).await.expect("patch notes request")
 }
 
+/// POST a path with an empty body. Used by tests that need to hit a fire-and-
+/// forget endpoint (like `.../resummarize`) without crafting a multipart or
+/// form body. Returns the raw response for status / body inspection.
+pub async fn post(router: Router, path: &str) -> http::Response<Body> {
+    let req = Request::builder()
+        .method("POST")
+        .uri(path)
+        .body(Body::empty())
+        .unwrap();
+    router.oneshot(req).await.expect("post request")
+}
+
+/// DELETE the context attachment via the real HTTP endpoint. Mirrors the
+/// browser's "Remove" affordance — soft-removes the attachment and returns
+/// the re-rendered panel.
+pub async fn delete_attachment(
+    router: Router,
+    spec_id: Ulid,
+    attachment_id: Ulid,
+) -> http::Response<Body> {
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(format!("/web/specs/{spec_id}/context/{attachment_id}"))
+        .body(Body::empty())
+        .unwrap();
+    router
+        .oneshot(req)
+        .await
+        .expect("delete attachment request")
+}
+
 /// Minimal `application/x-www-form-urlencoded` value encoder — enough for the
 /// integration test surface. Spaces become `+`; everything outside the
 /// unreserved set becomes a `%HH` triple. Reaching for the `url` crate just
