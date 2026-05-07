@@ -4858,6 +4858,55 @@ mod tests {
     }
 
     #[test]
+    fn context_panel_renders_pdf_icon_for_pdf_attachment() {
+        // PDF previews are an icon + filename rather than an inline render —
+        // browser PDF viewers are heavy and rarely useful at thumbnail size.
+        // Guards against a regression that lets PDFs fall through to <img src>.
+        let att_id = Ulid::new();
+        let tmpl = ContextPanelTemplate {
+            spec_id: "01HSPEC".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: att_id.to_string(),
+                filename: "spec-draft.pdf".to_string(),
+                extension: "pdf".to_string(),
+                size_display: "12.0 KB".to_string(),
+                added_display: "12:00".to_string(),
+                summary: Some("a brief draft".to_string()),
+                summary_html: Some("a brief draft".to_string()),
+                summary_error: None,
+                user_notes: None,
+                card_count: 0,
+                kind: AttachmentKind::Pdf,
+                mime_type: "application/pdf".to_string(),
+                raw_url: format!("/web/specs/01HSPEC/context/{}/raw", att_id),
+            }],
+        };
+        let rendered = tmpl.render().expect("template renders");
+
+        // PDF icon block present.
+        assert!(
+            rendered.contains("context-preview-pdf-icon"),
+            "expected PDF icon class in rendered HTML"
+        );
+        assert!(
+            rendered.contains("spec-draft.pdf"),
+            "expected filename in PDF icon block"
+        );
+
+        // No <img> tag — PDFs must not fall through to raster preview path.
+        assert!(
+            !rendered.contains("<img"),
+            "PDF preview must not render an <img> tag (would indicate kind classification regression)"
+        );
+
+        // The doc badge is used for PDFs.
+        assert!(
+            rendered.contains("badge-doc"),
+            "expected badge-doc on PDF attachment header"
+        );
+    }
+
+    #[test]
     fn context_panel_renders_audio_preview_for_audio_attachment() {
         let tmpl = ContextPanelTemplate {
             spec_id: "01HSPEC".to_string(),
