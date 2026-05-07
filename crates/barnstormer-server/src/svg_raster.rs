@@ -16,7 +16,11 @@ pub fn rasterize_svg(markup: &str) -> Result<Vec<u8>> {
     let mut pixmap = tiny_skia::Pixmap::new(size.width(), size.height())
         .context("failed to allocate pixmap for SVG rasterization")?;
 
-    resvg::render(&tree, tiny_skia::Transform::identity(), &mut pixmap.as_mut());
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::identity(),
+        &mut pixmap.as_mut(),
+    );
 
     pixmap
         .encode_png()

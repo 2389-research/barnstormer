@@ -198,7 +198,10 @@ mod tests {
     #[test]
     fn sniff_mime_detects_png() {
         let bytes = include_bytes!("../tests/fixtures/tiny.png");
-        assert_eq!(sniff_mime(bytes, "ignored.bin").as_deref(), Some("image/png"));
+        assert_eq!(
+            sniff_mime(bytes, "ignored.bin").as_deref(),
+            Some("image/png")
+        );
     }
 
     #[test]
@@ -213,28 +216,19 @@ mod tests {
     #[test]
     fn sniff_mime_detects_svg_via_content() {
         let bytes = b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1 1\"></svg>";
-        assert_eq!(
-            sniff_mime(bytes, "x.svg").as_deref(),
-            Some("image/svg+xml")
-        );
+        assert_eq!(sniff_mime(bytes, "x.svg").as_deref(), Some("image/svg+xml"));
     }
 
     #[test]
     fn sniff_mime_detects_svg_with_xml_decl() {
         let bytes = b"<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>";
-        assert_eq!(
-            sniff_mime(bytes, "x.svg").as_deref(),
-            Some("image/svg+xml")
-        );
+        assert_eq!(sniff_mime(bytes, "x.svg").as_deref(), Some("image/svg+xml"));
     }
 
     #[test]
     fn sniff_mime_falls_back_to_text_for_utf8() {
         let bytes = b"# heading\n\nplain markdown";
-        assert_eq!(
-            sniff_mime(bytes, "x.md").as_deref(),
-            Some("text/markdown")
-        );
+        assert_eq!(sniff_mime(bytes, "x.md").as_deref(), Some("text/markdown"));
     }
 
     #[test]
@@ -291,13 +285,19 @@ mod tests {
         use mux::llm::MediaKind;
         assert_eq!(media_kind_from_mime("image/png"), Some(MediaKind::Image));
         assert_eq!(media_kind_from_mime("image/heic"), Some(MediaKind::Image));
-        assert_eq!(media_kind_from_mime("image/svg+xml"), Some(MediaKind::Image));
+        assert_eq!(
+            media_kind_from_mime("image/svg+xml"),
+            Some(MediaKind::Image)
+        );
     }
 
     #[test]
     fn media_kind_for_pdf() {
         use mux::llm::MediaKind;
-        assert_eq!(media_kind_from_mime("application/pdf"), Some(MediaKind::Document));
+        assert_eq!(
+            media_kind_from_mime("application/pdf"),
+            Some(MediaKind::Document)
+        );
     }
 
     #[test]
@@ -326,7 +326,10 @@ mod tests {
     fn media_kind_normalizes_input() {
         use mux::llm::MediaKind;
         // Strips parameters and lowercases — same convention as is_whitelisted_mime.
-        assert_eq!(media_kind_from_mime("IMAGE/PNG; charset=utf-8"), Some(MediaKind::Image));
+        assert_eq!(
+            media_kind_from_mime("IMAGE/PNG; charset=utf-8"),
+            Some(MediaKind::Image)
+        );
     }
 
     #[test]

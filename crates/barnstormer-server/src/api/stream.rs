@@ -34,9 +34,7 @@ fn event_type_name(payload: &barnstormer_core::EventPayload) -> &'static str {
         barnstormer_core::EventPayload::StreamingToolActivity { .. } => "streaming_tool_activity",
         barnstormer_core::EventPayload::ContextAttached { .. } => "context_attached",
         barnstormer_core::EventPayload::ContextSummarized { .. } => "context_summarized",
-        barnstormer_core::EventPayload::ContextSummarizeFailed { .. } => {
-            "context_summarize_failed"
-        }
+        barnstormer_core::EventPayload::ContextSummarizeFailed { .. } => "context_summarize_failed",
         barnstormer_core::EventPayload::ContextNotesUpdated { .. } => "context_notes_updated",
         barnstormer_core::EventPayload::ContextRemoved { .. } => "context_removed",
     }
