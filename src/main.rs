@@ -2,12 +2,11 @@
 // ABOUTME: Parses CLI arguments with clap, recovers specs, spawns actors, and starts the Axum HTTP server.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use barnstormer_agent::client::create_llm_client;
 use barnstormer_agent::import::{parse_with_llm, to_commands};
-use barnstormer_runtime::{RuntimeConfig, RuntimeOptions};
-use barnstormer_server::{AppState, ProviderStatus, create_router};
+use barnstormer_runtime::{RuntimeOptions, launch};
+use barnstormer_server::ProviderStatus;
 use barnstormer_store::{JsonlLog, StorageManager};
 use clap::Parser;
 
@@ -54,76 +53,32 @@ async fn main() {
 
     match cli {
         Cli::Start { no_open } => {
-            let runtime_config = RuntimeConfig::from_parts(RuntimeOptions {
+            let server = launch(RuntimeOptions {
                 home: None,
                 bind: None,
                 auth_token: None,
                 open_browser: !no_open,
             })
-            .expect("failed to resolve runtime config");
-
-            tracing::info!("BARNSTORMER_HOME: {}", runtime_config.home.display());
-
-            // Initialize StorageManager
-            let storage = StorageManager::new(runtime_config.home.clone())
-                .expect("failed to initialize storage manager");
-
-            // Recover all existing specs
-            let recovered_specs = storage
-                .recover_all_specs()
-                .expect("failed to recover specs");
-
-            tracing::info!("recovered {} specs", recovered_specs.len());
-
-            // Create AppState and spawn actors for recovered specs
-            let state = Arc::new(AppState::new(
-                runtime_config.home.clone(),
-                ProviderStatus::detect(),
-            ));
-            {
-                let mut actors = state.actors.write().await;
-                let mut persisters = state.event_persisters.write().await;
-                for (spec_id, spec_state) in recovered_specs {
-                    let handle = barnstormer_core::spawn(spec_id, spec_state);
-                    // Subscribe a background persister so all future events
-                    // (including agent-produced ones) are written to JSONL.
-                    let persister = barnstormer_server::web::spawn_event_persister(
-                        &handle,
-                        spec_id,
-                        &runtime_config.home,
-                    );
-                    persisters.insert(spec_id, persister);
-                    actors.insert(spec_id, handle);
-                    tracing::info!("spawned actor for spec {}", spec_id);
-                }
-            }
-
-            // Agents start paused until the user explicitly enables them per-spec
-            // via the web UI "Start agents" button.
-            tracing::info!("agents paused on startup — enable per-spec via the web UI");
-
-            let app = create_router(state, runtime_config.auth_token.clone());
-
-            let url = format!("http://{}", runtime_config.bind);
-            tracing::info!("barnstormer listening on {}", url);
+            .await
+            .expect("failed to launch barnstormer runtime");
 
             // Open browser unless --no-open was specified
-            if runtime_config.open_browser {
+            if !no_open {
                 #[cfg(target_os = "macos")]
                 {
-                    let _ = std::process::Command::new("open").arg(&url).spawn();
+                    let _ = std::process::Command::new("open")
+                        .arg(server.local_url())
+                        .spawn();
                 }
                 #[cfg(target_os = "linux")]
                 {
-                    let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+                    let _ = std::process::Command::new("xdg-open")
+                        .arg(server.local_url())
+                        .spawn();
                 }
             }
 
-            let listener = tokio::net::TcpListener::bind(runtime_config.bind)
-                .await
-                .expect("failed to bind");
-
-            axum::serve(listener, app).await.expect("server error");
+            server.wait().await.expect("server error");
         }
         Cli::Status => {
             let bind_addr =
