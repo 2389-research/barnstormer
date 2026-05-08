@@ -11,7 +11,11 @@
     "windows": []
   },
   "bundle": {
-    "active": false,
-    "targets": "app"
+    "active": true,
+    "targets": ["app"],
+    "icon": ["icons/icon.png", "icons/icon.icns"],
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
   }
 }
