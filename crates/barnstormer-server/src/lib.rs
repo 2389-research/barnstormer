@@ -17,4 +17,4 @@ pub use app_state::{AppState, SharedState};
 pub use auth::AuthLayer;
 pub use config::{BarnstormerConfig, ConfigError};
 pub use providers::ProviderStatus;
-pub use routes::create_router;
+pub use routes::{create_router, create_router_with_static_dir};

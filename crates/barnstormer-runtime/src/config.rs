@@ -10,6 +10,7 @@ pub struct RuntimeOptions {
     pub home: Option<PathBuf>,
     pub bind: Option<SocketAddr>,
     pub auth_token: Option<String>,
+    pub static_dir: Option<PathBuf>,
     pub open_browser: bool,
 }
 
@@ -19,6 +20,7 @@ pub struct RuntimeConfig {
     pub home: PathBuf,
     pub bind: SocketAddr,
     pub auth_token: Option<String>,
+    pub static_dir: PathBuf,
     pub open_browser: bool,
 }
 
@@ -32,11 +34,13 @@ impl RuntimeConfig {
             .auth_token
             .or_else(|| std::env::var("BARNSTORMER_AUTH_TOKEN").ok())
             .filter(|token| !token.is_empty());
+        let static_dir = options.static_dir.unwrap_or_else(|| PathBuf::from("static"));
 
         Ok(Self {
             home,
             bind,
             auth_token,
+            static_dir,
             open_browser: options.open_browser,
         })
     }
@@ -64,6 +68,7 @@ mod tests {
             home: Some(PathBuf::from("/tmp/barnstormer-test")),
             bind: None,
             auth_token: None,
+            static_dir: None,
             open_browser: false,
         })
         .unwrap();
@@ -77,6 +82,7 @@ mod tests {
             home: Some(PathBuf::from("/tmp/barnstormer-test")),
             bind: Some("127.0.0.1:0".parse().unwrap()),
             auth_token: None,
+            static_dir: None,
             open_browser: false,
         })
         .unwrap();

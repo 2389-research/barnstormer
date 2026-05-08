@@ -14,6 +14,7 @@
     "active": true,
     "targets": ["app"],
     "icon": ["icons/icon.png", "icons/icon.icns"],
+    "resources": ["../../static"],
     "macOS": {
       "minimumSystemVersion": "12.0"
     }

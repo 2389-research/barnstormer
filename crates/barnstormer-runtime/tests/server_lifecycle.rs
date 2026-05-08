@@ -7,6 +7,7 @@ async fn embedded_server_reports_url_and_shuts_down() {
         home: Some(temp.path().to_path_buf()),
         bind: Some("127.0.0.1:0".parse().unwrap()),
         auth_token: None,
+        static_dir: None,
         open_browser: false,
     })
     .await

@@ -57,6 +57,7 @@ async fn main() {
                 home: None,
                 bind: None,
                 auth_token: None,
+                static_dir: None,
                 open_browser: !no_open,
             })
             .await

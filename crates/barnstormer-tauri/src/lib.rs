@@ -21,14 +21,16 @@ struct DesktopRuntimeState {
 pub(crate) struct DesktopAppState {
     app_home: PathBuf,
     settings_path: PathBuf,
+    static_dir: PathBuf,
     runtime: DesktopRuntimeState,
 }
 
-pub fn desktop_launch_options(app_home: PathBuf) -> RuntimeOptions {
+pub fn desktop_launch_options(app_home: PathBuf, static_dir: PathBuf) -> RuntimeOptions {
     RuntimeOptions {
         home: Some(app_home),
         bind: Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)),
         auth_token: None,
+        static_dir: Some(static_dir),
         open_browser: false,
     }
 }
@@ -43,6 +45,7 @@ pub fn run() {
         .setup(|app| {
             let app_home = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_home)?;
+            let static_dir = resolve_desktop_static_dir(&app.handle())?;
             let settings_path = DesktopSettings::settings_path(&app_home);
             let saved_settings = DesktopSettings::load(&settings_path)?.unwrap_or_default();
             if saved_settings.has_any_provider_key() {
@@ -52,6 +55,7 @@ pub fn run() {
             app.manage(DesktopAppState {
                 app_home,
                 settings_path,
+                static_dir,
                 runtime: DesktopRuntimeState {
                     server: Mutex::new(None),
                 },
@@ -94,6 +98,7 @@ pub(crate) fn start_server_if_needed<R: Runtime>(app: &tauri::AppHandle<R>) -> a
 
     let launched = tauri::async_runtime::block_on(launch(desktop_launch_options(
         state.app_home.clone(),
+        state.static_dir.clone(),
     )))?;
     let local_url = launched.local_url().to_string();
     *server = Some(launched);
@@ -137,6 +142,21 @@ fn open_settings_window<R: Runtime>(app: &tauri::AppHandle<R>) -> anyhow::Result
     Ok(())
 }
 
+fn resolve_desktop_static_dir<R: Runtime>(app: &tauri::AppHandle<R>) -> anyhow::Result<PathBuf> {
+    let bundled_static_dir = app.path().resource_dir()?.join("static");
+    if bundled_static_dir.exists() {
+        return Ok(bundled_static_dir);
+    }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_static_dir = manifest_dir
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("tauri crate should live under crates/")
+        .join("static");
+    Ok(repo_static_dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::desktop_launch_options;
@@ -144,9 +164,16 @@ mod tests {
 
     #[test]
     fn desktop_launch_uses_embedded_server_defaults() {
-        let launch = desktop_launch_options(PathBuf::from("/tmp/barnstormer-ui"));
+        let launch = desktop_launch_options(
+            PathBuf::from("/tmp/barnstormer-ui"),
+            PathBuf::from("/tmp/barnstormer-static"),
+        );
 
         assert!(!launch.open_browser);
         assert_eq!(launch.bind.unwrap().ip().to_string(), "127.0.0.1");
+        assert_eq!(
+            launch.static_dir.unwrap(),
+            PathBuf::from("/tmp/barnstormer-static")
+        );
     }
 }

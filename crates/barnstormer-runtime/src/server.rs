@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use barnstormer_server::{AppState, ProviderStatus, create_router};
+use barnstormer_server::{AppState, ProviderStatus, create_router_with_static_dir};
 use barnstormer_store::StorageManager;
 use tokio::sync::oneshot;
 
@@ -41,7 +41,11 @@ pub async fn launch(options: RuntimeOptions) -> anyhow::Result<ServerHandle> {
     tracing::info!("BARNSTORMER_HOME: {}", runtime_config.home.display());
 
     let state = build_state(&runtime_config).await?;
-    let app = create_router(state, runtime_config.auth_token.clone());
+    let app = create_router_with_static_dir(
+        state,
+        runtime_config.auth_token.clone(),
+        runtime_config.static_dir.clone(),
+    );
     let listener = tokio::net::TcpListener::bind(runtime_config.bind).await?;
     let local_addr = listener.local_addr()?;
     let local_url = format!("http://{}", local_addr);
