@@ -17,4 +17,10 @@ tauri-build = { version = "2" }
 [dependencies]
 anyhow.workspace = true
 barnstormer-runtime.workspace = true
+barnstormer-server.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tauri = { version = "2" }
+
+[dev-dependencies]
+tempfile = "3"
