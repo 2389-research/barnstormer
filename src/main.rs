@@ -1,12 +1,12 @@
 // ABOUTME: Entry point for the barnstormer binary.
 // ABOUTME: Parses CLI arguments with clap, recovers specs, spawns actors, and starts the Axum HTTP server.
 
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use barnstormer_agent::client::create_llm_client;
 use barnstormer_agent::import::{parse_with_llm, to_commands};
+use barnstormer_runtime::{RuntimeConfig, RuntimeOptions};
 use barnstormer_server::{AppState, ProviderStatus, create_router};
 use barnstormer_store::{JsonlLog, StorageManager};
 use clap::Parser;
@@ -54,14 +54,18 @@ async fn main() {
 
     match cli {
         Cli::Start { no_open } => {
-            let barnstormer_home = std::env::var("BARNSTORMER_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| dirs_or_default().join(".barnstormer"));
+            let runtime_config = RuntimeConfig::from_parts(RuntimeOptions {
+                home: None,
+                bind: None,
+                auth_token: None,
+                open_browser: !no_open,
+            })
+            .expect("failed to resolve runtime config");
 
-            tracing::info!("BARNSTORMER_HOME: {}", barnstormer_home.display());
+            tracing::info!("BARNSTORMER_HOME: {}", runtime_config.home.display());
 
             // Initialize StorageManager
-            let storage = StorageManager::new(barnstormer_home.clone())
+            let storage = StorageManager::new(runtime_config.home.clone())
                 .expect("failed to initialize storage manager");
 
             // Recover all existing specs
@@ -73,7 +77,7 @@ async fn main() {
 
             // Create AppState and spawn actors for recovered specs
             let state = Arc::new(AppState::new(
-                barnstormer_home.clone(),
+                runtime_config.home.clone(),
                 ProviderStatus::detect(),
             ));
             {
@@ -86,7 +90,7 @@ async fn main() {
                     let persister = barnstormer_server::web::spawn_event_persister(
                         &handle,
                         spec_id,
-                        &barnstormer_home,
+                        &runtime_config.home,
                     );
                     persisters.insert(spec_id, persister);
                     actors.insert(spec_id, handle);
@@ -98,22 +102,13 @@ async fn main() {
             // via the web UI "Start agents" button.
             tracing::info!("agents paused on startup — enable per-spec via the web UI");
 
-            let auth_token = std::env::var("BARNSTORMER_AUTH_TOKEN")
-                .ok()
-                .filter(|t| !t.is_empty());
+            let app = create_router(state, runtime_config.auth_token.clone());
 
-            let app = create_router(state, auth_token);
-
-            let bind_addr: SocketAddr = std::env::var("BARNSTORMER_BIND")
-                .unwrap_or_else(|_| "127.0.0.1:7331".to_string())
-                .parse()
-                .expect("BARNSTORMER_BIND must be a valid socket address");
-
-            let url = format!("http://{}", bind_addr);
+            let url = format!("http://{}", runtime_config.bind);
             tracing::info!("barnstormer listening on {}", url);
 
             // Open browser unless --no-open was specified
-            if !no_open {
+            if runtime_config.open_browser {
                 #[cfg(target_os = "macos")]
                 {
                     let _ = std::process::Command::new("open").arg(&url).spawn();
@@ -124,7 +119,7 @@ async fn main() {
                 }
             }
 
-            let listener = tokio::net::TcpListener::bind(bind_addr)
+            let listener = tokio::net::TcpListener::bind(runtime_config.bind)
                 .await
                 .expect("failed to bind");
 

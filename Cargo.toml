@@ -45,6 +45,7 @@ barnstormer-core = { path = "crates/barnstormer-core" }
 barnstormer-store = { path = "crates/barnstormer-store" }
 barnstormer-server = { path = "crates/barnstormer-server" }
 barnstormer-agent = { path = "crates/barnstormer-agent" }
+barnstormer-runtime = { path = "crates/barnstormer-runtime" }
 
 [package]
 name = "barnstormer"
@@ -68,6 +69,7 @@ barnstormer-core.workspace = true
 barnstormer-store.workspace = true
 barnstormer-server.workspace = true
 barnstormer-agent.workspace = true
+barnstormer-runtime.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
