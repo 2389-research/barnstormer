@@ -26,11 +26,15 @@ cargo tauri build --bundles app --config crates/barnstormer-tauri/tauri.conf.jso
 
 The resulting `.app` bundle should be emitted under Tauri's target output for the desktop crate.
 
+## Release Artifacts
+
+- Tagged `v*` GitHub releases build a signed and notarized macOS desktop artifact through `.github/workflows/release.yml`.
+- That release flow requires the repo-level GitHub secrets documented in `docs/release-signing-secrets.md`.
+- The preferred end-user download is `Barnstormer.dmg`, which is attached to the GitHub release beside the existing CLI binaries.
+
 ## Deferred Work
 
 - Production icon set polish
-- Notarization and release-signing automation
-- DMG packaging
 - Auto-update
 - A richer native settings UI
 - Replacing HTTP and SSE with direct Tauri IPC

@@ -163,7 +163,7 @@ jobs:
       - name: Upload signed macOS desktop artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Barnstormer.dmg
+          name: barnstormer-macos-desktop-dmg
           path: release/Barnstormer.dmg
           retention-days: 90
 
@@ -184,15 +184,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download CLI release artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          pattern: barnstormer-*
+          path: artifacts/cli
+
+      - name: Download desktop release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: barnstormer-macos-desktop-dmg
+          path: artifacts/desktop
 
       - name: Prepare release assets
         run: |
           mkdir -p release
-          for dir in artifacts/*/; do
+          for dir in artifacts/cli/*/; do
             name=$(basename "$dir")
             if [[ "$name" == *"windows"* ]]; then
               cp "$dir"* "release/${name}"
@@ -201,6 +208,8 @@ jobs:
               chmod +x "release/${name}"
             fi
           done
+
+          cp artifacts/desktop/Barnstormer.dmg release/Barnstormer.dmg
           ls -la release/
 
       - name: Create GitHub Release
