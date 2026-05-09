@@ -163,7 +163,7 @@ jobs:
       - name: Upload signed macOS desktop artifact
         uses: actions/upload-artifact@v4
         with:
-          name: barnstormer-macos-desktop-dmg
+          name: tauri-macos-desktop-dmg
           path: release/Barnstormer.dmg
           retention-days: 90
 
@@ -193,7 +193,7 @@ jobs:
       - name: Download desktop release artifact
         uses: actions/download-artifact@v4
         with:
-          name: barnstormer-macos-desktop-dmg
+          name: tauri-macos-desktop-dmg
           path: artifacts/desktop
 
       - name: Prepare release assets
