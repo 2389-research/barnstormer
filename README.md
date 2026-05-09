@@ -29,6 +29,7 @@ cargo tauri build --bundles app --config crates/barnstormer-tauri/tauri.conf.jso
 ```
 
 The desktop setup flow opens a native settings window first if no provider key is configured, then launches the main Barnstormer window after saving at least one provider key. More detail is in [docs/desktop-app.md](docs/desktop-app.md).
+For release-grade macOS signing and the required GitHub secret contract, see [docs/release-signing-secrets.md](docs/release-signing-secrets.md).
 
 ## Quick Start
 
