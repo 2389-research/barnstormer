@@ -121,7 +121,6 @@ jobs:
       - name: Stage desktop release artifacts
         run: |
           mkdir -p release
-          cp -R target/release/bundle/macos/Barnstormer.app release/Barnstormer.app
 
           DMG_PATH="$(find target/release/bundle -name '*.dmg' -print -quit)"
           if [ -z "$DMG_PATH" ]; then
@@ -135,13 +134,13 @@ jobs:
       - name: Notarize Barnstormer.dmg
         run: |
           set +e
-          SUBMISSION_OUTPUT="$(xcrun notarytool submit release/Barnstormer.dmg --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait 2>&1)"
-          SUBMISSION_STATUS=$?
+          xcrun notarytool submit release/Barnstormer.dmg --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait --output-format json > "$RUNNER_TEMP/notarytool-submit.json"
+          SUBMISSION_STATUS="$?"
           set -e
 
-          echo "$SUBMISSION_OUTPUT"
+          cat "$RUNNER_TEMP/notarytool-submit.json"
 
-          SUBMISSION_ID="$(printf '%s\n' "$SUBMISSION_OUTPUT" | sed -n 's/.*id: \([0-9a-fA-F-]\{36\}\).*/\1/p' | head -1)"
+          SUBMISSION_ID="$(python3 -c 'import json, pathlib, sys; path = pathlib.Path(sys.argv[1]); print(json.load(path.open()).get("id", "") if path.exists() and path.stat().st_size else "")' "$RUNNER_TEMP/notarytool-submit.json")"
           if [ -n "$SUBMISSION_ID" ]; then
             echo "SUBMISSION_ID=$SUBMISSION_ID" >> "$GITHUB_ENV"
           fi
@@ -164,10 +163,8 @@ jobs:
       - name: Upload signed macOS desktop artifact
         uses: actions/upload-artifact@v4
         with:
-          name: barnstormer-tauri-macos
-          path: |
-            release/Barnstormer.app
-            release/Barnstormer.dmg
+          name: Barnstormer.dmg
+          path: release/Barnstormer.dmg
           retention-days: 90
 
       - name: Clean up signing materials
@@ -180,7 +177,9 @@ jobs:
 
   create-release:
     name: Create Release
-    needs: build-release
+    needs:
+      - build-release
+      - build-tauri-macos
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
