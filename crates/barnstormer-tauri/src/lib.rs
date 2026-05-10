@@ -32,6 +32,9 @@ pub fn desktop_launch_options(app_home: PathBuf, static_dir: PathBuf) -> Runtime
         auth_token: None,
         static_dir: Some(static_dir),
         open_browser: false,
+        // The Tauri webview cannot send a bearer header, so a stale shell
+        // env var would silently 401 every API call from the embedded UI.
+        disable_auth_fallback: true,
     }
 }
 
@@ -47,7 +50,20 @@ pub fn run() {
             std::fs::create_dir_all(&app_home)?;
             let static_dir = resolve_desktop_static_dir(&app.handle())?;
             let settings_path = DesktopSettings::settings_path(&app_home);
-            let saved_settings = DesktopSettings::load(&settings_path)?.unwrap_or_default();
+            let saved_settings = match DesktopSettings::load(&settings_path) {
+                Ok(Some(settings)) => settings,
+                Ok(None) => DesktopSettings::default(),
+                Err(err) => {
+                    // A corrupt or schema-incompatible settings file should not brick
+                    // the app — fall back to defaults and route the user through
+                    // first-run setup again.
+                    tracing::warn!(
+                        "failed to read {}: {err}; using default settings",
+                        settings_path.display()
+                    );
+                    DesktopSettings::default()
+                }
+            };
             if saved_settings.has_any_provider_key() {
                 saved_settings.apply_to_env()?;
             }
@@ -88,7 +104,9 @@ pub fn run() {
         });
 }
 
-pub(crate) fn start_server_if_needed<R: Runtime>(app: &tauri::AppHandle<R>) -> anyhow::Result<String> {
+pub(crate) fn start_server_if_needed<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> anyhow::Result<String> {
     let state = app.state::<DesktopAppState>();
     let mut server = state.runtime.server.lock().unwrap();
 
@@ -113,13 +131,9 @@ pub(crate) fn open_main_window<R: Runtime>(
         return Ok(());
     }
 
-    tauri::WebviewWindowBuilder::new(
-        app,
-        "main",
-        tauri::WebviewUrl::External(local_url.parse()?),
-    )
-    .title("Barnstormer")
-    .build()?;
+    tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(local_url.parse()?))
+        .title("Barnstormer")
+        .build()?;
 
     Ok(())
 }
@@ -148,12 +162,28 @@ fn resolve_desktop_static_dir<R: Runtime>(app: &tauri::AppHandle<R>) -> anyhow::
         return Ok(bundled_static_dir);
     }
 
+    // Release bundles must ship `static/` in the resource dir — if it's missing
+    // the user gets a working window with all CSS/JS broken. Refuse to launch
+    // rather than silently falling back to a build-time path that does not
+    // exist on a user machine.
+    if !cfg!(debug_assertions) {
+        anyhow::bail!(
+            "bundled static assets not found at {}; the desktop bundle is missing its `static/` resource",
+            bundled_static_dir.display()
+        );
+    }
+
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repo_static_dir = manifest_dir
         .parent()
         .and_then(|path| path.parent())
         .expect("tauri crate should live under crates/")
         .join("static");
+    tracing::warn!(
+        "bundled static dir {} not found; falling back to repo static dir at {} (debug build only)",
+        bundled_static_dir.display(),
+        repo_static_dir.display()
+    );
     Ok(repo_static_dir)
 }
 

@@ -4,4 +4,3 @@
 fn main() {
     barnstormer_tauri::run();
 }
-

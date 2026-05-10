@@ -9,6 +9,7 @@ async fn embedded_server_reports_url_and_shuts_down() {
         auth_token: None,
         static_dir: None,
         open_browser: false,
+        disable_auth_fallback: true,
     })
     .await
     .unwrap();

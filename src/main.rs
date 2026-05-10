@@ -59,6 +59,7 @@ async fn main() {
                 auth_token: None,
                 static_dir: None,
                 open_browser: !no_open,
+                disable_auth_fallback: false,
             })
             .await
             .expect("failed to launch barnstormer runtime");

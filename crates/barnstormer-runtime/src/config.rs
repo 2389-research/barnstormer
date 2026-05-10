@@ -12,6 +12,11 @@ pub struct RuntimeOptions {
     pub auth_token: Option<String>,
     pub static_dir: Option<PathBuf>,
     pub open_browser: bool,
+    /// When true, do not consult the `BARNSTORMER_AUTH_TOKEN` env var if
+    /// `auth_token` is `None`. Frontends that embed a loopback-only server
+    /// (e.g. the Tauri desktop shell) set this so a user's shell env cannot
+    /// silently flip on bearer auth and break in-process API calls.
+    pub disable_auth_fallback: bool,
 }
 
 /// Concrete runtime configuration after resolving defaults.
@@ -32,9 +37,17 @@ impl RuntimeConfig {
             .unwrap_or_else(|| "127.0.0.1:7331".parse().expect("valid default bind"));
         let auth_token = options
             .auth_token
-            .or_else(|| std::env::var("BARNSTORMER_AUTH_TOKEN").ok())
+            .or_else(|| {
+                if options.disable_auth_fallback {
+                    None
+                } else {
+                    std::env::var("BARNSTORMER_AUTH_TOKEN").ok()
+                }
+            })
             .filter(|token| !token.is_empty());
-        let static_dir = options.static_dir.unwrap_or_else(|| PathBuf::from("static"));
+        let static_dir = options
+            .static_dir
+            .unwrap_or_else(|| PathBuf::from("static"));
 
         Ok(Self {
             home,
@@ -70,6 +83,7 @@ mod tests {
             auth_token: None,
             static_dir: None,
             open_browser: false,
+            disable_auth_fallback: false,
         })
         .unwrap();
 
@@ -84,10 +98,39 @@ mod tests {
             auth_token: None,
             static_dir: None,
             open_browser: false,
+            disable_auth_fallback: false,
         })
         .unwrap();
 
         assert_eq!(config.bind.ip().to_string(), "127.0.0.1");
         assert_eq!(config.bind.port(), 0);
+    }
+
+    #[test]
+    fn disable_auth_fallback_skips_env_var() {
+        // SAFETY: tests run single-threaded for env mutation; this test
+        // restores the prior value before returning.
+        let prior = std::env::var("BARNSTORMER_AUTH_TOKEN").ok();
+        unsafe { std::env::set_var("BARNSTORMER_AUTH_TOKEN", "leaked-token") };
+
+        let config = RuntimeConfig::from_parts(RuntimeOptions {
+            home: Some(PathBuf::from("/tmp/barnstormer-test")),
+            bind: None,
+            auth_token: None,
+            static_dir: None,
+            open_browser: false,
+            disable_auth_fallback: true,
+        })
+        .unwrap();
+
+        match prior {
+            Some(value) => unsafe { std::env::set_var("BARNSTORMER_AUTH_TOKEN", value) },
+            None => unsafe { std::env::remove_var("BARNSTORMER_AUTH_TOKEN") },
+        }
+
+        assert!(
+            config.auth_token.is_none(),
+            "expected auth disabled when fallback is off"
+        );
     }
 }

@@ -19,6 +19,17 @@ pub fn save_settings<R: Runtime>(
     state: State<'_, DesktopAppState>,
     settings: DesktopSettings,
 ) -> Result<(), String> {
+    // `apply_to_env` mutates process env vars that the embedded server reads
+    // from other threads. Refuse to run while the server is alive — v1 only
+    // surfaces the settings window before launch, so this should only fire if
+    // a future entrypoint reaches the command after the server has booted.
+    if state.runtime.server.lock().unwrap().is_some() {
+        return Err(
+            "Settings cannot be changed while Barnstormer is running. Quit and reopen the app to update credentials."
+                .to_string(),
+        );
+    }
+
     settings
         .save(&state.settings_path)
         .map_err(|err| err.to_string())?;
