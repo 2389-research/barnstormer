@@ -58,16 +58,17 @@ jobs:
 
   build-tauri-macos:
     name: Build Signed Tauri macOS App
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6.0.2
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
 
       - name: Install cargo-tauri
-        run: cargo install tauri-cli --version '^2.0.0' --locked
+        run: cargo install tauri-cli --version '=2.11.1' --locked
 
       - name: Verify desktop crates
         run: |
@@ -116,19 +117,28 @@ jobs:
       - name: Build Tauri desktop bundles
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: cargo tauri build --bundles app,dmg --config crates/barnstormer-tauri/tauri.conf.json
+        run: cargo tauri build --bundles app,dmg --target universal-apple-darwin --config crates/barnstormer-tauri/tauri.conf.json
 
       - name: Stage desktop release artifacts
         run: |
           mkdir -p release
 
-          DMG_PATH="$(find target/release/bundle -name '*.dmg' -print -quit)"
-          if [ -z "$DMG_PATH" ]; then
+          # Glob explicitly so an unexpected extra DMG (e.g. a future Sparkle
+          # update DMG) fails loudly instead of being silently dropped.
+          shopt -s nullglob
+          dmg_paths=(target/universal-apple-darwin/release/bundle/dmg/*.dmg)
+          shopt -u nullglob
+
+          if [ "${#dmg_paths[@]}" -eq 0 ]; then
             echo "No Barnstormer.dmg produced by cargo tauri build" >&2
             exit 1
           fi
+          if [ "${#dmg_paths[@]}" -gt 1 ]; then
+            echo "Expected exactly one DMG, found ${#dmg_paths[@]}: ${dmg_paths[*]}" >&2
+            exit 1
+          fi
 
-          cp "$DMG_PATH" release/Barnstormer.dmg
+          cp "${dmg_paths[0]}" release/Barnstormer.dmg
           ls -la release
 
       - name: Notarize Barnstormer.dmg
@@ -199,21 +209,28 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release
+          shopt -s nullglob
           for dir in artifacts/cli/*/; do
             name=$(basename "$dir")
-            if [[ "$name" == *"windows"* ]]; then
-              cp "$dir"* "release/${name}"
-            else
-              cp "$dir"* "release/${name}"
+            files=("$dir"*)
+            if [ "${#files[@]}" -ne 1 ]; then
+              echo "Expected exactly one file in $dir, got ${#files[@]}: ${files[*]}" >&2
+              exit 1
+            fi
+            cp "${files[0]}" "release/${name}"
+            if [[ "$name" != *"windows"* ]]; then
               chmod +x "release/${name}"
             fi
           done
+          shopt -u nullglob
 
           cp artifacts/desktop/Barnstormer.dmg release/Barnstormer.dmg
           ls -la release/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3.0.0
+        # Pinned to v3.0.0 SHA: this action runs against secrets and should
+        # not silently float onto a newer tag.
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
         with:
           files: release/*
           generate_release_notes: true
