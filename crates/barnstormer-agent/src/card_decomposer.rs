@@ -52,9 +52,18 @@ pub struct DecomposerOutput {
 #[async_trait]
 pub trait CardDecomposer: Send + Sync + std::fmt::Debug {
     /// Decompose the brief identified by `brief_attachment_id` into roughly
-    /// `target_card_count` cards. `decomposition_hints` is free-text guidance
-    /// (e.g. "focus on validation engine and OSS/SaaS split") that the
-    /// architect may use to bias which topics get cards.
+    /// `target_card_count` cards.
+    ///
+    /// `decomposition_hints` is free-text guidance (e.g. "focus on validation
+    /// engine and OSS/SaaS split") that the architect may use to bias topic
+    /// selection.
+    ///
+    /// `attachment_summary` is the pre-computed LLM summary the server stores
+    /// alongside each attachment (see `state.context_attachments[].summary`).
+    /// Implementations that read the raw bytes off disk should treat this as
+    /// a fallback when the bytes aren't usable as UTF-8 text — most notably
+    /// PDFs, images, audio, video. Without this fallback, decomposition can
+    /// only handle text/markdown attachments.
     ///
     /// Returns the cards plus per-call usage telemetry. Errors are stringified
     /// so the tool can return them as `ToolResult::error`.
@@ -64,5 +73,6 @@ pub trait CardDecomposer: Send + Sync + std::fmt::Debug {
         brief_attachment_id: Ulid,
         target_card_count: u32,
         decomposition_hints: Option<&str>,
+        attachment_summary: Option<&str>,
     ) -> Result<DecomposerOutput, String>;
 }

@@ -96,23 +96,36 @@ impl Tool for DelegateCardDecompositionTool {
             .map(|s| s.to_string());
 
         // Sanity-check that the attachment exists and isn't removed before
-        // we pay for any LLM calls.
+        // we pay for any LLM calls. Also extract its stored summary so the
+        // decomposer can fall back to that when the raw bytes aren't UTF-8
+        // text (PDFs, images, etc.).
         let state = self.actor.read_state().await;
-        let attachment_present = state
+        let attachment = state
             .context_attachments
             .iter()
-            .any(|a| a.attachment_id == brief_attachment_id && !a.removed);
+            .find(|a| a.attachment_id == brief_attachment_id && !a.removed)
+            .cloned();
         drop(state);
-        if !attachment_present {
-            return Ok(ToolResult::error(format!(
-                "attachment {brief_attachment_id} not found"
-            )));
-        }
+        let attachment = match attachment {
+            Some(a) => a,
+            None => {
+                return Ok(ToolResult::error(format!(
+                    "attachment {brief_attachment_id} not found"
+                )));
+            }
+        };
+        let attachment_summary = attachment.summary.clone();
 
         let spec_id = self.actor.spec_id;
         let output = match self
             .decomposer
-            .decompose(spec_id, brief_attachment_id, target_count, hints.as_deref())
+            .decompose(
+                spec_id,
+                brief_attachment_id,
+                target_count,
+                hints.as_deref(),
+                attachment_summary.as_deref(),
+            )
             .await
         {
             Ok(o) => o,
@@ -202,6 +215,7 @@ mod tests {
             _brief_attachment_id: Ulid,
             _target_card_count: u32,
             _decomposition_hints: Option<&str>,
+            _attachment_summary: Option<&str>,
         ) -> Result<DecomposerOutput, String> {
             Ok(DecomposerOutput {
                 cards: self.cards.clone(),
@@ -221,6 +235,7 @@ mod tests {
             _brief_attachment_id: Ulid,
             _target_card_count: u32,
             _decomposition_hints: Option<&str>,
+            _attachment_summary: Option<&str>,
         ) -> Result<DecomposerOutput, String> {
             Err(self.0.to_string())
         }
@@ -467,6 +482,7 @@ mod tests {
                 _brief_attachment_id: Ulid,
                 _target_card_count: u32,
                 decomposition_hints: Option<&str>,
+                _attachment_summary: Option<&str>,
             ) -> Result<DecomposerOutput, String> {
                 *self.captured.lock().unwrap() = decomposition_hints.map(|s| s.to_string());
                 Ok(DecomposerOutput {

@@ -3443,6 +3443,8 @@ pub async fn start_agents(
     }
 
     // Create swarm (sync operation, safe to hold write lock)
+    let (narration_renderer, card_decomposer) =
+        delegation_tools(state.barnstormer_home.clone());
     let swarm = match SwarmOrchestrator::with_defaults(
         spec_id,
         swarm_actor_handle,
@@ -3450,10 +3452,8 @@ pub async fn start_agents(
         Arc::new(crate::attachment_summarizer::ServerSummarizer {
             home: state.barnstormer_home.clone(),
         }),
-        Some(Arc::new(crate::narration_renderer::ServerNarrationRenderer)),
-        Some(Arc::new(crate::card_decomposer::ServerCardDecomposer {
-            home: state.barnstormer_home.clone(),
-        })),
+        narration_renderer,
+        card_decomposer,
     ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {
@@ -3590,6 +3590,35 @@ pub async fn agent_status(
     }
 }
 
+/// Build the (narration_renderer, card_decomposer) pair to wire into the swarm.
+/// Returns (None, None) when `BARNSTORMER_DISABLE_DELEGATION` is set (any
+/// non-empty value) so the same binary can run as either a pre-feature baseline
+/// (legacy emit_narration + write_commands.CreateCard for cards) or as the
+/// Sonnet-coordinator + Haiku-prose setup that's standard on this branch.
+/// Lets the test harness A/B the two arms without changing model env vars.
+#[allow(clippy::type_complexity)]
+fn delegation_tools(
+    barnstormer_home: std::path::PathBuf,
+) -> (
+    Option<Arc<dyn barnstormer_agent::NarrationRenderer>>,
+    Option<Arc<dyn barnstormer_agent::CardDecomposer>>,
+) {
+    let disabled = std::env::var("BARNSTORMER_DISABLE_DELEGATION")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .is_some();
+    if disabled {
+        tracing::info!("delegation disabled via BARNSTORMER_DISABLE_DELEGATION; running pre-feature baseline");
+        return (None, None);
+    }
+    (
+        Some(Arc::new(crate::narration_renderer::ServerNarrationRenderer)),
+        Some(Arc::new(crate::card_decomposer::ServerCardDecomposer {
+            home: barnstormer_home,
+        })),
+    )
+}
+
 /// Helper to start the agent swarm for a spec, if a provider is available.
 /// Returns silently if no provider is configured, if the swarm already exists,
 /// or if swarm creation fails. Used by both web and API create_spec handlers.
@@ -3619,6 +3648,8 @@ pub async fn try_start_agents(
     }
 
     // Create swarm (sync operation, safe to hold write lock)
+    let (narration_renderer, card_decomposer) =
+        delegation_tools(state.barnstormer_home.clone());
     let swarm = match SwarmOrchestrator::with_defaults(
         spec_id,
         swarm_actor_handle,
@@ -3626,10 +3657,8 @@ pub async fn try_start_agents(
         Arc::new(crate::attachment_summarizer::ServerSummarizer {
             home: state.barnstormer_home.clone(),
         }),
-        Some(Arc::new(crate::narration_renderer::ServerNarrationRenderer)),
-        Some(Arc::new(crate::card_decomposer::ServerCardDecomposer {
-            home: state.barnstormer_home.clone(),
-        })),
+        narration_renderer,
+        card_decomposer,
     ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {

@@ -46,6 +46,7 @@ impl CardDecomposer for ServerCardDecomposer {
         brief_attachment_id: Ulid,
         target_card_count: u32,
         decomposition_hints: Option<&str>,
+        attachment_summary: Option<&str>,
     ) -> Result<DecomposerOutput, String> {
         let model = std::env::var("BARNSTORMER_DECOMPOSER_MODEL")
             .ok()
@@ -61,7 +62,7 @@ impl CardDecomposer for ServerCardDecomposer {
             .join(spec_id.to_string())
             .join("context")
             .join(brief_attachment_id.to_string());
-        let brief_text = read_brief(&brief_dir).await?;
+        let brief_text = read_brief(&brief_dir, attachment_summary).await?;
 
         let api_key = std::env::var("ANTHROPIC_API_KEY")
             .map_err(|_| "ANTHROPIC_API_KEY not set".to_string())?;
@@ -123,9 +124,20 @@ impl CardDecomposer for ServerCardDecomposer {
 
 /// Locate and read the brief file inside <home>/specs/<id>/context/<att>/.
 /// Picks the first regular file that isn't an obvious sidecar (summary.txt,
-/// metadata.json). The on-disk schema only stores one primary file per
-/// attachment in practice.
-async fn read_brief(dir: &std::path::Path) -> Result<String, String> {
+/// metadata.json).
+///
+/// Tries UTF-8 text first — works for .md, .txt, .json, etc. If the file
+/// isn't valid UTF-8 (most commonly PDFs, images, audio, video), falls back
+/// to the pre-computed `attachment_summary` that barnstormer's multimodal
+/// summarizer generated at upload time. If that summary is also missing
+/// (e.g. summarizer timed out or failed), returns a clear error so the
+/// Manager can route around the decomposer instead of silently producing
+/// zero cards.
+async fn read_brief(
+    dir: &std::path::Path,
+    attachment_summary: Option<&str>,
+) -> Result<String, String> {
+    let mut primary_path: Option<std::path::PathBuf> = None;
     let mut entries = tokio::fs::read_dir(dir)
         .await
         .map_err(|e| format!("could not list attachment dir {dir:?}: {e}"))?;
@@ -143,11 +155,45 @@ async fn read_brief(dir: &std::path::Path) -> Result<String, String> {
         if lower.ends_with(".summary.txt") || lower == "metadata.json" || lower.starts_with('.') {
             continue;
         }
-        return tokio::fs::read_to_string(&path)
-            .await
-            .map_err(|e| format!("could not read brief file {path:?}: {e}"));
+        primary_path = Some(path);
+        break;
     }
-    Err(format!("no readable brief file found in {dir:?}"))
+
+    let path = match primary_path {
+        Some(p) => p,
+        None => return Err(format!("no readable brief file found in {dir:?}")),
+    };
+
+    // Try UTF-8 text first.
+    match tokio::fs::read_to_string(&path).await {
+        Ok(text) => Ok(text),
+        Err(text_err) => {
+            // Bytes aren't valid UTF-8 — almost certainly a PDF/image/audio/
+            // video. Use the upload-time summary as the surrogate brief.
+            // Prefix with a note so the architect prompt knows it's a
+            // summary, not the full text — bullets and decomposition
+            // decisions should be appropriately scoped to a summary.
+            if let Some(summary) = attachment_summary
+                && !summary.trim().is_empty()
+            {
+                return Ok(format!(
+                        "[NOTE: original attachment ({}) is binary/non-text. \
+                         Decomposition is operating on the LLM-generated summary below, \
+                         not the raw bytes. Scope card content to what's actually \
+                         captured in this summary.]\n\n{}",
+                        path.file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("(unknown)"),
+                        summary
+                    ));
+            }
+            Err(format!(
+                "brief file {path:?} is not UTF-8 text and no attachment summary is available; \
+                 cannot decompose (text-read error: {text_err}). \
+                 The Manager should fall back to retrieve_context + manual write_commands."
+            ))
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
