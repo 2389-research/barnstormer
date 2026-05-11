@@ -513,4 +513,128 @@ mod tests {
         let got = captured.lock().unwrap().clone();
         assert_eq!(got.as_deref(), Some("focus on validation engine"));
     }
+
+    #[tokio::test]
+    async fn attachment_summary_propagates_through_to_decomposer() {
+        // Catches the 2026-05-11 wiring bug: the tool must extract the
+        // attachment's stored summary from spec state and forward it to
+        // the decomposer so non-UTF-8 (PDF/image/audio/video) attachments
+        // can still be decomposed from the LLM-generated summary.
+        use std::sync::Mutex;
+
+        #[derive(Debug)]
+        struct CapturingSummaryDecomposer {
+            captured: Arc<Mutex<Option<String>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl CardDecomposer for CapturingSummaryDecomposer {
+            async fn decompose(
+                &self,
+                _spec_id: Ulid,
+                _brief_attachment_id: Ulid,
+                _target_card_count: u32,
+                _decomposition_hints: Option<&str>,
+                attachment_summary: Option<&str>,
+            ) -> Result<DecomposerOutput, String> {
+                *self.captured.lock().unwrap() =
+                    attachment_summary.map(|s| s.to_string());
+                Ok(DecomposerOutput {
+                    cards: vec![],
+                    usage: vec![],
+                })
+            }
+        }
+
+        let captured = Arc::new(Mutex::new(None));
+        let (_id, handle) = make_test_actor().await;
+        let attachment_id = attach_brief(&handle).await;
+        // Simulate the summarizer having populated the attachment's summary.
+        handle
+            .send_command(Command::SummarizeContext {
+                attachment_id,
+                summary: "Summary: this PDF describes an alarm clock app.".to_string(),
+            })
+            .await
+            .unwrap();
+        let tool = DelegateCardDecompositionTool {
+            actor: Arc::new(handle),
+            agent_id: "manager-test".into(),
+            decomposer: Arc::new(CapturingSummaryDecomposer {
+                captured: Arc::clone(&captured),
+            }),
+        };
+        tool.execute(json!({
+            "brief_attachment_id": attachment_id.to_string(),
+            "target_card_count": 10
+        }))
+        .await
+        .unwrap();
+
+        let got = captured.lock().unwrap().clone();
+        assert_eq!(
+            got.as_deref(),
+            Some("Summary: this PDF describes an alarm clock app."),
+            "the tool should pull attachment.summary from state and pass it to the decomposer"
+        );
+    }
+
+    #[tokio::test]
+    async fn attachment_summary_is_none_when_summarizer_has_not_run() {
+        // If the summarizer hasn't completed (or failed) by the time the
+        // Manager calls the tool, attachment.summary is None — the
+        // decomposer is responsible for handling that case (typically by
+        // trying to read raw bytes as text, then failing cleanly).
+        use std::sync::Mutex;
+
+        #[derive(Debug)]
+        struct CapturingSummaryDecomposer {
+            captured: Arc<Mutex<(bool, Option<String>)>>,
+        }
+
+        #[async_trait::async_trait]
+        impl CardDecomposer for CapturingSummaryDecomposer {
+            async fn decompose(
+                &self,
+                _spec_id: Ulid,
+                _brief_attachment_id: Ulid,
+                _target_card_count: u32,
+                _decomposition_hints: Option<&str>,
+                attachment_summary: Option<&str>,
+            ) -> Result<DecomposerOutput, String> {
+                let mut g = self.captured.lock().unwrap();
+                *g = (true, attachment_summary.map(|s| s.to_string()));
+                Ok(DecomposerOutput {
+                    cards: vec![],
+                    usage: vec![],
+                })
+            }
+        }
+
+        let captured = Arc::new(Mutex::new((false, None)));
+        let (_id, handle) = make_test_actor().await;
+        let attachment_id = attach_brief(&handle).await;
+        // Deliberately DON'T send SummarizeContext.
+        let tool = DelegateCardDecompositionTool {
+            actor: Arc::new(handle),
+            agent_id: "manager-test".into(),
+            decomposer: Arc::new(CapturingSummaryDecomposer {
+                captured: Arc::clone(&captured),
+            }),
+        };
+        tool.execute(json!({
+            "brief_attachment_id": attachment_id.to_string(),
+            "target_card_count": 10
+        }))
+        .await
+        .unwrap();
+
+        let g = captured.lock().unwrap().clone();
+        assert!(g.0, "decomposer should still be called");
+        assert!(
+            g.1.is_none(),
+            "with no SummarizeContext yet, attachment_summary must be None — got {:?}",
+            g.1
+        );
+    }
 }

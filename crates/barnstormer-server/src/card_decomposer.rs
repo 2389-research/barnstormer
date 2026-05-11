@@ -537,4 +537,84 @@ mod tests {
         let err = extract_text(&resp).unwrap_err();
         assert!(err.contains("no text content"));
     }
+
+    // ─── read_brief branches ────────────────────────────────────────────
+    //
+    // Pre-empt the 2026-05-11 bug where a PDF attachment caused the decomposer
+    // to fail because read_brief tried `read_to_string` on binary bytes.
+    // The three branches that matter: UTF-8 success, binary→summary fallback,
+    // binary→no-summary clean error.
+
+    use tempfile::tempdir;
+
+    fn make_brief_dir_with(filename: &str, bytes: &[u8]) -> tempfile::TempDir {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join(filename), bytes).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn read_brief_returns_text_when_utf8() {
+        let dir = make_brief_dir_with("brief.md", b"# Spec\nThis is a markdown brief.");
+        let text = read_brief(dir.path(), None).await.unwrap();
+        assert!(text.contains("# Spec"));
+        assert!(text.contains("markdown brief"));
+        // No [NOTE: ...] prefix when reading text directly.
+        assert!(!text.starts_with("[NOTE:"));
+    }
+
+    #[tokio::test]
+    async fn read_brief_falls_back_to_summary_on_binary_attachment() {
+        // PDF-ish binary header: ensures `read_to_string` fails with InvalidData.
+        let bytes = b"\x25PDF-1.4\n\x00\x01\x02\xff\xfe\xfd\nbinary garbage";
+        let dir = make_brief_dir_with("brief.pdf", bytes);
+        let summary = "Summary: Skills Manager is a portable skills platform.";
+        let text = read_brief(dir.path(), Some(summary)).await.unwrap();
+        // Should use the summary as the surrogate brief AND prefix a note
+        // so the architect prompt knows it's not raw text.
+        assert!(text.contains("[NOTE:"));
+        assert!(text.contains("brief.pdf"));
+        assert!(text.contains(summary));
+    }
+
+    #[tokio::test]
+    async fn read_brief_errors_cleanly_on_binary_with_no_summary() {
+        let bytes = b"\x25PDF-1.4\n\xff\xfe binary";
+        let dir = make_brief_dir_with("brief.pdf", bytes);
+        let err = read_brief(dir.path(), None).await.unwrap_err();
+        // Manager-readable error explaining why and what to do next.
+        assert!(err.contains("not UTF-8"));
+        assert!(err.contains("no attachment summary"));
+        assert!(err.contains("Manager"));
+    }
+
+    #[tokio::test]
+    async fn read_brief_errors_when_summary_is_empty_string() {
+        // Empty/whitespace summary shouldn't be used as a surrogate — that
+        // would produce zero-info bodies. Treat it like missing.
+        let bytes = b"\xff\xfe\x00 binary";
+        let dir = make_brief_dir_with("brief.pdf", bytes);
+        let err = read_brief(dir.path(), Some("   ")).await.unwrap_err();
+        assert!(err.contains("no attachment summary"));
+    }
+
+    #[tokio::test]
+    async fn read_brief_errors_when_dir_has_no_primary_file() {
+        // Empty dir.
+        let dir = tempdir().unwrap();
+        let err = read_brief(dir.path(), Some("a summary")).await.unwrap_err();
+        assert!(err.contains("no readable brief file"));
+    }
+
+    #[tokio::test]
+    async fn read_brief_skips_summary_sidecar_files() {
+        // Some upload paths drop a `.summary.txt` next to the primary file.
+        // Confirm we still pick the right file as the brief.
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("brief.md.summary.txt"), b"sidecar").unwrap();
+        std::fs::write(dir.path().join("brief.md"), b"# real content").unwrap();
+        let text = read_brief(dir.path(), None).await.unwrap();
+        assert!(text.contains("real content"));
+        assert!(!text.contains("sidecar"));
+    }
 }
