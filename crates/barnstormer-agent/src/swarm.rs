@@ -129,6 +129,10 @@ fn tool_usage_guide(agent_id: &str) -> String {
             {{\"intent\": \"step_explanation\", \"points\": [\"reading state first\", \"then writing cards\"]}}\n\
             Intent values: structural_analysis, gap_identification, completion_summary, user_acknowledgment, step_explanation, phase_transition_recap, exploratory_brainstorm.\n\
             Only use {{\"message\": \"...\"}} when you need exact control over the prose.\n\
+        - delegate_card_decomposition: When the user attached a brief/RFP/design doc and the board needs the initial set of cards, PREFER this over write_commands.CreateCard. Args:\n\
+            {{\"brief_attachment_id\": \"<ULID from read_state.context_attachments>\", \"target_card_count\": 20, \"decomposition_hints\": \"focus areas (optional)\"}}\n\
+            The tool internally runs an architect+executor pipeline that produces all cards + bodies + lanes in one call. You do NOT need a follow-up write_commands call to create those cards.\n\
+            Use write_commands.CreateCard only for individual cards you want to author yourself (typically <5 cards), or when no source brief is attached.\n\
         - emit_diff_summary: Mark your step as finished with a change summary. Call this LAST.\n\
         - ask_user_boolean / ask_user_freeform / ask_user_multiple_choice: Ask the user questions.\n\n\
         Workflow: 1) read_state 2) emit_narration (explain plan) 3) write_commands (make changes) 4) emit_diff_summary (finish)"
@@ -245,6 +249,10 @@ pub struct SwarmOrchestrator {
     /// crate stays free of LLM-client wiring. When None, emit_narration is
     /// restricted to its legacy `message` field.
     pub narration_renderer: Option<Arc<dyn crate::NarrationRenderer>>,
+    /// Optional Haiku-backed bulk-decomposition pipeline for
+    /// delegate_card_decomposition. When None, the tool is not registered
+    /// and Sonnet falls back to write_commands.CreateCard for bulk decomposition.
+    pub card_decomposer: Option<Arc<dyn crate::CardDecomposer>>,
 }
 
 impl SwarmOrchestrator {
@@ -256,12 +264,14 @@ impl SwarmOrchestrator {
     /// `summarizer` is the question-mode dispatcher used by the
     /// `retrieve_context` tool; the server injects an impl that calls back into
     /// its summarizer module.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_defaults(
         spec_id: Ulid,
         actor: SpecActorHandle,
         home: PathBuf,
         summarizer: Arc<dyn crate::AttachmentSummarizer>,
         narration_renderer: Option<Arc<dyn crate::NarrationRenderer>>,
+        card_decomposer: Option<Arc<dyn crate::CardDecomposer>>,
     ) -> Result<Self, anyhow::Error> {
         let provider = std::env::var("BARNSTORMER_DEFAULT_PROVIDER")
             .unwrap_or_else(|_| "anthropic".to_string());
@@ -302,6 +312,7 @@ impl SwarmOrchestrator {
             home,
             summarizer,
             narration_renderer,
+            card_decomposer,
         })
     }
 
@@ -316,6 +327,7 @@ impl SwarmOrchestrator {
         home: PathBuf,
         summarizer: Arc<dyn crate::AttachmentSummarizer>,
         narration_renderer: Option<Arc<dyn crate::NarrationRenderer>>,
+        card_decomposer: Option<Arc<dyn crate::CardDecomposer>>,
     ) -> Self {
         let actor = Arc::new(actor);
         let event_receivers = agents.iter().map(|_| actor.subscribe()).collect();
@@ -334,6 +346,7 @@ impl SwarmOrchestrator {
             home,
             summarizer,
             narration_renderer,
+            card_decomposer,
         }
     }
 
@@ -442,6 +455,7 @@ impl SwarmOrchestrator {
         home: &Path,
         summarizer: &Arc<dyn crate::AttachmentSummarizer>,
         narration_renderer: &Option<Arc<dyn crate::NarrationRenderer>>,
+        card_decomposer: &Option<Arc<dyn crate::CardDecomposer>>,
     ) -> bool {
         // Start agent step
         let start_cmd = Command::StartAgentStep {
@@ -465,6 +479,7 @@ impl SwarmOrchestrator {
             home.to_path_buf(),
             Arc::clone(summarizer),
             narration_renderer.clone(),
+            card_decomposer.clone(),
         )
         .await;
 
@@ -637,6 +652,7 @@ async fn run_agent_by_index(
         let home = s.home.clone();
         let summarizer = Arc::clone(&s.summarizer);
         let narration_renderer = s.narration_renderer.clone();
+        let card_decomposer = s.card_decomposer.clone();
         match s.agents[index].take() {
             Some(runner) => {
                 // Swap out the receiver with a fresh one; the old one keeps its
@@ -654,6 +670,7 @@ async fn run_agent_by_index(
                     home,
                     summarizer,
                     narration_renderer,
+                    card_decomposer,
                 ))
             }
             None => {
@@ -673,6 +690,7 @@ async fn run_agent_by_index(
         home,
         summarizer,
         narration_renderer,
+        card_decomposer,
     )) = extracted
     else {
         return false;
@@ -714,6 +732,7 @@ async fn run_agent_by_index(
         &home,
         &summarizer,
         &narration_renderer,
+        &card_decomposer,
     )
     .await;
 
@@ -1099,6 +1118,7 @@ mod tests {
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
             None,
+            None,
         );
 
         assert_eq!(swarm.agents.len(), 4);
@@ -1128,6 +1148,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
         );
 
@@ -1162,6 +1183,7 @@ mod tests {
             &SpecPhase::Refining,
             &home,
             &summarizer,
+            &None,
             &None,
         )
         .await;
@@ -1652,6 +1674,7 @@ mod tests {
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
             None,
+            None,
         );
         let actor_handle = Arc::clone(&swarm.actor);
         let pending = Arc::clone(&swarm.pending_transition_question);
@@ -1714,6 +1737,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
         );
         let actor_handle = Arc::clone(&swarm.actor);
@@ -1793,6 +1817,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
         );
 
@@ -1874,6 +1899,7 @@ mod tests {
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
             None,
+            None,
         );
         let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
 
@@ -1905,6 +1931,7 @@ mod tests {
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
             None,
+            None,
         );
         assert_eq!(swarm.agent_count(), 2);
     }
@@ -1924,6 +1951,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
         );
         // Each agent should have a dedicated event receiver
@@ -1963,6 +1991,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
         );
 
@@ -2007,6 +2036,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
         );
 
@@ -2087,6 +2117,7 @@ mod tests {
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
             None,
+            None,
         );
 
         // Restore the old contexts onto the new agents
@@ -2121,6 +2152,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
         );
         let notify = Arc::clone(&swarm.human_message_notify);
@@ -2159,6 +2191,7 @@ mod tests {
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
             None,
+            None,
         );
         assert_eq!(find_manager_index(&swarm), Some(1));
     }
@@ -2178,6 +2211,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
         );
         assert_eq!(find_manager_index(&swarm), None);
@@ -2228,6 +2262,7 @@ mod tests {
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
             None,
+            None,
         );
 
         // Verify: only Manager should run during brainstorming
@@ -2273,6 +2308,7 @@ mod tests {
             "test-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
         );
 

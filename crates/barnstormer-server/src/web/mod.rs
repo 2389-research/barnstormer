@@ -3451,6 +3451,9 @@ pub async fn start_agents(
             home: state.barnstormer_home.clone(),
         }),
         Some(Arc::new(crate::narration_renderer::ServerNarrationRenderer)),
+        Some(Arc::new(crate::card_decomposer::ServerCardDecomposer {
+            home: state.barnstormer_home.clone(),
+        })),
     ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {
@@ -3624,6 +3627,9 @@ pub async fn try_start_agents(
             home: state.barnstormer_home.clone(),
         }),
         Some(Arc::new(crate::narration_renderer::ServerNarrationRenderer)),
+        Some(Arc::new(crate::card_decomposer::ServerCardDecomposer {
+            home: state.barnstormer_home.clone(),
+        })),
     ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {
