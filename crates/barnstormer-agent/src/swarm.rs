@@ -146,6 +146,11 @@ fn tool_usage_guide(agent_id: &str) -> String {
             Optional: lane, source_attachment_id (for grounding), related_card_ids (for de-dup), free_text_context, target_length_range [min, max].\n\
             The tool's writer expands key_points into a body in the right voice for the card_type (idea = exploratory, task = concrete actionable, risk = likelihood/impact/mitigation, etc.). You do NOT need a follow-up write_commands call.\n\
             Use write_commands.CreateCard ONLY when you need exact control over the prose, or when none of the 5 card_types fit.\n\
+        - delegate_spec_core_field: Author ONE prose field on the spec_core (description / constraints / success_criteria / risks / notes). PREFER this over write_commands.UpdateSpecCore when you're writing multi-paragraph or multi-bullet markdown. Args:\n\
+            {{\"field_name\": \"description|constraints|success_criteria|risks|notes\", \"key_points\": [\"bullet 1\", \"bullet 2\"]}}\n\
+            Optional: related_card_ids (for grounding the field in existing cards), free_text_context, target_length_range [min, max].\n\
+            The writer expands key_points in the right voice for the field (constraints become a bullet list with rationale; risks become Likelihood/Impact/Mitigation subsections; etc.). You do NOT need a follow-up write_commands call — the tool applies the UpdateSpecCore for you, touching only that one field.\n\
+            For the short fields (title, one_liner, goal), use write_commands.UpdateSpecCore directly.\n\
         - emit_diff_summary: Mark your step as finished with a change summary. Call this LAST.\n\
         - ask_user_boolean / ask_user_freeform / ask_user_multiple_choice: Ask the user questions.\n\n\
         Workflow: 1) read_state 2) emit_narration (explain plan) 3) write_commands (make changes) 4) emit_diff_summary (finish)"
@@ -270,6 +275,10 @@ pub struct SwarmOrchestrator {
     /// When None, the tool is not registered and Sonnet must author bodies
     /// directly via write_commands.CreateCard.
     pub card_body_writer: Option<Arc<dyn crate::CardBodyWriter>>,
+    /// Optional Haiku-backed prose writer for delegate_spec_core_field.
+    /// When None, the tool is not registered and Sonnet must author the
+    /// spec_core prose fields directly via write_commands.UpdateSpecCore.
+    pub spec_core_field_writer: Option<Arc<dyn crate::SpecCoreFieldWriter>>,
 }
 
 impl SwarmOrchestrator {
@@ -290,6 +299,7 @@ impl SwarmOrchestrator {
         narration_renderer: Option<Arc<dyn crate::NarrationRenderer>>,
         card_decomposer: Option<Arc<dyn crate::CardDecomposer>>,
         card_body_writer: Option<Arc<dyn crate::CardBodyWriter>>,
+        spec_core_field_writer: Option<Arc<dyn crate::SpecCoreFieldWriter>>,
     ) -> Result<Self, anyhow::Error> {
         let provider = std::env::var("BARNSTORMER_DEFAULT_PROVIDER")
             .unwrap_or_else(|_| "anthropic".to_string());
@@ -332,6 +342,7 @@ impl SwarmOrchestrator {
             narration_renderer,
             card_decomposer,
             card_body_writer,
+            spec_core_field_writer,
         })
     }
 
@@ -348,6 +359,7 @@ impl SwarmOrchestrator {
         narration_renderer: Option<Arc<dyn crate::NarrationRenderer>>,
         card_decomposer: Option<Arc<dyn crate::CardDecomposer>>,
         card_body_writer: Option<Arc<dyn crate::CardBodyWriter>>,
+        spec_core_field_writer: Option<Arc<dyn crate::SpecCoreFieldWriter>>,
     ) -> Self {
         let actor = Arc::new(actor);
         let event_receivers = agents.iter().map(|_| actor.subscribe()).collect();
@@ -368,6 +380,7 @@ impl SwarmOrchestrator {
             narration_renderer,
             card_decomposer,
             card_body_writer,
+            spec_core_field_writer,
         }
     }
 
@@ -478,6 +491,7 @@ impl SwarmOrchestrator {
         narration_renderer: &Option<Arc<dyn crate::NarrationRenderer>>,
         card_decomposer: &Option<Arc<dyn crate::CardDecomposer>>,
         card_body_writer: &Option<Arc<dyn crate::CardBodyWriter>>,
+        spec_core_field_writer: &Option<Arc<dyn crate::SpecCoreFieldWriter>>,
     ) -> bool {
         // Start agent step
         let start_cmd = Command::StartAgentStep {
@@ -503,6 +517,7 @@ impl SwarmOrchestrator {
             narration_renderer.clone(),
             card_decomposer.clone(),
             card_body_writer.clone(),
+            spec_core_field_writer.clone(),
         )
         .await;
 
@@ -677,6 +692,7 @@ async fn run_agent_by_index(
         let narration_renderer = s.narration_renderer.clone();
         let card_decomposer = s.card_decomposer.clone();
         let card_body_writer = s.card_body_writer.clone();
+        let spec_core_field_writer = s.spec_core_field_writer.clone();
         match s.agents[index].take() {
             Some(runner) => {
                 // Swap out the receiver with a fresh one; the old one keeps its
@@ -696,6 +712,7 @@ async fn run_agent_by_index(
                     narration_renderer,
                     card_decomposer,
                     card_body_writer,
+                    spec_core_field_writer,
                 ))
             }
             None => {
@@ -717,6 +734,7 @@ async fn run_agent_by_index(
         narration_renderer,
         card_decomposer,
         card_body_writer,
+        spec_core_field_writer,
     )) = extracted
     else {
         return false;
@@ -760,6 +778,7 @@ async fn run_agent_by_index(
         &narration_renderer,
         &card_decomposer,
         &card_body_writer,
+        &spec_core_field_writer,
     )
     .await;
 
@@ -1147,6 +1166,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert_eq!(swarm.agents.len(), 4);
@@ -1176,6 +1196,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
             None,
             None,
@@ -1212,6 +1233,7 @@ mod tests {
             &SpecPhase::Refining,
             &home,
             &summarizer,
+            &None,
             &None,
             &None,
             &None,
@@ -1738,6 +1760,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let actor_handle = Arc::clone(&swarm.actor);
         let pending = Arc::clone(&swarm.pending_transition_question);
@@ -1800,6 +1823,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
             None,
             None,
@@ -1881,6 +1905,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
             None,
             None,
@@ -1966,6 +1991,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
 
@@ -1999,6 +2025,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert_eq!(swarm.agent_count(), 2);
     }
@@ -2018,6 +2045,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
             None,
             None,
@@ -2059,6 +2087,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
             None,
             None,
@@ -2105,6 +2134,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
             None,
             None,
@@ -2189,6 +2219,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         // Restore the old contexts onto the new agents
@@ -2223,6 +2254,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
             None,
             None,
@@ -2265,6 +2297,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert_eq!(find_manager_index(&swarm), Some(1));
     }
@@ -2284,6 +2317,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
             None,
             None,
@@ -2338,6 +2372,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         // Verify: only Manager should run during brainstorming
@@ -2383,6 +2418,7 @@ mod tests {
             "test-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
             None,
             None,
             None,

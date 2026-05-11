@@ -12,6 +12,7 @@ pub mod context_storage;
 pub mod narration_renderer;
 pub mod providers;
 pub mod routes;
+pub mod spec_core_field_writer;
 pub mod summarizer;
 pub mod svg_raster;
 pub mod web;

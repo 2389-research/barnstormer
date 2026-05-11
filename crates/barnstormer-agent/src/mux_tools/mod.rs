@@ -4,6 +4,7 @@
 mod ask_user;
 mod delegate_card_body;
 mod delegate_card_decomposition;
+mod delegate_spec_core_field;
 mod emit_diff_summary;
 mod emit_narration;
 mod propose_transition;
@@ -14,6 +15,7 @@ mod write_commands;
 pub use ask_user::{AskUserBooleanTool, AskUserFreeformTool, AskUserMultipleChoiceTool};
 pub use delegate_card_body::DelegateCardBodyTool;
 pub use delegate_card_decomposition::DelegateCardDecompositionTool;
+pub use delegate_spec_core_field::DelegateSpecCoreFieldTool;
 pub use emit_diff_summary::EmitDiffSummaryTool;
 pub use emit_narration::EmitNarrationTool;
 pub use propose_transition::ProposeTransitionTool;
@@ -30,7 +32,9 @@ use barnstormer_core::actor::SpecActorHandle;
 use mux::tool::Registry;
 use ulid::Ulid;
 
-use crate::{AttachmentSummarizer, CardBodyWriter, CardDecomposer, NarrationRenderer};
+use crate::{
+    AttachmentSummarizer, CardBodyWriter, CardDecomposer, NarrationRenderer, SpecCoreFieldWriter,
+};
 
 /// Build a tool registry with all domain tools registered.
 ///
@@ -64,6 +68,7 @@ pub async fn build_registry(
     narration_renderer: Option<Arc<dyn NarrationRenderer>>,
     card_decomposer: Option<Arc<dyn CardDecomposer>>,
     card_body_writer: Option<Arc<dyn CardBodyWriter>>,
+    spec_core_field_writer: Option<Arc<dyn SpecCoreFieldWriter>>,
 ) -> Registry {
     let registry = Registry::new();
 
@@ -155,6 +160,15 @@ pub async fn build_registry(
             .await;
     }
 
+    if let Some(writer) = spec_core_field_writer {
+        registry
+            .register(DelegateSpecCoreFieldTool {
+                actor: Arc::clone(&actor),
+                writer,
+            })
+            .await;
+    }
+
     registry
 }
 
@@ -203,6 +217,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await;
 
@@ -230,6 +245,7 @@ mod tests {
             "test-agent".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             stub_summarizer(),
+            None,
             None,
             None,
             None,
