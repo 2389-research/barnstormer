@@ -5,6 +5,7 @@ pub mod api;
 pub mod app_state;
 pub mod attachment_summarizer;
 pub mod auth;
+pub mod card_body_writer;
 pub mod card_decomposer;
 pub mod config;
 pub mod context_storage;

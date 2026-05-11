@@ -3443,7 +3443,7 @@ pub async fn start_agents(
     }
 
     // Create swarm (sync operation, safe to hold write lock)
-    let (narration_renderer, card_decomposer) =
+    let (narration_renderer, card_decomposer, card_body_writer) =
         delegation_tools(state.barnstormer_home.clone());
     let swarm = match SwarmOrchestrator::with_defaults(
         spec_id,
@@ -3454,6 +3454,7 @@ pub async fn start_agents(
         }),
         narration_renderer,
         card_decomposer,
+        card_body_writer,
     ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {
@@ -3602,6 +3603,7 @@ fn delegation_tools(
 ) -> (
     Option<Arc<dyn barnstormer_agent::NarrationRenderer>>,
     Option<Arc<dyn barnstormer_agent::CardDecomposer>>,
+    Option<Arc<dyn barnstormer_agent::CardBodyWriter>>,
 ) {
     let disabled = std::env::var("BARNSTORMER_DISABLE_DELEGATION")
         .ok()
@@ -3609,11 +3611,14 @@ fn delegation_tools(
         .is_some();
     if disabled {
         tracing::info!("delegation disabled via BARNSTORMER_DISABLE_DELEGATION; running pre-feature baseline");
-        return (None, None);
+        return (None, None, None);
     }
     (
         Some(Arc::new(crate::narration_renderer::ServerNarrationRenderer)),
         Some(Arc::new(crate::card_decomposer::ServerCardDecomposer {
+            home: barnstormer_home.clone(),
+        })),
+        Some(Arc::new(crate::card_body_writer::ServerCardBodyWriter {
             home: barnstormer_home,
         })),
     )
@@ -3648,7 +3653,7 @@ pub async fn try_start_agents(
     }
 
     // Create swarm (sync operation, safe to hold write lock)
-    let (narration_renderer, card_decomposer) =
+    let (narration_renderer, card_decomposer, card_body_writer) =
         delegation_tools(state.barnstormer_home.clone());
     let swarm = match SwarmOrchestrator::with_defaults(
         spec_id,
@@ -3659,6 +3664,7 @@ pub async fn try_start_agents(
         }),
         narration_renderer,
         card_decomposer,
+        card_body_writer,
     ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {

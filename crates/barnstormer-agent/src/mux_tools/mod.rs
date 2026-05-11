@@ -2,6 +2,7 @@
 // ABOUTME: Provides a registry factory that creates and registers all spec tools.
 
 mod ask_user;
+mod delegate_card_body;
 mod delegate_card_decomposition;
 mod emit_diff_summary;
 mod emit_narration;
@@ -11,6 +12,7 @@ mod retrieve_context;
 mod write_commands;
 
 pub use ask_user::{AskUserBooleanTool, AskUserFreeformTool, AskUserMultipleChoiceTool};
+pub use delegate_card_body::DelegateCardBodyTool;
 pub use delegate_card_decomposition::DelegateCardDecompositionTool;
 pub use emit_diff_summary::EmitDiffSummaryTool;
 pub use emit_narration::EmitNarrationTool;
@@ -28,13 +30,14 @@ use barnstormer_core::actor::SpecActorHandle;
 use mux::tool::Registry;
 use ulid::Ulid;
 
-use crate::{AttachmentSummarizer, CardDecomposer, NarrationRenderer};
+use crate::{AttachmentSummarizer, CardBodyWriter, CardDecomposer, NarrationRenderer};
 
 /// Build a tool registry with all domain tools registered.
 ///
 /// The returned registry contains: read_state, write_commands, emit_narration,
 /// emit_diff_summary, ask_user_boolean, ask_user_multiple_choice, ask_user_freeform,
-/// propose_transition, retrieve_context, and optionally delegate_card_decomposition.
+/// propose_transition, retrieve_context, and optionally delegate_card_decomposition
+/// and delegate_card_body.
 ///
 /// `narration_renderer` is optional — when present, emit_narration accepts the
 /// structured `intent`+`points` schema and renders prose via the renderer.
@@ -44,6 +47,12 @@ use crate::{AttachmentSummarizer, CardDecomposer, NarrationRenderer};
 /// is registered and Sonnet can route bulk card-body generation through the
 /// architect+executor Haiku pipeline. When None, the tool is not registered
 /// and Sonnet must use write_commands.CreateCard.
+///
+/// `card_body_writer` is optional — when present, delegate_card_body is
+/// registered and Sonnet can author single cards by supplying type+title+
+/// scope+key_points; the writer expands the body in the right voice for
+/// the card_type. When None, the tool is not registered and Sonnet must
+/// use write_commands.CreateCard for one-off cards.
 #[allow(clippy::too_many_arguments)]
 pub async fn build_registry(
     actor: Arc<SpecActorHandle>,
@@ -54,6 +63,7 @@ pub async fn build_registry(
     summarizer: Arc<dyn AttachmentSummarizer>,
     narration_renderer: Option<Arc<dyn NarrationRenderer>>,
     card_decomposer: Option<Arc<dyn CardDecomposer>>,
+    card_body_writer: Option<Arc<dyn CardBodyWriter>>,
 ) -> Registry {
     let registry = Registry::new();
 
@@ -129,8 +139,18 @@ pub async fn build_registry(
         registry
             .register(DelegateCardDecompositionTool {
                 actor: Arc::clone(&actor),
-                agent_id,
+                agent_id: agent_id.clone(),
                 decomposer,
+            })
+            .await;
+    }
+
+    if let Some(writer) = card_body_writer {
+        registry
+            .register(DelegateCardBodyTool {
+                actor: Arc::clone(&actor),
+                agent_id,
+                writer,
             })
             .await;
     }
@@ -182,6 +202,7 @@ mod tests {
             stub_summarizer(),
             None,
             None,
+            None,
         )
         .await;
 
@@ -209,6 +230,7 @@ mod tests {
             "test-agent".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             stub_summarizer(),
+            None,
             None,
             None,
         )
