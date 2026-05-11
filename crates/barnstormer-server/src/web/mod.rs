@@ -3450,6 +3450,7 @@ pub async fn start_agents(
         Arc::new(crate::attachment_summarizer::ServerSummarizer {
             home: state.barnstormer_home.clone(),
         }),
+        Some(Arc::new(crate::narration_renderer::ServerNarrationRenderer)),
     ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {
@@ -3622,6 +3623,7 @@ pub async fn try_start_agents(
         Arc::new(crate::attachment_summarizer::ServerSummarizer {
             home: state.barnstormer_home.clone(),
         }),
+        Some(Arc::new(crate::narration_renderer::ServerNarrationRenderer)),
     ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {

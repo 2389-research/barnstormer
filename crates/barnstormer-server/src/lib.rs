@@ -7,6 +7,7 @@ pub mod attachment_summarizer;
 pub mod auth;
 pub mod config;
 pub mod context_storage;
+pub mod narration_renderer;
 pub mod providers;
 pub mod routes;
 pub mod summarizer;

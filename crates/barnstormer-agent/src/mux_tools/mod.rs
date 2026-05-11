@@ -26,13 +26,17 @@ use barnstormer_core::actor::SpecActorHandle;
 use mux::tool::Registry;
 use ulid::Ulid;
 
-use crate::AttachmentSummarizer;
+use crate::{AttachmentSummarizer, NarrationRenderer};
 
 /// Build a tool registry with all domain tools registered.
 ///
 /// The returned registry contains: read_state, write_commands, emit_narration,
 /// emit_diff_summary, ask_user_boolean, ask_user_multiple_choice, ask_user_freeform,
 /// propose_transition, retrieve_context.
+///
+/// `narration_renderer` is optional — when present, emit_narration accepts the
+/// structured `intent`+`points` schema and renders prose via the renderer.
+/// When None, only the legacy `message` field is usable.
 pub async fn build_registry(
     actor: Arc<SpecActorHandle>,
     question_pending: Arc<AtomicBool>,
@@ -40,6 +44,7 @@ pub async fn build_registry(
     agent_id: String,
     home: PathBuf,
     summarizer: Arc<dyn AttachmentSummarizer>,
+    narration_renderer: Option<Arc<dyn NarrationRenderer>>,
 ) -> Registry {
     let registry = Registry::new();
 
@@ -60,6 +65,7 @@ pub async fn build_registry(
         .register(EmitNarrationTool {
             actor: Arc::clone(&actor),
             agent_id: agent_id.clone(),
+            renderer: narration_renderer,
         })
         .await;
 
@@ -155,6 +161,7 @@ mod tests {
             "test-agent".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             stub_summarizer(),
+            None,
         )
         .await;
 
@@ -182,6 +189,7 @@ mod tests {
             "test-agent".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             stub_summarizer(),
+            None,
         )
         .await;
 
