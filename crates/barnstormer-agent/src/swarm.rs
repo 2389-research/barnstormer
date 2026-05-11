@@ -70,6 +70,15 @@ const DOT_GENERATOR_SYSTEM_PROMPT: &str = "You are the diagram analyst. Your job
     3. Suggest structural improvements: missing connections, orphaned cards, unclear dependencies.\n\
     4. Note decision points (diamond gates) and human review gates (assumptions, open questions).\n\
     5. Summarize the pipeline health: is there a clear path from start to done?\n\n\
+    NARRATION FORMAT — MANDATORY:\n\
+    When you call emit_narration you MUST use the structured form (intent + points). \
+    Never write prose directly into the `message` field. The structured form routes prose \
+    generation to a faster model; passing prose in `message` wastes tokens.\n\
+    - For a full structural read of the spec: intent=\"structural_analysis\", points=[ordered \
+      observations about flow / lanes / relationships].\n\
+    - For a short gap list: intent=\"gap_identification\", points=[each gap as a short bullet].\n\
+    - For \"here's what I'm about to do\": intent=\"step_explanation\", points=[the steps].\n\
+    Do NOT include a `message` field in your emit_narration tool args.\n\n\
     The diagram is auto-generated from cards and conforms to the DOT Runner constrained DSL:\n\
     - digraph with snake_case graph ID and graph [goal=... rankdir=LR]\n\
     - start [shape=Mdiamond] and done [shape=Msquare] sentinels\n\
@@ -1233,6 +1242,38 @@ mod tests {
                 role
             );
         }
+    }
+
+    #[test]
+    fn dot_generator_prompt_mandates_structured_emit_narration() {
+        // Pins the prompt requirement that DotGen always use the structured
+        // form of emit_narration (intent + points) rather than the legacy
+        // `message` field. Without this, DotGen's prose lands in Sonnet
+        // output tokens at full rate; with it, prose generation routes to
+        // the cheaper Haiku narration tool. Regression-guard: if a future
+        // edit drops the mandate, this test catches it before a $2+ run
+        // surfaces the cost spike.
+        let prompt = system_prompt_for_role(&AgentRole::DotGenerator);
+        assert!(
+            prompt.contains("MUST use the structured form"),
+            "DotGen prompt must mandate structured emit_narration; full prompt:\n{}",
+            prompt
+        );
+        assert!(
+            prompt.contains("intent + points"),
+            "DotGen prompt must name the structured (intent + points) shape; got:\n{}",
+            prompt
+        );
+        assert!(
+            prompt.contains("structural_analysis"),
+            "DotGen prompt should point to the structural_analysis intent specifically; got:\n{}",
+            prompt
+        );
+        assert!(
+            prompt.contains("Do NOT include a `message` field"),
+            "DotGen prompt must explicitly forbid the legacy message field; got:\n{}",
+            prompt
+        );
     }
 
     #[test]
