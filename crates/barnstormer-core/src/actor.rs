@@ -345,6 +345,24 @@ impl SpecActor {
                 }]
             }
 
+            Command::RecordAgentUsage {
+                agent_id,
+                model,
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+            } => {
+                vec![EventPayload::AgentStepUsage {
+                    agent_id,
+                    model,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                    cache_write_tokens,
+                }]
+            }
+
             Command::TransitionPhase { target } => {
                 if state.phase == target {
                     return Err(ActorError::AlreadyInPhase);

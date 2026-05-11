@@ -413,6 +413,10 @@ impl SpecState {
             EventPayload::StreamingToolActivity { .. } => {
                 // Ephemeral — no state mutation
             }
+
+            EventPayload::AgentStepUsage { .. } => {
+                // Pure cost telemetry — no state mutation
+            }
         }
     }
 
@@ -539,6 +543,9 @@ impl SpecState {
             }
             EventPayload::StreamingToolActivity { .. } => {
                 // Ephemeral — no state mutation
+            }
+            EventPayload::AgentStepUsage { .. } => {
+                // Pure cost telemetry — no state mutation
             }
             // Other event types during undo are applied normally
             _ => {

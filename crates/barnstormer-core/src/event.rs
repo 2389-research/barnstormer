@@ -74,6 +74,19 @@ pub enum EventPayload {
         agent_id: String,
         diff_summary: String,
     },
+    /// Cost telemetry recorded by the swarm runtime after each agent step.
+    /// Carries the LLM model identifier and token usage so cost can be
+    /// attributed per-agent without scraping API logs.
+    AgentStepUsage {
+        agent_id: String,
+        model: String,
+        input_tokens: u32,
+        output_tokens: u32,
+        #[serde(default)]
+        cache_read_tokens: u32,
+        #[serde(default)]
+        cache_write_tokens: u32,
+    },
     UndoApplied {
         target_event_id: u64,
         inverse_events: Vec<EventPayload>,
@@ -241,6 +254,26 @@ mod tests {
         round_trip_event(EventPayload::AgentStepFinished {
             agent_id: "explorer".to_string(),
             diff_summary: "Added 3 cards".to_string(),
+        });
+    }
+
+    #[test]
+    fn event_serializes_round_trip_agent_step_usage() {
+        round_trip_event(EventPayload::AgentStepUsage {
+            agent_id: "manager-01HTEST".to_string(),
+            model: "claude-sonnet-4-5-20250929".to_string(),
+            input_tokens: 5481,
+            output_tokens: 1768,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+        });
+        round_trip_event(EventPayload::AgentStepUsage {
+            agent_id: "haiku-card-exec".to_string(),
+            model: "claude-haiku-4-5".to_string(),
+            input_tokens: 612,
+            output_tokens: 433,
+            cache_read_tokens: 5282,
+            cache_write_tokens: 0,
         });
     }
 

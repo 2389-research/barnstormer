@@ -486,8 +486,27 @@ impl SwarmOrchestrator {
                     agent = %runner.agent_id,
                     iterations = result.iterations,
                     tool_calls = result.tool_use_count,
+                    input_tokens = result.usage.input_tokens,
+                    output_tokens = result.usage.output_tokens,
+                    cache_read_tokens = result.usage.cache_read_tokens,
+                    cache_write_tokens = result.usage.cache_write_tokens,
                     "agent step completed"
                 );
+
+                // Record cost telemetry. Emitted independently of FinishAgentStep
+                // (which the agent triggers via emit_diff_summary) so we capture
+                // usage even when an agent errors out mid-step or skips its
+                // diff_summary call.
+                let _ = actor
+                    .send_command(Command::RecordAgentUsage {
+                        agent_id: runner.agent_id.clone(),
+                        model: model.to_string(),
+                        input_tokens: result.usage.input_tokens,
+                        output_tokens: result.usage.output_tokens,
+                        cache_read_tokens: result.usage.cache_read_tokens,
+                        cache_write_tokens: result.usage.cache_write_tokens,
+                    })
+                    .await;
 
                 // FinishAgentStep is emitted by the emit_diff_summary tool,
                 // so we do not send it here to avoid duplicate events.

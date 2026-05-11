@@ -213,6 +213,18 @@ fn describe_event_payload(payload: &EventPayload) -> String {
         } => {
             format!("agent {} finished: {}", agent_id, diff_summary)
         }
+        EventPayload::AgentStepUsage {
+            agent_id,
+            model,
+            input_tokens,
+            output_tokens,
+            ..
+        } => {
+            format!(
+                "agent {} usage: model={} in={} out={}",
+                agent_id, model, input_tokens, output_tokens
+            )
+        }
         EventPayload::UndoApplied {
             target_event_id, ..
         } => {

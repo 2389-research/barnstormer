@@ -76,6 +76,20 @@ pub enum Command {
         agent_id: String,
         diff_summary: String,
     },
+    /// Record the LLM usage (tokens, model) for a completed agent step.
+    /// Emitted by the swarm runtime after each agent's mux SubAgent run
+    /// finishes, regardless of whether the agent called emit_diff_summary.
+    /// Carries cost telemetry; doesn't mutate spec state.
+    RecordAgentUsage {
+        agent_id: String,
+        model: String,
+        input_tokens: u32,
+        output_tokens: u32,
+        #[serde(default)]
+        cache_read_tokens: u32,
+        #[serde(default)]
+        cache_write_tokens: u32,
+    },
     TransitionPhase {
         target: crate::state::SpecPhase,
     },

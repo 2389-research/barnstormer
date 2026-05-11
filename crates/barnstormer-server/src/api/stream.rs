@@ -26,6 +26,7 @@ fn event_type_name(payload: &barnstormer_core::EventPayload) -> &'static str {
         barnstormer_core::EventPayload::QuestionAnswered { .. } => "question_answered",
         barnstormer_core::EventPayload::AgentStepStarted { .. } => "agent_step_started",
         barnstormer_core::EventPayload::AgentStepFinished { .. } => "agent_step_finished",
+        barnstormer_core::EventPayload::AgentStepUsage { .. } => "agent_step_usage",
         barnstormer_core::EventPayload::UndoApplied { .. } => "undo_applied",
         barnstormer_core::EventPayload::SnapshotWritten { .. } => "snapshot_written",
         barnstormer_core::EventPayload::PhaseTransitioned { .. } => "phase_transitioned",
