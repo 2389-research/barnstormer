@@ -243,7 +243,11 @@ mod tests {
 
         let app = create_router_with_static_dir(test_state(), None, PathBuf::from(&static_dir));
         let resp = app
-            .oneshot(Request::get("/static/style.css").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/static/style.css")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 

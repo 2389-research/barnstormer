@@ -50,8 +50,17 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Run tests
+      # barnstormer-tauri pulls in glib-sys / webkit, which need GTK+WebKit
+      # system libs on Linux and the WebView2 SDK on Windows. The desktop
+      # crate only ships on macOS, so we exclude it from the cross-platform
+      # test matrix and let release-gui.yml exercise it on macOS instead.
+      - name: Run tests (macOS — full workspace)
+        if: runner.os == 'macOS'
         run: cargo test --all --verbose
+
+      - name: Run tests (Linux/Windows — excluding barnstormer-tauri)
+        if: runner.os != 'macOS'
+        run: cargo test --workspace --exclude barnstormer-tauri --verbose
 
   clippy:
     name: Clippy
