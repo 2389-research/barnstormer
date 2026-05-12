@@ -63,9 +63,7 @@ The existing Linux, Windows, and CLI artifact jobs should remain intact.
 
 Use **repo-level GitHub secrets** on `2389-research/barnstormer`.
 
-The desktop release path should use the existing Apple materials stored under:
-
-- `/Users/harper/workspace/icloud-2389/Apple/2389`
+The desktop release path should use Apple signing materials sourced from the team's secure secret storage (e.g. a shared password manager, vault, or CI secret mount) — not from a maintainer's local filesystem.
 
 Recommended GitHub secret mapping:
 
