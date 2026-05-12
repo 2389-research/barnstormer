@@ -16,7 +16,7 @@ Implementation notes:
 - Before claiming success, run `@superpowers:verification-before-completion`.
 - Keep commits small and task-scoped.
 
-### Task 1: Extract a shared Barnstormer runtime crate
+## Task 1: Extract a shared Barnstormer runtime crate
 
 **Files:**
 - Create: `crates/barnstormer-runtime/Cargo.toml`
@@ -103,7 +103,7 @@ git add Cargo.toml src/main.rs crates/barnstormer-runtime
 git commit -m "refactor: extract shared barnstormer runtime config"
 ```
 
-### Task 2: Add embedded server lifecycle management with integration coverage
+## Task 2: Add embedded server lifecycle management with integration coverage
 
 **Files:**
 - Modify: `crates/barnstormer-runtime/src/lib.rs`
@@ -191,7 +191,7 @@ git add src/main.rs crates/barnstormer-runtime
 git commit -m "refactor: add embedded server lifecycle runtime"
 ```
 
-### Task 3: Scaffold the Tauri desktop crate and open the main Barnstormer window
+## Task 3: Scaffold the Tauri desktop crate and open the main Barnstormer window
 
 **Files:**
 - Create: `crates/barnstormer-tauri/Cargo.toml`
@@ -278,7 +278,7 @@ git add Cargo.toml crates/barnstormer-tauri
 git commit -m "feat: scaffold tauri desktop shell"
 ```
 
-### Task 4: Persist provider settings locally and bootstrap the server from saved desktop config
+## Task 4: Persist provider settings locally and bootstrap the server from saved desktop config
 
 **Files:**
 - Create: `crates/barnstormer-tauri/src/settings.rs`
@@ -375,7 +375,7 @@ git add crates/barnstormer-tauri
 git commit -m "feat: add desktop provider settings bootstrap"
 ```
 
-### Task 5: Finish macOS bundle configuration, docs, and release verification
+## Task 5: Finish macOS bundle configuration, docs, and release verification
 
 **Files:**
 - Modify: `crates/barnstormer-tauri/tauri.conf.json`

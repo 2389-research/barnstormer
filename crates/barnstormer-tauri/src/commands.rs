@@ -23,7 +23,12 @@ pub fn save_settings<R: Runtime>(
     // from other threads. Refuse to run while the server is alive — v1 only
     // surfaces the settings window before launch, so this should only fire if
     // a future entrypoint reaches the command after the server has booted.
-    if state.runtime.server.lock().unwrap().is_some() {
+    //
+    // We hold the server-state lock across the check, file save, env mutation,
+    // and server launch so two concurrent callers cannot both pass the check
+    // and double-apply env or fight over startup.
+    let mut server_guard = state.runtime.server.lock().unwrap();
+    if server_guard.is_some() {
         return Err(
             "Settings cannot be changed while Barnstormer is running. Quit and reopen the app to update credentials."
                 .to_string(),
@@ -35,7 +40,11 @@ pub fn save_settings<R: Runtime>(
         .map_err(|err| err.to_string())?;
     settings.apply_to_env().map_err(|err| err.to_string())?;
 
-    let local_url = crate::start_server_if_needed(&app).map_err(|err| err.to_string())?;
+    let local_url =
+        crate::start_server_locked(&state.app_home, &state.static_dir, &mut server_guard)
+            .map_err(|err| err.to_string())?;
+    drop(server_guard);
+
     crate::open_main_window(&app, &local_url).map_err(|err| err.to_string())?;
 
     if let Some(window) = app.get_webview_window("settings") {

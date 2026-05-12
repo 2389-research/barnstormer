@@ -1,3 +1,6 @@
+// ABOUTME: Integration test for the shared barnstormer-runtime server lifecycle.
+// ABOUTME: Boots the embedded server, probes /health, and exercises graceful shutdown.
+
 use barnstormer_runtime::RuntimeOptions;
 
 #[tokio::test]

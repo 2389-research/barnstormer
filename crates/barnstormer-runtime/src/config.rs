@@ -74,6 +74,12 @@ fn default_home() -> PathBuf {
 mod tests {
     use super::{RuntimeConfig, RuntimeOptions};
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    // Tests that mutate process env must serialize against each other. cargo
+    // test parallelizes by default and a second env-mutating test would race
+    // with `disable_auth_fallback_skips_env_var`.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn config_uses_explicit_home_when_provided() {
@@ -108,8 +114,11 @@ mod tests {
 
     #[test]
     fn disable_auth_fallback_skips_env_var() {
-        // SAFETY: tests run single-threaded for env mutation; this test
-        // restores the prior value before returning.
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+
+        // SAFETY: the ENV_LOCK above serializes against any other env-mutating
+        // test in this crate; this test restores the prior value before
+        // returning.
         let prior = std::env::var("BARNSTORMER_AUTH_TOKEN").ok();
         unsafe { std::env::set_var("BARNSTORMER_AUTH_TOKEN", "leaked-token") };
 

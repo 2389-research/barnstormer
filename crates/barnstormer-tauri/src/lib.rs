@@ -5,7 +5,7 @@ mod commands;
 mod settings;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use barnstormer_runtime::{RuntimeOptions, ServerHandle, launch};
@@ -109,14 +109,25 @@ pub(crate) fn start_server_if_needed<R: Runtime>(
 ) -> anyhow::Result<String> {
     let state = app.state::<DesktopAppState>();
     let mut server = state.runtime.server.lock().unwrap();
+    start_server_locked(&state.app_home, &state.static_dir, &mut server)
+}
 
+// Variant of `start_server_if_needed` for callers that already hold the
+// server-state lock. Lets `save_settings` keep its check + env mutation +
+// launch under a single guard so concurrent invocations cannot race past the
+// "is the server already up?" check.
+pub(crate) fn start_server_locked(
+    app_home: &Path,
+    static_dir: &Path,
+    server: &mut Option<ServerHandle>,
+) -> anyhow::Result<String> {
     if let Some(existing) = server.as_ref() {
         return Ok(existing.local_url().to_string());
     }
 
     let launched = tauri::async_runtime::block_on(launch(desktop_launch_options(
-        state.app_home.clone(),
-        state.static_dir.clone(),
+        app_home.to_path_buf(),
+        static_dir.to_path_buf(),
     )))?;
     let local_url = launched.local_url().to_string();
     *server = Some(launched);

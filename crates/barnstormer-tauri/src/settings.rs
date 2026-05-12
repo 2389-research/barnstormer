@@ -50,10 +50,26 @@ impl DesktopSettings {
         }
 
         let contents = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, contents)?;
 
-        // Provider API keys live in this file; document intent with an explicit
-        // 0600 mode rather than relying on the user's umask.
+        // Provider API keys live in this file. Create it with 0600 at open
+        // time rather than fixing the mode after the fact: under a default
+        // umask of 022, fs::write would otherwise leave a brief window where
+        // the new file is world-readable on disk.
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut file = opts.open(path)?;
+        use std::io::Write;
+        file.write_all(contents.as_bytes())?;
+
+        // OpenOptions::mode only applies when the file is newly created.
+        // Tighten the perms unconditionally so a settings.json written by an
+        // older build (or hand-loosened by a user) gets locked back down on
+        // the next save.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -117,6 +133,12 @@ fn set_or_clear(key: &str, value: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::DesktopSettings;
+    use std::sync::Mutex;
+
+    // Tests that mutate process env must serialize against each other. cargo
+    // test parallelizes by default and a second env-mutating test would race
+    // with `apply_to_env_round_trips_keys`.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn settings_round_trip_preserves_provider_keys() {
@@ -205,10 +227,12 @@ mod tests {
     }
 
     /// `apply_to_env` writes process env, so this test serializes against any
-    /// other test that touches the same variables. Run sequentially via
-    /// `cargo test -- --test-threads=1` if you add more env-mutating tests.
+    /// other env-mutating test via `ENV_LOCK` above. cargo test runs threads
+    /// in parallel by default, so do not rely on `--test-threads=1`.
     #[test]
     fn apply_to_env_round_trips_keys() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+
         const KEYS: &[&str] = &[
             "BARNSTORMER_DEFAULT_PROVIDER",
             "BARNSTORMER_DEFAULT_MODEL",

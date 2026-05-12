@@ -10,15 +10,15 @@ Extend Barnstormer's GitHub release workflow so version tags produce a signed an
 
 ## Recommendation
 
-Keep `.github/workflows/release.yml` as the single tagged-release workflow and add a dedicated macOS Tauri desktop release job to it.
+Keep `.github/workflows/release.yml` as the tagged-release workflow for CLI artifacts, and add a parallel `.github/workflows/release-gui.yml` that publishes the signed and notarized macOS Tauri desktop artifact onto the same tag.
 
-This preserves the existing release contract for CLI assets while adding a release-grade desktop artifact without splitting versioned release logic across multiple workflows.
+This preserves the existing CLI release contract while keeping the desktop signing/notarization plumbing — Apple keychains, App Store Connect keys, `cargo tauri build` — isolated in a workflow that only macOS runners ever touch. The desktop job uploads its artifact into the GitHub Release created by `release.yml` so end users see one consolidated release.
+
+> **Note:** an earlier draft of this document recommended adding the desktop job directly to `release.yml`. The implementation ultimately split the two so the desktop pipeline can be edited and re-run independently of the CLI pipeline.
 
 ## Alternatives Considered
 
 ### 1. Extend `release.yml` with a macOS Tauri release job
-
-**Recommendation**
 
 - Keeps all `v*` release outputs in one workflow.
 - Fits the repo's existing tag-driven release model.
@@ -26,7 +26,10 @@ This preserves the existing release contract for CLI assets while adding a relea
 
 ### 2. Create a separate desktop-only tagged workflow
 
+**Recommendation** (implemented as `.github/workflows/release-gui.yml`)
+
 - Cleaner separation for desktop packaging.
+- Apple signing/notarization steps don't leak into the CLI release path.
 - Adds coordination overhead because one tag now drives multiple release workflows.
 
 ### 3. Replace the release flow with a Tauri-centric release action

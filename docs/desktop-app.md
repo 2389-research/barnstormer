@@ -28,7 +28,7 @@ The resulting `.app` bundle should be emitted under Tauri's target output for th
 
 ## Release Artifacts
 
-- Tagged `v*` GitHub releases build a signed and notarized macOS desktop artifact through `.github/workflows/release.yml`.
+- Tagged `v*` GitHub Releases build a signed and notarized macOS desktop artifact through `.github/workflows/release-gui.yml`.
 - That release flow requires the repo-level GitHub secrets documented in `docs/release-signing-secrets.md`.
 - The preferred end-user download is `Barnstormer.dmg`, which is attached to the GitHub release beside the existing CLI binaries.
 

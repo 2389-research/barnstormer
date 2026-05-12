@@ -36,7 +36,7 @@ This preserves the current web stack and avoids a large rewrite while still deli
 
 ## Architecture
 
-Create a new workspace crate for the native app, likely `crates/barnstormer-tauri`, plus a shared runtime startup function extracted from the current `Cli::Start` path in [src/main.rs](/Users/harper/Public/src/2389/barnstormer/src/main.rs).
+Create a new workspace crate for the native app, likely `crates/barnstormer-tauri`, plus a shared runtime startup function extracted from the current `Cli::Start` path in [`src/main.rs`](../../src/main.rs).
 
 The shared runtime should:
 
