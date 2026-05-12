@@ -1,0 +1,1 @@
+{"main-capability":{"identifier":"main-capability","description":"Capability for the Barnstormer desktop shell","local":true,"windows":["main","settings"],"permissions":["core:path:default","core:event:default","core:window:default","core:app:default","core:resources:default"]}}

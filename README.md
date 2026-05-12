@@ -18,6 +18,19 @@ cargo build --release
 
 Prebuilt binaries for Linux, macOS (Intel + Apple Silicon), and Windows are available on the [Releases page](https://github.com/2389-research/barnstormer/releases).
 
+## Desktop App
+
+A native macOS wrapper now lives in `crates/barnstormer-tauri/`. It launches Barnstormer's existing Axum UI in an embedded local runtime and stores desktop data under macOS Application Support instead of assuming a terminal-managed `.env`.
+
+Build the app bundle with:
+
+```bash
+cargo tauri build --bundles app --config crates/barnstormer-tauri/tauri.conf.json
+```
+
+The desktop setup flow opens a native settings window first if no provider key is configured, then launches the main Barnstormer window after saving at least one provider key. More detail is in [docs/desktop-app.md](docs/desktop-app.md).
+For release-grade macOS signing and the required GitHub secret contract, see [docs/release-signing-secrets.md](docs/release-signing-secrets.md).
+
 ## Quick Start
 
 ```bash

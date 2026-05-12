@@ -1,13 +1,12 @@
 // ABOUTME: Entry point for the barnstormer binary.
 // ABOUTME: Parses CLI arguments with clap, recovers specs, spawns actors, and starts the Axum HTTP server.
 
-use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use barnstormer_agent::client::create_llm_client;
 use barnstormer_agent::import::{parse_with_llm, to_commands};
-use barnstormer_server::{AppState, ProviderStatus, create_router};
+use barnstormer_runtime::{RuntimeOptions, launch};
+use barnstormer_server::ProviderStatus;
 use barnstormer_store::{JsonlLog, StorageManager};
 use clap::Parser;
 
@@ -54,81 +53,34 @@ async fn main() {
 
     match cli {
         Cli::Start { no_open } => {
-            let barnstormer_home = std::env::var("BARNSTORMER_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| dirs_or_default().join(".barnstormer"));
-
-            tracing::info!("BARNSTORMER_HOME: {}", barnstormer_home.display());
-
-            // Initialize StorageManager
-            let storage = StorageManager::new(barnstormer_home.clone())
-                .expect("failed to initialize storage manager");
-
-            // Recover all existing specs
-            let recovered_specs = storage
-                .recover_all_specs()
-                .expect("failed to recover specs");
-
-            tracing::info!("recovered {} specs", recovered_specs.len());
-
-            // Create AppState and spawn actors for recovered specs
-            let state = Arc::new(AppState::new(
-                barnstormer_home.clone(),
-                ProviderStatus::detect(),
-            ));
-            {
-                let mut actors = state.actors.write().await;
-                let mut persisters = state.event_persisters.write().await;
-                for (spec_id, spec_state) in recovered_specs {
-                    let handle = barnstormer_core::spawn(spec_id, spec_state);
-                    // Subscribe a background persister so all future events
-                    // (including agent-produced ones) are written to JSONL.
-                    let persister = barnstormer_server::web::spawn_event_persister(
-                        &handle,
-                        spec_id,
-                        &barnstormer_home,
-                    );
-                    persisters.insert(spec_id, persister);
-                    actors.insert(spec_id, handle);
-                    tracing::info!("spawned actor for spec {}", spec_id);
-                }
-            }
-
-            // Agents start paused until the user explicitly enables them per-spec
-            // via the web UI "Start agents" button.
-            tracing::info!("agents paused on startup — enable per-spec via the web UI");
-
-            let auth_token = std::env::var("BARNSTORMER_AUTH_TOKEN")
-                .ok()
-                .filter(|t| !t.is_empty());
-
-            let app = create_router(state, auth_token);
-
-            let bind_addr: SocketAddr = std::env::var("BARNSTORMER_BIND")
-                .unwrap_or_else(|_| "127.0.0.1:7331".to_string())
-                .parse()
-                .expect("BARNSTORMER_BIND must be a valid socket address");
-
-            let url = format!("http://{}", bind_addr);
-            tracing::info!("barnstormer listening on {}", url);
+            let server = launch(RuntimeOptions {
+                home: None,
+                bind: None,
+                auth_token: None,
+                static_dir: None,
+                open_browser: !no_open,
+                disable_auth_fallback: false,
+            })
+            .await
+            .expect("failed to launch barnstormer runtime");
 
             // Open browser unless --no-open was specified
             if !no_open {
                 #[cfg(target_os = "macos")]
                 {
-                    let _ = std::process::Command::new("open").arg(&url).spawn();
+                    let _ = std::process::Command::new("open")
+                        .arg(server.local_url())
+                        .spawn();
                 }
                 #[cfg(target_os = "linux")]
                 {
-                    let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+                    let _ = std::process::Command::new("xdg-open")
+                        .arg(server.local_url())
+                        .spawn();
                 }
             }
 
-            let listener = tokio::net::TcpListener::bind(bind_addr)
-                .await
-                .expect("failed to bind");
-
-            axum::serve(listener, app).await.expect("server error");
+            server.wait().await.expect("server error");
         }
         Cli::Status => {
             let bind_addr =

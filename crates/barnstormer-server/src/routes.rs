@@ -4,6 +4,7 @@
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post, put};
+use std::path::PathBuf;
 use tower_http::services::ServeDir;
 
 use crate::api;
@@ -16,6 +17,14 @@ use crate::web;
 /// to protect /api/* routes with bearer token authentication.
 /// If `None`, no authentication is applied (local-only mode).
 pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
+    create_router_with_static_dir(state, auth_token, PathBuf::from("static"))
+}
+
+pub fn create_router_with_static_dir(
+    state: SharedState,
+    auth_token: Option<String>,
+    static_dir: PathBuf,
+) -> Router {
     let router = Router::new()
         // Health check
         .route("/health", get(health))
@@ -111,7 +120,7 @@ pub fn create_router(state: SharedState, auth_token: Option<String>) -> Router {
             put(web::update_card).delete(web::delete_card),
         )
         // Static file serving
-        .nest_service("/static", ServeDir::new("static"))
+        .nest_service("/static", ServeDir::new(static_dir))
         .with_state(state);
 
     if let Some(token) = auth_token {
@@ -133,7 +142,10 @@ mod tests {
     use crate::providers::ProviderStatus;
     use axum::body::Body;
     use http::Request;
+    use std::fs;
+    use std::path::PathBuf;
     use std::sync::Arc;
+    use tempfile::tempdir;
     use tower::ServiceExt;
 
     fn test_state() -> SharedState {
@@ -220,5 +232,25 @@ mod tests {
             http::StatusCode::OK,
             "API route should be open when no auth token configured"
         );
+    }
+
+    #[tokio::test]
+    async fn static_files_can_be_served_from_explicit_directory() {
+        let temp = tempdir().unwrap();
+        let static_dir = temp.path().join("static");
+        fs::create_dir_all(&static_dir).unwrap();
+        fs::write(static_dir.join("style.css"), "body { color: red; }\n").unwrap();
+
+        let app = create_router_with_static_dir(test_state(), None, PathBuf::from(&static_dir));
+        let resp = app
+            .oneshot(
+                Request::get("/static/style.css")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), http::StatusCode::OK);
     }
 }
