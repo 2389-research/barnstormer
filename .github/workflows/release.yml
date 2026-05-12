@@ -33,7 +33,7 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: barnstormer.exe
-            asset_name: barnstormer-windows-x86_64.exe
+            asset_name: blacksmith-4vcpu-windows-2025
 
     steps:
       - uses: actions/checkout@v4
@@ -59,7 +59,7 @@ jobs:
   create-release:
     name: Create Release
     needs: build-release
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
 
