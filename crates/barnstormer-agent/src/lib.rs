@@ -22,7 +22,8 @@ pub use card_decomposer::{CardDecomposer, DecomposedCard, DecomposerOutput, Deco
 pub use context::{AgentContext, AgentRole, contexts_from_snapshot_map, contexts_to_snapshot_map};
 pub use narration_renderer::{NarrationIntent, NarrationRenderer};
 pub use spec_core_field_writer::{
-    SpecCoreField, SpecCoreFieldOutput, SpecCoreFieldRequest, SpecCoreFieldWriter,
+    SpecCoreField, SpecCoreFieldContext, SpecCoreFieldOutput, SpecCoreFieldRequest,
+    SpecCoreFieldWriter,
 };
 pub use swarm::{
     AgentRunner, SwarmOrchestrator, render_context_files_section, run_loop, system_prompt_for_role,

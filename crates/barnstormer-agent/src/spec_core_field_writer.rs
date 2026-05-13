@@ -78,15 +78,38 @@ pub struct SpecCoreFieldOutput {
     pub usage: Vec<DecomposerUsage>,
 }
 
+/// Per-field grounding context the dispatching tool resolved from spec
+/// state. One entry per request — index-aligned with the batch of
+/// requests. Mirrors `CardBodyContext` for the same reason: keeps the
+/// writer stateless.
+#[derive(Debug, Clone, Default)]
+pub struct SpecCoreFieldContext {
+    pub related_card_summaries: Vec<(String, String)>,
+}
+
 /// Implemented by whichever component owns the LLM client. The tool
 /// resolves related-card context from spec state and passes it through
 /// (title + excerpt tuples) so the writer stays stateless.
+///
+/// `write_fields` is the batch entry point. The dispatching tool always
+/// calls this; for a single-field tool invocation it just passes a Vec
+/// with one element. Implementations SHOULD run the LLM calls in
+/// parallel — agents usually write the spec_core fields together
+/// (constraints + success_criteria + risks + notes at once) so the
+/// parallelism win is large. Output Vec is index-aligned with input.
 #[async_trait]
 pub trait SpecCoreFieldWriter: Send + Sync + std::fmt::Debug {
-    async fn write_field(
+    /// Render markdown for each request in `requests`. `contexts` is
+    /// index-aligned with `requests` and carries the per-field grounding
+    /// (related-card titles + excerpts).
+    ///
+    /// Per-request errors don't fail the whole batch; the tool decides
+    /// how to surface partial failures. Returns a top-level `Err` only
+    /// for batch-wide failures (config / contract violations).
+    async fn write_fields(
         &self,
         spec_id: Ulid,
-        request: &SpecCoreFieldRequest,
-        related_card_summaries: &[(String, String)],
-    ) -> Result<SpecCoreFieldOutput, String>;
+        requests: &[SpecCoreFieldRequest],
+        contexts: &[SpecCoreFieldContext],
+    ) -> Result<Vec<Result<SpecCoreFieldOutput, String>>, String>;
 }

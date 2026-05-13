@@ -148,10 +148,12 @@ fn tool_usage_guide(agent_id: &str) -> String {
             Use SINGLE only when (a) one card is needed, or (b) card B's content depends on what card A's body actually says (rare).\n\
             Either shape: optional per-card lane, source_attachment_id (for grounding), related_card_ids (for de-dup), free_text_context, target_length_range. Apply CreateCard internally — no follow-up write_commands call needed.\n\
             Use write_commands.CreateCard ONLY when you need exact control over the prose, or when none of the 5 card_types fit.\n\
-        - delegate_spec_core_field: Author ONE prose field on the spec_core (description / constraints / success_criteria / risks / notes). PREFER this over write_commands.UpdateSpecCore when you're writing multi-paragraph or multi-bullet markdown. Args:\n\
-            {{\"field_name\": \"description|constraints|success_criteria|risks|notes\", \"key_points\": [\"bullet 1\", \"bullet 2\"]}}\n\
-            Optional: related_card_ids (for grounding the field in existing cards), free_text_context, target_length_range [min, max].\n\
-            The writer expands key_points in the right voice for the field (constraints become a bullet list with rationale; risks become Likelihood/Impact/Mitigation subsections; etc.). You do NOT need a follow-up write_commands call — the tool applies the UpdateSpecCore for you, touching only that one field.\n\
+        - delegate_spec_core_field: Author prose field(s) on the spec_core. Two shapes:\n\
+            SINGLE: {{\"field_name\": \"description|constraints|success_criteria|risks|notes\", \"key_points\": [\"bullet\"]}}\n\
+            BATCH:  {{\"fields\": [{{\"field_name\":...,\"key_points\":[...]}}, ...]}}\n\
+            STRONGLY PREFER batch when ONE user message triggers updates to multiple spec_core fields (post-refinement, post-adversarial-review, initial spec_core fill-out — almost always more than one field at a time). The writer runs each field's call in parallel; you skip N sequential tool-use loop iterations.\n\
+            Per-field optional: related_card_ids (for grounding), free_text_context, target_length_range [min, max].\n\
+            Either shape: applies UpdateSpecCore internally, touching ONLY the targeted field(s). Other spec_core fields stay untouched. No follow-up write_commands call needed.\n\
             For the short fields (title, one_liner, goal), use write_commands.UpdateSpecCore directly.\n\
         - emit_diff_summary: Mark your step as finished with a change summary. Call this LAST.\n\
         - ask_user_boolean / ask_user_freeform / ask_user_multiple_choice: Ask the user questions.\n\n\

@@ -3,8 +3,10 @@
 
 use async_trait::async_trait;
 use barnstormer_agent::{
-    DecomposerUsage, SpecCoreField, SpecCoreFieldOutput, SpecCoreFieldRequest, SpecCoreFieldWriter,
+    DecomposerUsage, SpecCoreField, SpecCoreFieldContext, SpecCoreFieldOutput,
+    SpecCoreFieldRequest, SpecCoreFieldWriter,
 };
+use std::sync::Arc;
 use ulid::Ulid;
 
 const DEFAULT_WRITER_MODEL: &str = "claude-haiku-4-5";
@@ -16,17 +18,24 @@ pub struct ServerSpecCoreFieldWriter;
 
 #[async_trait]
 impl SpecCoreFieldWriter for ServerSpecCoreFieldWriter {
-    async fn write_field(
+    async fn write_fields(
         &self,
         _spec_id: Ulid,
-        request: &SpecCoreFieldRequest,
-        related_card_summaries: &[(String, String)],
-    ) -> Result<SpecCoreFieldOutput, String> {
+        requests: &[SpecCoreFieldRequest],
+        contexts: &[SpecCoreFieldContext],
+    ) -> Result<Vec<Result<SpecCoreFieldOutput, String>>, String> {
+        if requests.len() != contexts.len() {
+            return Err(format!(
+                "write_fields length mismatch: {} requests vs {} contexts",
+                requests.len(),
+                contexts.len()
+            ));
+        }
+
         let model = std::env::var("BARNSTORMER_SPEC_CORE_FIELD_MODEL")
             .ok()
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_WRITER_MODEL.to_string());
-
         let api_key = std::env::var("ANTHROPIC_API_KEY")
             .map_err(|_| "ANTHROPIC_API_KEY not set".to_string())?;
         let base_url = std::env::var("ANTHROPIC_BASE_URL")
@@ -34,49 +43,82 @@ impl SpecCoreFieldWriter for ServerSpecCoreFieldWriter {
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| "https://api.anthropic.com".to_string());
         let endpoint = format!("{}/v1/messages", base_url.trim_end_matches('/'));
+        let client = Arc::new(
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .map_err(|e| format!("failed to build HTTP client: {e}"))?,
+        );
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+        let model = Arc::new(model);
+        let api_key = Arc::new(api_key);
+        let endpoint = Arc::new(endpoint);
 
-        let req_body = build_request(&model, request, related_card_summaries);
-
-        let resp = client
-            .post(&endpoint)
-            .header("x-api-key", api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&req_body)
-            .send()
-            .await
-            .map_err(|e| format!("anthropic HTTP request failed: {e}"))?;
-        let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| format!("could not read anthropic response body: {e}"))?;
-        if !status.is_success() {
-            return Err(format!("anthropic returned {status}: {text}"));
+        // Fan out: one tokio::spawn task per field, all running in parallel.
+        let mut handles = Vec::with_capacity(requests.len());
+        for (req, ctx) in requests.iter().zip(contexts.iter()) {
+            let req = req.clone();
+            let ctx = ctx.clone();
+            let client = Arc::clone(&client);
+            let model = Arc::clone(&model);
+            let api_key = Arc::clone(&api_key);
+            let endpoint = Arc::clone(&endpoint);
+            handles.push(tokio::spawn(async move {
+                write_one_field(&req, &ctx, &client, &model, &api_key, &endpoint).await
+            }));
         }
-        let resp_value: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| format!("anthropic response was not JSON: {e}; body: {text}"))?;
-
-        let usage = parse_usage(&resp_value);
-        let markdown = extract_text(&resp_value)?;
-
-        Ok(SpecCoreFieldOutput {
-            markdown,
-            usage: vec![DecomposerUsage {
-                agent_id: WRITER_AGENT_ID.to_string(),
-                model: model.clone(),
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                cache_read_tokens: usage.cache_read_tokens,
-                cache_write_tokens: usage.cache_write_tokens,
-            }],
-        })
+        let mut results = Vec::with_capacity(handles.len());
+        for h in handles {
+            match h.await {
+                Ok(r) => results.push(r),
+                Err(e) => results.push(Err(format!("tokio join error: {e}"))),
+            }
+        }
+        Ok(results)
     }
+}
+
+async fn write_one_field(
+    request: &SpecCoreFieldRequest,
+    ctx: &SpecCoreFieldContext,
+    client: &reqwest::Client,
+    model: &str,
+    api_key: &str,
+    endpoint: &str,
+) -> Result<SpecCoreFieldOutput, String> {
+    let req_body = build_request(model, request, &ctx.related_card_summaries);
+    let resp = client
+        .post(endpoint)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&req_body)
+        .send()
+        .await
+        .map_err(|e| format!("anthropic HTTP request failed: {e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("could not read anthropic response body: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("anthropic returned {status}: {text}"));
+    }
+    let resp_value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("anthropic response was not JSON: {e}; body: {text}"))?;
+    let usage = parse_usage(&resp_value);
+    let markdown = extract_text(&resp_value)?;
+    Ok(SpecCoreFieldOutput {
+        markdown,
+        usage: vec![DecomposerUsage {
+            agent_id: WRITER_AGENT_ID.to_string(),
+            model: model.to_string(),
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cache_read_tokens: usage.cache_read_tokens,
+            cache_write_tokens: usage.cache_write_tokens,
+        }],
+    })
 }
 
 fn build_request(
