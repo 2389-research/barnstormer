@@ -145,6 +145,10 @@ pub(crate) fn open_main_window<R: Runtime>(
 
     tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(local_url.parse()?))
         .title("Barnstormer")
+        .inner_size(1440.0, 900.0)
+        .min_inner_size(800.0, 600.0)
+        .resizable(true)
+        .center()
         .build()?;
 
     Ok(())
