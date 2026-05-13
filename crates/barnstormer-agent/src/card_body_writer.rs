@@ -84,6 +84,22 @@ pub struct CardBodyOutput {
     pub usage: Vec<DecomposerUsage>,
 }
 
+/// Per-card context the dispatching tool resolved from spec state. The
+/// writer needs this to ground each card (attachment text + related-card
+/// titles for de-dup) without reaching back into the actor itself.
+///
+/// One entry per request — index-aligned with the batch of requests.
+#[derive(Debug, Clone, Default)]
+pub struct CardBodyContext {
+    /// LLM-generated summary of the source attachment, when binary bytes
+    /// aren't UTF-8 text. None when the attachment is plain text (writer
+    /// reads it directly) or no attachment was supplied.
+    pub attachment_summary: Option<String>,
+    /// `(title, short_excerpt)` pairs for any related cards the agent
+    /// listed; helps the writer avoid restating their content.
+    pub related_card_summaries: Vec<(String, String)>,
+}
+
 /// Implemented by whichever component owns access to a Haiku-class LLM
 /// client and the on-disk attachment store. Used by `delegate_card_body`
 /// when the SubAgent already knows what card it wants to author and just
@@ -91,25 +107,31 @@ pub struct CardBodyOutput {
 ///
 /// Differs from `CardDecomposer` in that the agent (Sonnet) IS the
 /// architect — there's no Haiku planning step. The trait implementation
-/// is just an executor that writes one body in the right voice for the
-/// supplied `kind`. Spec for the prose conventions and per-card_type
+/// is just an executor that writes bodies in the right voice for each
+/// request's `kind`. Spec for the prose conventions and per-card_type
 /// voice library lives in the implementor's system prompt, not in the
 /// trait.
+///
+/// `write_bodies` is the batch entry point. The dispatching tool always
+/// calls this; for a single-card tool invocation it just passes a Vec
+/// with one element. Implementations SHOULD run the LLM calls in
+/// parallel so a 7-card batch finishes in roughly the latency of one
+/// call. Output Vec is index-aligned with the input Vec.
 #[async_trait]
 pub trait CardBodyWriter: Send + Sync + std::fmt::Debug {
-    /// Render the body. `spec_id` is supplied so implementations that
-    /// look up `source_attachment_id` on disk can resolve the file path.
-    /// `attachment_summary` is the LLM-generated summary stored at upload
-    /// time — used as fallback when the attachment's bytes aren't UTF-8
-    /// text (PDFs, images, etc.), same pattern as `CardDecomposer`.
-    /// `related_card_summaries` is `(title, scope_or_excerpt)` pairs for
-    /// each related card; the dispatching tool reads them from state so
-    /// the writer doesn't need actor access.
-    async fn write_body(
+    /// Render bodies for `requests`. `contexts` is index-aligned with
+    /// `requests` and carries the per-card grounding the tool resolved
+    /// from spec state (attachment summary, related-card excerpts).
+    ///
+    /// On success, returns one `Result<CardBodyOutput, String>` per
+    /// request — same length, same order. Per-request errors don't fail
+    /// the whole batch; callers decide how to surface partial failures.
+    /// Returns a top-level `Err` only for batch-wide failures (config /
+    /// invalid input that the tool didn't catch).
+    async fn write_bodies(
         &self,
         spec_id: Ulid,
-        request: &CardBodyRequest,
-        attachment_summary: Option<&str>,
-        related_card_summaries: &[(String, String)],
-    ) -> Result<CardBodyOutput, String>;
+        requests: &[CardBodyRequest],
+        contexts: &[CardBodyContext],
+    ) -> Result<Vec<Result<CardBodyOutput, String>>, String>;
 }

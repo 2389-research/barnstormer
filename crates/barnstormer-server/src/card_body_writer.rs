@@ -5,9 +5,10 @@
 
 use async_trait::async_trait;
 use barnstormer_agent::{
-    CardBodyOutput, CardBodyRequest, CardBodyWriter, CardKind, DecomposerUsage,
+    CardBodyContext, CardBodyOutput, CardBodyRequest, CardBodyWriter, CardKind, DecomposerUsage,
 };
 use std::path::PathBuf;
+use std::sync::Arc;
 use ulid::Ulid;
 
 const DEFAULT_WRITER_MODEL: &str = "claude-haiku-4-5";
@@ -31,13 +32,20 @@ pub struct ServerCardBodyWriter {
 
 #[async_trait]
 impl CardBodyWriter for ServerCardBodyWriter {
-    async fn write_body(
+    async fn write_bodies(
         &self,
         spec_id: Ulid,
-        request: &CardBodyRequest,
-        attachment_summary: Option<&str>,
-        related_card_summaries: &[(String, String)],
-    ) -> Result<CardBodyOutput, String> {
+        requests: &[CardBodyRequest],
+        contexts: &[CardBodyContext],
+    ) -> Result<Vec<Result<CardBodyOutput, String>>, String> {
+        if requests.len() != contexts.len() {
+            return Err(format!(
+                "write_bodies length mismatch: {} requests vs {} contexts",
+                requests.len(),
+                contexts.len()
+            ));
+        }
+
         let model = std::env::var("BARNSTORMER_CARD_BODY_MODEL")
             .ok()
             .filter(|s| !s.trim().is_empty())
@@ -51,68 +59,109 @@ impl CardBodyWriter for ServerCardBodyWriter {
             .unwrap_or_else(|| "https://api.anthropic.com".to_string());
         let endpoint = format!("{}/v1/messages", base_url.trim_end_matches('/'));
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .map_err(|e| format!("failed to build HTTP client: {e}"))?;
-
-        // Resolve source brief text (if any) — re-uses the same fallback
-        // pattern as the decomposer: UTF-8 text → summary → clean error.
-        let brief_block = match request.source_attachment_id {
-            None => None,
-            Some(att_id) => Some(
-                resolve_attachment_text(
-                    &self.home,
-                    spec_id,
-                    att_id,
-                    attachment_summary,
-                )
-                .await?,
-            ),
-        };
-
-        let req_body = build_request(
-            &model,
-            request,
-            brief_block.as_deref(),
-            related_card_summaries,
+        let client = Arc::new(
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .map_err(|e| format!("failed to build HTTP client: {e}"))?,
         );
 
-        let resp = client
-            .post(&endpoint)
-            .header("x-api-key", api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&req_body)
-            .send()
-            .await
-            .map_err(|e| format!("anthropic HTTP request failed: {e}"))?;
-        let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| format!("could not read anthropic response body: {e}"))?;
-        if !status.is_success() {
-            return Err(format!("anthropic returned {status}: {text}"));
+        // Build per-request futures running in parallel. Each future
+        // resolves to a Result<CardBodyOutput, String> so per-card
+        // failures don't kill the batch.
+        let model = Arc::new(model);
+        let api_key = Arc::new(api_key);
+        let endpoint = Arc::new(endpoint);
+        let home = self.home.clone();
+
+        let mut handles = Vec::with_capacity(requests.len());
+        for (req, ctx) in requests.iter().zip(contexts.iter()) {
+            let req = req.clone();
+            let ctx = ctx.clone();
+            let client = Arc::clone(&client);
+            let model = Arc::clone(&model);
+            let api_key = Arc::clone(&api_key);
+            let endpoint = Arc::clone(&endpoint);
+            let home = home.clone();
+            handles.push(tokio::spawn(async move {
+                write_one_body(spec_id, &req, &ctx, &client, &model, &api_key, &endpoint, &home)
+                    .await
+            }));
         }
-        let resp_value: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| format!("anthropic response was not JSON: {e}; body: {text}"))?;
 
-        let usage = parse_usage(&resp_value);
-        let body = extract_text(&resp_value)?;
-
-        Ok(CardBodyOutput {
-            body,
-            usage: vec![DecomposerUsage {
-                agent_id: WRITER_AGENT_ID.to_string(),
-                model: model.clone(),
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                cache_read_tokens: usage.cache_read_tokens,
-                cache_write_tokens: usage.cache_write_tokens,
-            }],
-        })
+        let mut results = Vec::with_capacity(handles.len());
+        for h in handles {
+            match h.await {
+                Ok(r) => results.push(r),
+                Err(e) => results.push(Err(format!("tokio join error: {e}"))),
+            }
+        }
+        Ok(results)
     }
+}
+
+/// Run a single Haiku card-body call. Pulled out so the batch path can
+/// spawn N of these in parallel via tokio::spawn.
+#[allow(clippy::too_many_arguments)]
+async fn write_one_body(
+    spec_id: Ulid,
+    request: &CardBodyRequest,
+    ctx: &CardBodyContext,
+    client: &reqwest::Client,
+    model: &str,
+    api_key: &str,
+    endpoint: &str,
+    home: &std::path::Path,
+) -> Result<CardBodyOutput, String> {
+    let brief_block = match request.source_attachment_id {
+        None => None,
+        Some(att_id) => Some(
+            resolve_attachment_text(home, spec_id, att_id, ctx.attachment_summary.as_deref())
+                .await?,
+        ),
+    };
+
+    let req_body = build_request(
+        model,
+        request,
+        brief_block.as_deref(),
+        &ctx.related_card_summaries,
+    );
+
+    let resp = client
+        .post(endpoint)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&req_body)
+        .send()
+        .await
+        .map_err(|e| format!("anthropic HTTP request failed: {e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("could not read anthropic response body: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("anthropic returned {status}: {text}"));
+    }
+    let resp_value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("anthropic response was not JSON: {e}; body: {text}"))?;
+
+    let usage = parse_usage(&resp_value);
+    let body = extract_text(&resp_value)?;
+
+    Ok(CardBodyOutput {
+        body,
+        usage: vec![DecomposerUsage {
+            agent_id: WRITER_AGENT_ID.to_string(),
+            model: model.to_string(),
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cache_read_tokens: usage.cache_read_tokens,
+            cache_write_tokens: usage.cache_write_tokens,
+        }],
+    })
 }
 
 /// Resolve an attachment's text content from disk, falling back to the

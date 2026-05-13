@@ -141,10 +141,12 @@ fn tool_usage_guide(agent_id: &str) -> String {
         - delegate_card_decomposition: When the user attached a brief/RFP/design doc and the board needs the initial set of cards, PREFER this over write_commands.CreateCard. Args:\n\
             {{\"brief_attachment_id\": \"<ULID from read_state.context_attachments>\", \"target_card_count\": 20, \"decomposition_hints\": \"focus areas (optional)\"}}\n\
             The tool internally runs an architect+executor pipeline that produces all cards + bodies + lanes in one call. You do NOT need a follow-up write_commands call to create those cards.\n\
-        - delegate_card_body: When you've already decided what ONE card to author (responding to user feedback, adversarial review, or single-card refinement), PREFER this over write_commands.CreateCard. Args:\n\
-            {{\"card_type\": \"idea|task|constraint|risk|note\", \"title\": \"...\", \"scope\": \"one sentence summary\", \"key_points\": [\"bullet 1\", \"bullet 2\"]}}\n\
-            Optional: lane, source_attachment_id (for grounding), related_card_ids (for de-dup), free_text_context, target_length_range [min, max].\n\
-            The tool's writer expands key_points into a body in the right voice for the card_type (idea = exploratory, task = concrete actionable, risk = likelihood/impact/mitigation, etc.). You do NOT need a follow-up write_commands call.\n\
+        - delegate_card_body: Author card bodies via the faster writer. Two shapes:\n\
+            SINGLE: {{\"card_type\": \"idea|task|constraint|risk|note\", \"title\": \"...\", \"scope\": \"one sentence summary\", \"key_points\": [\"bullet 1\"]}}\n\
+            BATCH:  {{\"cards\": [{{\"card_type\":...,\"title\":...,\"scope\":...,\"key_points\":[...]}}, ...]}}\n\
+            STRONGLY PREFER the batch shape when ONE user message triggers multiple cards you've already decided on — e.g. adversarial review identified 5 gaps to fill, or the user said 'add the missing risk + task + constraint for X'. Batching collapses N tool-use-loop iterations into 1.\n\
+            Use SINGLE only when (a) one card is needed, or (b) card B's content depends on what card A's body actually says (rare).\n\
+            Either shape: optional per-card lane, source_attachment_id (for grounding), related_card_ids (for de-dup), free_text_context, target_length_range. Apply CreateCard internally — no follow-up write_commands call needed.\n\
             Use write_commands.CreateCard ONLY when you need exact control over the prose, or when none of the 5 card_types fit.\n\
         - delegate_spec_core_field: Author ONE prose field on the spec_core (description / constraints / success_criteria / risks / notes). PREFER this over write_commands.UpdateSpecCore when you're writing multi-paragraph or multi-bullet markdown. Args:\n\
             {{\"field_name\": \"description|constraints|success_criteria|risks|notes\", \"key_points\": [\"bullet 1\", \"bullet 2\"]}}\n\

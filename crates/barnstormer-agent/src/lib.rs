@@ -15,7 +15,9 @@ pub mod swarm;
 pub mod testing;
 
 pub use attachment_summarizer::AttachmentSummarizer;
-pub use card_body_writer::{CardBodyOutput, CardBodyRequest, CardBodyWriter, CardKind};
+pub use card_body_writer::{
+    CardBodyContext, CardBodyOutput, CardBodyRequest, CardBodyWriter, CardKind,
+};
 pub use card_decomposer::{CardDecomposer, DecomposedCard, DecomposerOutput, DecomposerUsage};
 pub use context::{AgentContext, AgentRole, contexts_from_snapshot_map, contexts_to_snapshot_map};
 pub use narration_renderer::{NarrationIntent, NarrationRenderer};
