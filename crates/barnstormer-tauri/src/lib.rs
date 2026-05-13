@@ -10,6 +10,7 @@ use std::sync::Mutex;
 
 use barnstormer_runtime::{RuntimeOptions, ServerHandle, launch};
 use barnstormer_server::ProviderStatus;
+use tauri::path::BaseDirectory;
 use tauri::{Manager, Runtime};
 
 use settings::DesktopSettings;
@@ -168,7 +169,10 @@ fn open_settings_window<R: Runtime>(app: &tauri::AppHandle<R>) -> anyhow::Result
 }
 
 fn resolve_desktop_static_dir<R: Runtime>(app: &tauri::AppHandle<R>) -> anyhow::Result<PathBuf> {
-    let bundled_static_dir = app.path().resource_dir()?.join("static");
+    // Use Tauri's resource resolver instead of joining onto `resource_dir()` so
+    // the lookup matches whatever the bundler actually produced — including any
+    // path mangling the bundler applies for sources outside the Tauri crate.
+    let bundled_static_dir = app.path().resolve("static", BaseDirectory::Resource)?;
     if bundled_static_dir.exists() {
         return Ok(bundled_static_dir);
     }
