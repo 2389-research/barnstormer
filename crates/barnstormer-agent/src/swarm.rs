@@ -12,7 +12,7 @@ use ulid::Ulid;
 
 use mux::agent::{AgentDefinition, SubAgent};
 use mux::hook::HookRegistry;
-use mux::llm::LlmClient;
+use mux::llm::{LlmClient, SystemBlock};
 
 use crate::streaming_hook::StreamingHook;
 
@@ -138,20 +138,17 @@ fn tool_usage_guide(agent_id: &str) -> String {
             {{\"intent\": \"step_explanation\", \"points\": [\"reading state first\", \"then writing cards\"]}}\n\
             Intent values: structural_analysis, gap_identification, completion_summary, user_acknowledgment, step_explanation, phase_transition_recap, exploratory_brainstorm.\n\
             Only use {{\"message\": \"...\"}} when you need exact control over the prose.\n\
-        - delegate_card_decomposition: When the user attached a brief/RFP/design doc and the board needs the initial set of cards, PREFER this over write_commands.CreateCard. Args:\n\
+        - delegate_card_decomposition: Available when the user attached a brief/RFP/design doc and you want to populate the board from it. Args:\n\
             {{\"brief_attachment_id\": \"<ULID from read_state.context_attachments>\", \"target_card_count\": 20, \"decomposition_hints\": \"focus areas (optional)\"}}\n\
-            The tool internally runs an architect+executor pipeline that produces all cards + bodies + lanes in one call. You do NOT need a follow-up write_commands call to create those cards.\n\
-        - delegate_card_body: Author card bodies via the faster writer. Two shapes:\n\
+            Runs an architect+executor pipeline that produces cards + bodies + lanes in one call. Applies CreateCard internally — no follow-up write_commands needed.\n\
+        - delegate_card_body: Authors card bodies via a faster writer. Two shapes — pick whichever matches the situation:\n\
             SINGLE: {{\"card_type\": \"idea|task|constraint|risk|note\", \"title\": \"...\", \"scope\": \"one sentence summary\", \"key_points\": [\"bullet 1\"]}}\n\
             BATCH:  {{\"cards\": [{{\"card_type\":...,\"title\":...,\"scope\":...,\"key_points\":[...]}}, ...]}}\n\
-            STRONGLY PREFER the batch shape when ONE user message triggers multiple cards you've already decided on — e.g. adversarial review identified 5 gaps to fill, or the user said 'add the missing risk + task + constraint for X'. Batching collapses N tool-use-loop iterations into 1.\n\
-            Use SINGLE only when (a) one card is needed, or (b) card B's content depends on what card A's body actually says (rare).\n\
-            Either shape: optional per-card lane, source_attachment_id (for grounding), related_card_ids (for de-dup), free_text_context, target_length_range. Apply CreateCard internally — no follow-up write_commands call needed.\n\
-            Use write_commands.CreateCard ONLY when you need exact control over the prose, or when none of the 5 card_types fit.\n\
-        - delegate_spec_core_field: Author prose field(s) on the spec_core. Two shapes:\n\
+            Either shape: optional per-card lane, source_attachment_id (for grounding), related_card_ids (for de-dup), free_text_context, target_length_range. Applies CreateCard internally — no follow-up write_commands call needed.\n\
+            write_commands.CreateCard remains available when you want exact control over the body prose or when none of the 5 card_types fit.\n\
+        - delegate_spec_core_field: Authors prose field(s) on the spec_core. Two shapes — pick whichever matches the situation:\n\
             SINGLE: {{\"field_name\": \"description|constraints|success_criteria|risks|notes\", \"key_points\": [\"bullet\"]}}\n\
             BATCH:  {{\"fields\": [{{\"field_name\":...,\"key_points\":[...]}}, ...]}}\n\
-            STRONGLY PREFER batch when ONE user message triggers updates to multiple spec_core fields (post-refinement, post-adversarial-review, initial spec_core fill-out — almost always more than one field at a time). The writer runs each field's call in parallel; you skip N sequential tool-use loop iterations.\n\
             Per-field optional: related_card_ids (for grounding), free_text_context, target_length_range [min, max].\n\
             Either shape: applies UpdateSpecCore internally, touching ONLY the targeted field(s). Other spec_core fields stay untouched. No follow-up write_commands call needed.\n\
             For the short fields (title, one_liner, goal), use write_commands.UpdateSpecCore directly.\n\
@@ -527,13 +524,21 @@ impl SwarmOrchestrator {
 
         let is_manager = runner.role == AgentRole::Manager;
 
-        // Create agent definition with role-specific system prompt + tool guide
-        let mut definition = AgentDefinition::new(
-            runner.role.label(),
-            full_system_prompt(&runner.role, &runner.agent_id, phase),
-        )
-        .model(model)
-        .max_iterations(10);
+        // Create agent definition with role-specific system prompt + tool guide.
+        //
+        // The full system prompt is stable across iterations within a phase
+        // (base role prompt + phase-context block + tool_usage_guide), so we
+        // emit it as a single cacheable system block. Anthropic prompt-caching
+        // ($3/M → $0.30/M on cache_read) saves ~$0.80-1.00 per run on the
+        // Manager's input bulk. Tool definitions are also marked cacheable
+        // (their JSON schemas are 2-3K tokens per call and identical
+        // call-to-call until tool defs change).
+        let system_prompt = full_system_prompt(&runner.role, &runner.agent_id, phase);
+        let mut definition = AgentDefinition::new(runner.role.label(), system_prompt.clone())
+            .system_block(SystemBlock::cached(system_prompt))
+            .cache_tools(true)
+            .model(model)
+            .max_iterations(10);
 
         if is_manager {
             definition = definition.streaming(true);
