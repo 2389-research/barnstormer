@@ -2559,7 +2559,7 @@ dependencies = [
 [[package]]
 name = "mux"
 version = "0.10.0"
-source = "git+https://github.com/2389-research/mux-rs.git?tag=v0.13.0#6de1f7af7e049e71f1a51854177b60d15dbeb1ed"
+source = "git+https://github.com/2389-research/mux-rs.git?rev=1576618856f4b51d994b6ae70af376a0fbfb6b7f#1576618856f4b51d994b6ae70af376a0fbfb6b7f"
 dependencies = [
  "anyhow",
  "async-stream",
