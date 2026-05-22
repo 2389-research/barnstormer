@@ -178,4 +178,35 @@ mod tests {
         assert_eq!(config.bind.ip().to_string(), "0.0.0.0");
         assert_eq!(config.bind.port(), 7331);
     }
+
+    #[test]
+    fn config_returns_error_when_bind_env_var_is_invalid() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+
+        // SAFETY: ENV_LOCK serializes against any other env-mutating test in
+        // this crate; this test restores the prior value before returning.
+        let prior = std::env::var("BARNSTORMER_BIND").ok();
+        unsafe { std::env::set_var("BARNSTORMER_BIND", "not-a-socket") };
+
+        let result = RuntimeConfig::from_parts(RuntimeOptions {
+            home: Some(PathBuf::from("/tmp/barnstormer-test")),
+            bind: None,
+            auth_token: None,
+            static_dir: None,
+            open_browser: false,
+            disable_auth_fallback: true,
+        });
+
+        match prior {
+            Some(value) => unsafe { std::env::set_var("BARNSTORMER_BIND", value) },
+            None => unsafe { std::env::remove_var("BARNSTORMER_BIND") },
+        }
+
+        let err = result.expect_err("expected parse error for invalid bind value");
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.contains("BARNSTORMER_BIND is not a valid socket address"),
+            "expected clear error message, got: {err_msg}"
+        );
+    }
 }
