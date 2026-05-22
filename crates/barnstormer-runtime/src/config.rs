@@ -84,13 +84,18 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Mutex;
 
-    // Tests that mutate process env must serialize against each other. cargo
-    // test parallelizes by default and a second env-mutating test would race
-    // with `disable_auth_fallback_skips_env_var`.
+    // Serializes any test that touches process env — both writers
+    // (`disable_auth_fallback_skips_env_var`, the `BARNSTORMER_BIND` tests
+    // below) and readers (any `from_parts` call with `bind: None` or
+    // `disable_auth_fallback: false`, which consult env). cargo test
+    // parallelizes by default, so a reader that skips the lock will see
+    // whatever junk a concurrent writer set and panic.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn config_uses_explicit_home_when_provided() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+
         let config = RuntimeConfig::from_parts(RuntimeOptions {
             home: Some(PathBuf::from("/tmp/barnstormer-test")),
             bind: None,
