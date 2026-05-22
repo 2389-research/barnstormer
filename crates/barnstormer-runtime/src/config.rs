@@ -32,9 +32,17 @@ pub struct RuntimeConfig {
 impl RuntimeConfig {
     pub fn from_parts(options: RuntimeOptions) -> anyhow::Result<Self> {
         let home = options.home.unwrap_or_else(default_home);
-        let bind = options
-            .bind
-            .unwrap_or_else(|| "127.0.0.1:7331".parse().expect("valid default bind"));
+        let bind = match options.bind {
+            Some(addr) => addr,
+            None => match std::env::var("BARNSTORMER_BIND") {
+                Ok(value) => value.parse::<SocketAddr>().map_err(|err| {
+                    anyhow::anyhow!(
+                        "BARNSTORMER_BIND is not a valid socket address ({value}): {err}"
+                    )
+                })?,
+                Err(_) => "127.0.0.1:7331".parse().expect("valid default bind"),
+            },
+        };
         let auth_token = options
             .auth_token
             .or_else(|| {
@@ -76,13 +84,18 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Mutex;
 
-    // Tests that mutate process env must serialize against each other. cargo
-    // test parallelizes by default and a second env-mutating test would race
-    // with `disable_auth_fallback_skips_env_var`.
+    // Serializes any test that touches process env — both writers
+    // (`disable_auth_fallback_skips_env_var`, the `BARNSTORMER_BIND` tests
+    // below) and readers (any `from_parts` call with `bind: None` or
+    // `disable_auth_fallback: false`, which consult env). cargo test
+    // parallelizes by default, so a reader that skips the lock will see
+    // whatever junk a concurrent writer set and panic.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn config_uses_explicit_home_when_provided() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+
         let config = RuntimeConfig::from_parts(RuntimeOptions {
             home: Some(PathBuf::from("/tmp/barnstormer-test")),
             bind: None,
@@ -98,6 +111,8 @@ mod tests {
 
     #[test]
     fn config_allows_ephemeral_loopback_bind() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+
         let config = RuntimeConfig::from_parts(RuntimeOptions {
             home: Some(PathBuf::from("/tmp/barnstormer-test")),
             bind: Some("127.0.0.1:0".parse().unwrap()),
@@ -140,6 +155,65 @@ mod tests {
         assert!(
             config.auth_token.is_none(),
             "expected auth disabled when fallback is off"
+        );
+    }
+
+    #[test]
+    fn config_reads_bind_from_env_var_when_options_bind_is_none() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+
+        // SAFETY: ENV_LOCK serializes against any other env-mutating test in
+        // this crate; this test restores the prior value before returning.
+        let prior = std::env::var("BARNSTORMER_BIND").ok();
+        unsafe { std::env::set_var("BARNSTORMER_BIND", "0.0.0.0:7331") };
+
+        let config = RuntimeConfig::from_parts(RuntimeOptions {
+            home: Some(PathBuf::from("/tmp/barnstormer-test")),
+            bind: None,
+            auth_token: None,
+            static_dir: None,
+            open_browser: false,
+            disable_auth_fallback: true,
+        });
+
+        match prior {
+            Some(value) => unsafe { std::env::set_var("BARNSTORMER_BIND", value) },
+            None => unsafe { std::env::remove_var("BARNSTORMER_BIND") },
+        }
+
+        let config = config.expect("BARNSTORMER_BIND=0.0.0.0:7331 should parse");
+        assert_eq!(config.bind.ip().to_string(), "0.0.0.0");
+        assert_eq!(config.bind.port(), 7331);
+    }
+
+    #[test]
+    fn config_returns_error_when_bind_env_var_is_invalid() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+
+        // SAFETY: ENV_LOCK serializes against any other env-mutating test in
+        // this crate; this test restores the prior value before returning.
+        let prior = std::env::var("BARNSTORMER_BIND").ok();
+        unsafe { std::env::set_var("BARNSTORMER_BIND", "not-a-socket") };
+
+        let result = RuntimeConfig::from_parts(RuntimeOptions {
+            home: Some(PathBuf::from("/tmp/barnstormer-test")),
+            bind: None,
+            auth_token: None,
+            static_dir: None,
+            open_browser: false,
+            disable_auth_fallback: true,
+        });
+
+        match prior {
+            Some(value) => unsafe { std::env::set_var("BARNSTORMER_BIND", value) },
+            None => unsafe { std::env::remove_var("BARNSTORMER_BIND") },
+        }
+
+        let err = result.expect_err("expected parse error for invalid bind value");
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.contains("BARNSTORMER_BIND is not a valid socket address"),
+            "expected clear error message, got: {err_msg}"
         );
     }
 }
