@@ -111,6 +111,8 @@ mod tests {
 
     #[test]
     fn config_allows_ephemeral_loopback_bind() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+
         let config = RuntimeConfig::from_parts(RuntimeOptions {
             home: Some(PathBuf::from("/tmp/barnstormer-test")),
             bind: Some("127.0.0.1:0".parse().unwrap()),
