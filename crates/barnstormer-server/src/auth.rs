@@ -149,6 +149,18 @@ where
             return Box::pin(async move { inner.call(req).await });
         }
 
+        // Cookie-based admittance.
+        if let Some(cookie_header) = req
+            .headers()
+            .get("cookie")
+            .and_then(|v| v.to_str().ok())
+            && let Some(value) = parse_named_cookie(cookie_header, "barnstormer_session")
+            && value == *self.token
+        {
+            let mut inner = self.inner.clone();
+            return Box::pin(async move { inner.call(req).await });
+        }
+
         // Path matches /web/* — enforce auth. (Cookie + query-token paths land in later tasks.)
         let body = "<html><body><h1>Authentication required</h1>\
             <p>Visit <code>?token=YOUR_TOKEN</code> on any page once to log in.</p>\
@@ -390,6 +402,51 @@ mod tests {
             "401 body should mention ?token=, got: {}",
             body_str
         );
+    }
+
+    #[tokio::test]
+    async fn web_layer_accepts_valid_cookie() {
+        let app = web_test_router();
+        let resp = app
+            .oneshot(
+                Request::get("/web/specs")
+                    .header("cookie", "barnstormer_session=test-token-123")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn web_layer_accepts_valid_cookie_among_others() {
+        let app = web_test_router();
+        let resp = app
+            .oneshot(
+                Request::get("/web/specs")
+                    .header("cookie", "foo=bar; barnstormer_session=test-token-123; baz=qux")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn web_layer_rejects_wrong_cookie() {
+        let app = web_test_router();
+        let resp = app
+            .oneshot(
+                Request::get("/web/specs")
+                    .header("cookie", "barnstormer_session=wrong-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]
