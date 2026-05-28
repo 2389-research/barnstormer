@@ -91,6 +91,18 @@ where
     }
 }
 
+/// Find a named cookie's value in a `Cookie` header value.
+/// Returns the first matching value; tolerates surrounding whitespace.
+fn parse_named_cookie(header: &str, name: &str) -> Option<String> {
+    for part in header.split(';') {
+        let (k, v) = part.split_once('=')?;
+        if k.trim() == name {
+            return Some(v.trim().to_string());
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +219,45 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn parse_named_cookie_finds_value() {
+        assert_eq!(
+            super::parse_named_cookie("barnstormer_session=abc123", "barnstormer_session"),
+            Some("abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_named_cookie_finds_value_among_others() {
+        assert_eq!(
+            super::parse_named_cookie(
+                "foo=bar; barnstormer_session=abc123; baz=qux",
+                "barnstormer_session"
+            ),
+            Some("abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_named_cookie_returns_none_when_missing() {
+        assert_eq!(
+            super::parse_named_cookie("foo=bar; baz=qux", "barnstormer_session"),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_named_cookie_tolerates_whitespace() {
+        assert_eq!(
+            super::parse_named_cookie("  barnstormer_session  =  abc123  ", "barnstormer_session"),
+            Some("abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_named_cookie_empty_header_returns_none() {
+        assert_eq!(super::parse_named_cookie("", "barnstormer_session"), None);
     }
 }
