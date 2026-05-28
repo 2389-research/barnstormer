@@ -449,6 +449,39 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
+    #[tokio::test]
+    async fn web_layer_rejects_cookie_header_without_session() {
+        let app = web_test_router();
+        let resp = app
+            .oneshot(
+                Request::get("/web/specs")
+                    .header("cookie", "foo=bar; baz=qux")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn web_layer_accepts_cookie_on_sse_route() {
+        // SSE is the original motivation for cookie auth: browsers' EventSource
+        // can't attach a Bearer header but does send cookies on same-origin
+        // connections. Pin that the layer admits the SSE GET with a valid cookie.
+        let app = web_test_router();
+        let resp = app
+            .oneshot(
+                Request::get("/web/specs/abc/events/stream")
+                    .header("cookie", "barnstormer_session=test-token-123")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
     #[test]
     fn parse_named_cookie_finds_value() {
         assert_eq!(
