@@ -149,9 +149,16 @@ where
             return Box::pin(async move { inner.call(req).await });
         }
 
-        // Subsequent tasks fill in cookie + token-param logic. For now, pass through.
-        let mut inner = self.inner.clone();
-        Box::pin(async move { inner.call(req).await })
+        // Path matches /web/* — enforce auth. (Cookie + query-token paths land in later tasks.)
+        let body = "<html><body><h1>Authentication required</h1>\
+            <p>Visit <code>?token=YOUR_TOKEN</code> on any page once to log in.</p>\
+            </body></html>";
+        let resp = Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header("content-type", "text/html; charset=utf-8")
+            .body(Body::from(body))
+            .unwrap();
+        Box::pin(async move { Ok(resp) })
     }
 }
 
@@ -345,6 +352,44 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn web_layer_rejects_no_auth_on_root() {
+        let app = web_test_router();
+        let resp = app
+            .oneshot(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn web_layer_rejects_no_auth_on_web_path() {
+        let app = web_test_router();
+        let resp = app
+            .oneshot(Request::get("/web/specs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn web_layer_401_body_mentions_token_param() {
+        let app = web_test_router();
+        let resp = app
+            .oneshot(Request::get("/web/specs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = std::str::from_utf8(&body).unwrap();
+        assert!(
+            body_str.contains("?token="),
+            "401 body should mention ?token=, got: {}",
+            body_str
+        );
     }
 
     #[test]
