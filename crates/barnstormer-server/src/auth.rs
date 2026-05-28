@@ -161,6 +161,31 @@ where
             return Box::pin(async move { inner.call(req).await });
         }
 
+        // Magic-URL entry: ?token=<value> mints a cookie.
+        // Wrong token in query → fall through to the 401 below.
+        let query = req.uri().query().unwrap_or("").to_string();
+        let (remaining_query, token_param) = extract_token_param(&query);
+        if let Some(provided) = token_param
+            && provided == *self.token
+        {
+            let location = if remaining_query.is_empty() {
+                path.clone()
+            } else {
+                format!("{}?{}", path, remaining_query)
+            };
+            let set_cookie = format!(
+                "barnstormer_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000",
+                *self.token
+            );
+            let resp = Response::builder()
+                .status(StatusCode::SEE_OTHER)
+                .header("location", location)
+                .header("set-cookie", set_cookie)
+                .body(Body::empty())
+                .unwrap();
+            return Box::pin(async move { Ok(resp) });
+        }
+
         // Path matches /web/* — enforce auth. (Cookie + query-token paths land in later tasks.)
         let body = "<html><body><h1>Authentication required</h1>\
             <p>Visit <code>?token=YOUR_TOKEN</code> on any page once to log in.</p>\
@@ -597,5 +622,74 @@ mod tests {
             rest, "foo=bar",
             "all token params should be stripped from output"
         );
+    }
+
+    #[tokio::test]
+    async fn web_layer_query_token_sets_cookie_and_redirects() {
+        let app = web_test_router();
+        let resp = app
+            .oneshot(
+                Request::get("/web/specs?token=test-token-123")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let location = resp.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(location, "/web/specs");
+        let set_cookie = resp.headers().get("set-cookie").unwrap().to_str().unwrap();
+        assert!(set_cookie.starts_with("barnstormer_session=test-token-123"));
+        assert!(set_cookie.contains("HttpOnly"));
+        assert!(set_cookie.contains("SameSite=Strict"));
+        assert!(set_cookie.contains("Path=/"));
+        assert!(set_cookie.contains("Max-Age=2592000"));
+    }
+
+    #[tokio::test]
+    async fn web_layer_query_token_preserves_other_params() {
+        let app = web_test_router();
+        let resp = app
+            .oneshot(
+                Request::get("/web/specs?foo=bar&token=test-token-123&baz=qux")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let location = resp.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(location, "/web/specs?foo=bar&baz=qux");
+    }
+
+    #[tokio::test]
+    async fn web_layer_query_token_on_root() {
+        let app = web_test_router();
+        let resp = app
+            .oneshot(
+                Request::get("/?token=test-token-123")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let location = resp.headers().get("location").unwrap().to_str().unwrap();
+        assert_eq!(location, "/");
+    }
+
+    #[tokio::test]
+    async fn web_layer_query_token_wrong_value_rejected() {
+        let app = web_test_router();
+        let resp = app
+            .oneshot(
+                Request::get("/web/specs?token=wrong-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert!(resp.headers().get("set-cookie").is_none());
     }
 }
