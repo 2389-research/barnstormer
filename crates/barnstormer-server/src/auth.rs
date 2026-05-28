@@ -103,6 +103,23 @@ fn parse_named_cookie(header: &str, name: &str) -> Option<String> {
     None
 }
 
+/// Extract `token=<value>` from a query string, returning the value (if any)
+/// and the query string with the `token` param removed. Other params keep
+/// their original order.
+fn extract_token_param(query: &str) -> (String, Option<String>) {
+    let mut token: Option<String> = None;
+    let mut kept: Vec<&str> = Vec::new();
+    for part in query.split('&').filter(|p| !p.is_empty()) {
+        let (k, v) = part.split_once('=').unwrap_or((part, ""));
+        if k == "token" && token.is_none() {
+            token = Some(v.to_string());
+        } else {
+            kept.push(part);
+        }
+    }
+    (kept.join("&"), token)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +276,54 @@ mod tests {
     #[test]
     fn parse_named_cookie_empty_header_returns_none() {
         assert_eq!(super::parse_named_cookie("", "barnstormer_session"), None);
+    }
+
+    #[test]
+    fn extract_token_param_finds_value() {
+        let (rest, token) = super::extract_token_param("token=abc");
+        assert_eq!(token, Some("abc".to_string()));
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn extract_token_param_preserves_other_params_before() {
+        let (rest, token) = super::extract_token_param("foo=bar&token=abc");
+        assert_eq!(token, Some("abc".to_string()));
+        assert_eq!(rest, "foo=bar");
+    }
+
+    #[test]
+    fn extract_token_param_preserves_other_params_after() {
+        let (rest, token) = super::extract_token_param("token=abc&foo=bar");
+        assert_eq!(token, Some("abc".to_string()));
+        assert_eq!(rest, "foo=bar");
+    }
+
+    #[test]
+    fn extract_token_param_preserves_other_params_around() {
+        let (rest, token) = super::extract_token_param("foo=bar&token=abc&baz=qux");
+        assert_eq!(token, Some("abc".to_string()));
+        assert_eq!(rest, "foo=bar&baz=qux");
+    }
+
+    #[test]
+    fn extract_token_param_no_token_passes_through() {
+        let (rest, token) = super::extract_token_param("foo=bar&baz=qux");
+        assert_eq!(token, None);
+        assert_eq!(rest, "foo=bar&baz=qux");
+    }
+
+    #[test]
+    fn extract_token_param_empty_query() {
+        let (rest, token) = super::extract_token_param("");
+        assert_eq!(token, None);
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn extract_token_param_empty_value() {
+        let (rest, token) = super::extract_token_param("token=");
+        assert_eq!(token, Some("".to_string()));
+        assert_eq!(rest, "");
     }
 }
