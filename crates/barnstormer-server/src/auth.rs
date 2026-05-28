@@ -91,6 +91,70 @@ where
     }
 }
 
+/// A tower Layer that applies cookie-based session auth to `/` and `/web/*`.
+/// Browsers cannot attach a Bearer header to EventSource and similar
+/// same-origin GETs, so the web UI is gated by a cookie that the user
+/// obtains via a one-time `?token=<value>` magic URL.
+#[derive(Clone)]
+pub struct WebAuthLayer {
+    token: Arc<String>,
+}
+
+impl WebAuthLayer {
+    pub fn new(token: String) -> Self {
+        Self {
+            token: Arc::new(token),
+        }
+    }
+}
+
+impl<S> Layer<S> for WebAuthLayer {
+    type Service = WebAuthMiddleware<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        WebAuthMiddleware {
+            inner,
+            token: Arc::clone(&self.token),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct WebAuthMiddleware<S> {
+    inner: S,
+    token: Arc<String>,
+}
+
+fn path_is_web(path: &str) -> bool {
+    path == "/" || path.starts_with("/web/")
+}
+
+impl<S> Service<Request<Body>> for WebAuthMiddleware<S>
+where
+    S: Service<Request<Body>, Response = Response<Body>> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: Request<Body>) -> Self::Future {
+        let path = req.uri().path().to_string();
+        if !path_is_web(&path) {
+            let mut inner = self.inner.clone();
+            return Box::pin(async move { inner.call(req).await });
+        }
+
+        // Subsequent tasks fill in cookie + token-param logic. For now, pass through.
+        let mut inner = self.inner.clone();
+        Box::pin(async move { inner.call(req).await })
+    }
+}
+
 /// Find a named cookie's value in a `Cookie` header value.
 /// Returns the first matching value; tolerates surrounding whitespace.
 fn parse_named_cookie(header: &str, name: &str) -> Option<String> {
@@ -238,6 +302,48 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    fn web_test_router() -> Router {
+        Router::new()
+            .route("/", get(|| async { "root" }))
+            .route("/web/specs", get(|| async { "web specs" }))
+            .route("/web/specs/{id}/events/stream", get(|| async { "sse" }))
+            .route("/api/specs", get(|| async { "api specs" }))
+            .route("/static/style.css", get(|| async { "css" }))
+            .route("/health", get(|| async { "ok" }))
+            .layer(WebAuthLayer::new("test-token-123".to_string()))
+    }
+
+    #[tokio::test]
+    async fn web_layer_passes_static_through() {
+        let app = web_test_router();
+        let resp = app
+            .oneshot(Request::get("/static/style.css").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn web_layer_passes_health_through() {
+        let app = web_test_router();
+        let resp = app
+            .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn web_layer_passes_api_through() {
+        let app = web_test_router();
+        // /api/* is the AuthLayer's job; WebAuthLayer must not touch it.
+        let resp = app
+            .oneshot(Request::get("/api/specs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
