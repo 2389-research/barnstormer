@@ -336,4 +336,24 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), http::StatusCode::OK);
     }
+
+    #[tokio::test]
+    async fn web_route_magic_token_sets_cookie_and_redirects() {
+        let app = create_router(test_state(), Some("secret-token".to_string()));
+        let resp = app
+            .oneshot(
+                Request::get("/?token=secret-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), http::StatusCode::SEE_OTHER);
+        let set_cookie = resp.headers().get("set-cookie").unwrap().to_str().unwrap();
+        assert!(
+            set_cookie.starts_with("barnstormer_session=secret-token"),
+            "set-cookie should start with barnstormer_session=secret-token, got: {}",
+            set_cookie
+        );
+    }
 }
