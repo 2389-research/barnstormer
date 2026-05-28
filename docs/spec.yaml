@@ -93,7 +93,7 @@ api:
     - POST /api/specs
     - GET /api/specs/{id}/state
     - POST /api/specs/{id}/commands
-    - GET /api/specs/{id}/events/stream
+    - GET /web/specs/{id}/events/stream
     - POST /api/specs/{id}/agents/pause
     - POST /api/specs/{id}/agents/resume
     - POST /api/specs/{id}/undo
