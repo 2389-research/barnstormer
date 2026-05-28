@@ -104,15 +104,18 @@ fn parse_named_cookie(header: &str, name: &str) -> Option<String> {
 }
 
 /// Extract `token=<value>` from a query string, returning the value (if any)
-/// and the query string with the `token` param removed. Other params keep
-/// their original order.
+/// and the query string with every `token` param removed. If `token=` appears
+/// more than once, the first value is returned and all occurrences are
+/// stripped. Other params keep their original order.
 fn extract_token_param(query: &str) -> (String, Option<String>) {
     let mut token: Option<String> = None;
     let mut kept: Vec<&str> = Vec::new();
     for part in query.split('&').filter(|p| !p.is_empty()) {
         let (k, v) = part.split_once('=').unwrap_or((part, ""));
-        if k == "token" && token.is_none() {
-            token = Some(v.to_string());
+        if k == "token" {
+            if token.is_none() {
+                token = Some(v.to_string());
+            }
         } else {
             kept.push(part);
         }
@@ -325,5 +328,33 @@ mod tests {
         let (rest, token) = super::extract_token_param("token=");
         assert_eq!(token, Some("".to_string()));
         assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn extract_token_param_skips_empty_leading_segment() {
+        let (rest, token) = super::extract_token_param("&token=abc");
+        assert_eq!(token, Some("abc".to_string()));
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn extract_token_param_passes_through_bare_key() {
+        let (rest, token) = super::extract_token_param("flag&token=abc");
+        assert_eq!(token, Some("abc".to_string()));
+        assert_eq!(rest, "flag");
+    }
+
+    #[test]
+    fn extract_token_param_duplicate_token_strips_all_first_wins() {
+        let (rest, token) = super::extract_token_param("token=abc&token=def&foo=bar");
+        assert_eq!(
+            token,
+            Some("abc".to_string()),
+            "first token value should win"
+        );
+        assert_eq!(
+            rest, "foo=bar",
+            "all token params should be stripped from output"
+        );
     }
 }
