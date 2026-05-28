@@ -38,11 +38,15 @@ pub fn create_router_with_static_dir(
             "/api/specs/{id}/commands",
             post(api::commands::submit_command),
         )
+        .route("/api/specs/{id}/undo", post(api::commands::undo))
+        // SSE event stream lives under /web/* because browsers' EventSource API
+        // can't attach an Authorization header. The auth model already exempts
+        // /web/* (which serves the same rendered chat content); locking that
+        // down is a separate change and will cover this endpoint too.
         .route(
-            "/api/specs/{id}/events/stream",
+            "/web/specs/{id}/events/stream",
             get(api::stream::event_stream),
         )
-        .route("/api/specs/{id}/undo", post(api::commands::undo))
         // Web UI routes (HTML)
         .route("/", get(web::index))
         .route(

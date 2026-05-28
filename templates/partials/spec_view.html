@@ -3,7 +3,7 @@
 
 {% if phase == "brainstorming" %}
 {# Brainstorming layout: chat dominant, right sidebar with Cards | Context tabs. #}
-<div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream"
+<div class="spec-compositor" hx-ext="sse" sse-connect="/web/specs/{{ spec_id }}/events/stream"
      data-view="brainstorming">
 {# Hidden sentinel: re-fetches the whole workspace when the phase changes.
    Kept separate so hx-target="#workspace" does not inherit onto siblings. #}
@@ -136,7 +136,7 @@
 
 {% else if phase == "refining" %}
 {# Refining layout: command bar + stepper + view toggles + canvas + chat rail #}
-<div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
+<div class="spec-compositor" hx-ext="sse" sse-connect="/web/specs/{{ spec_id }}/events/stream">
 {# Hidden sentinel: re-fetches the whole workspace when the phase changes.
    Kept as a separate element so hx-target="#workspace" does not inherit onto
    siblings like #canvas (which needs to target itself). #}
@@ -290,7 +290,7 @@
 
 {% else %}
 {# Complete layout: read-only export view #}
-<div class="spec-compositor" hx-ext="sse" sse-connect="/api/specs/{{ spec_id }}/events/stream">
+<div class="spec-compositor" hx-ext="sse" sse-connect="/web/specs/{{ spec_id }}/events/stream">
 {# Hidden sentinel: re-fetches the whole workspace when the phase changes.
    Kept as a separate element so hx-target="#workspace" does not inherit onto
    siblings like #canvas (which needs to target itself). #}
