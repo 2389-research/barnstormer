@@ -150,10 +150,7 @@ where
         }
 
         // Cookie-based admittance.
-        if let Some(cookie_header) = req
-            .headers()
-            .get("cookie")
-            .and_then(|v| v.to_str().ok())
+        if let Some(cookie_header) = req.headers().get("cookie").and_then(|v| v.to_str().ok())
             && let Some(value) = parse_named_cookie(cookie_header, "barnstormer_session")
             && value == *self.token
         {
@@ -364,7 +361,11 @@ mod tests {
     async fn web_layer_passes_static_through() {
         let app = web_test_router();
         let resp = app
-            .oneshot(Request::get("/static/style.css").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/static/style.css")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -450,7 +451,10 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::get("/web/specs")
-                    .header("cookie", "foo=bar; barnstormer_session=test-token-123; baz=qux")
+                    .header(
+                        "cookie",
+                        "foo=bar; barnstormer_session=test-token-123; baz=qux",
+                    )
                     .body(Body::empty())
                     .unwrap(),
             )
