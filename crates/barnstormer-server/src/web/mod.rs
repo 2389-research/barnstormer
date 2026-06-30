@@ -146,6 +146,61 @@ async fn set_pin(state: SharedState, id: String, pin: bool) -> Response {
     spec_list(State(state)).await.into_response()
 }
 
+/// Form body for renaming a spec.
+#[derive(Deserialize)]
+pub struct RenameForm {
+    pub title: String,
+}
+
+/// POST /web/specs/{id}/rename — rename a spec via `UpdateSpecCore` (title only).
+/// Re-renders `#spec-list` so HTMX swaps the rail with the new title.
+pub async fn rename_spec(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    Form(form): Form<RenameForm>,
+) -> Response {
+    let title = form.title.trim().to_string();
+    if title.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html("<p class=\"error-msg\">Title can't be empty.</p>".to_string()),
+        )
+            .into_response();
+    }
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    {
+        let actors = state.actors.read().await;
+        let Some(handle) = actors.get(&spec_id) else {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        };
+        let cmd = Command::UpdateSpecCore {
+            title: Some(title),
+            one_liner: None,
+            goal: None,
+            description: None,
+            constraints: None,
+            success_criteria: None,
+            risks: None,
+            notes: None,
+        };
+        if let Err(e) = handle.send_command(cmd).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(format!("<p class=\"error-msg\">Error: {}</p>", e)),
+            )
+                .into_response();
+        }
+    }
+    spec_list(State(state)).await.into_response()
+}
+
 /// Partial: create spec form.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/create_spec_form.html")]
