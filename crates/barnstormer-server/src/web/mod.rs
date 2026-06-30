@@ -769,15 +769,17 @@ fn parse_spec_id(id: &str) -> Result<Ulid, Box<Response>> {
 
 /// Helper to collect cards sorted by lane and order for template rendering.
 fn cards_by_lane(spec_state: &SpecState) -> Vec<LaneData> {
-    let default_lanes = ["Ideas", "Plan", "Spec"];
-    let mut lanes: Vec<LaneData> = Vec::new();
-
-    // Default lanes first
-    for lane_name in &default_lanes {
+    // Two honest columns. Cards in the Ideas lane are "Parked" (kept out of the
+    // spec); everything else (Plan, Spec, or any straggler lane) is "In the spec".
+    // `export_spec` already treats Plan ∪ Spec as the deliverable and excludes
+    // Ideas, so the lane *values* stay as-is — we only collapse the presentation
+    // to two columns. `key` is the lane value a drag writes: drop into Parked →
+    // "Ideas" (park it), drop into In the spec → "Spec" (ship it).
+    let sorted = |keep: &dyn Fn(&str) -> bool| -> Vec<CardData> {
         let mut cards: Vec<CardData> = spec_state
             .cards
             .values()
-            .filter(|c| c.lane == *lane_name)
+            .filter(|c| keep(&c.lane))
             .map(CardData::from_card)
             .collect();
         cards.sort_by(|a, b| {
@@ -785,41 +787,21 @@ fn cards_by_lane(spec_state: &SpecState) -> Vec<LaneData> {
                 .partial_cmp(&b.order)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        lanes.push(LaneData {
-            name: lane_name.to_string(),
-            cards,
-        });
-    }
+        cards
+    };
 
-    // Any extra lanes with cards, alphabetically
-    let extra_lane_names: Vec<String> = spec_state
-        .cards
-        .values()
-        .map(|c| c.lane.clone())
-        .filter(|l| !default_lanes.contains(&l.as_str()))
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect();
-
-    for lane_name in extra_lane_names {
-        let mut cards: Vec<CardData> = spec_state
-            .cards
-            .values()
-            .filter(|c| c.lane == lane_name)
-            .map(CardData::from_card)
-            .collect();
-        cards.sort_by(|a, b| {
-            a.order
-                .partial_cmp(&b.order)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        lanes.push(LaneData {
-            name: lane_name,
-            cards,
-        });
-    }
-
-    lanes
+    vec![
+        LaneData {
+            name: "Parked".to_string(),
+            key: "Ideas".to_string(),
+            cards: sorted(&|lane| lane == "Ideas"),
+        },
+        LaneData {
+            name: "In the spec".to_string(),
+            key: "Spec".to_string(),
+            cards: sorted(&|lane| lane != "Ideas"),
+        },
+    ]
 }
 
 /// Serializable card data for templates.
@@ -832,7 +814,6 @@ pub struct CardData {
     pub body_html: Option<String>,
     pub lane: String,
     pub order: f64,
-    pub created_by: String,
     pub updated_at: String,
 }
 
@@ -847,15 +828,16 @@ impl CardData {
             body_html,
             lane: card.lane.clone(),
             order: card.order,
-            created_by: card.created_by.clone(),
             updated_at: card.updated_at.format("%H:%M").to_string(),
         }
     }
 }
 
-/// Lane data for templates: lane name and its sorted cards.
+/// Lane data for templates: display label (`name`), the lane value a drag
+/// writes on drop (`key`), and its sorted cards.
 pub struct LaneData {
     pub name: String,
+    pub key: String,
     pub cards: Vec<CardData>,
 }
 
@@ -4201,23 +4183,23 @@ mod tests {
             spec_id: "01HTEST".to_string(),
             lanes: vec![
                 LaneData {
-                    name: "Ideas".to_string(),
+                    name: "Parked".to_string(),
+                    key: "Ideas".to_string(),
                     cards: vec![],
                 },
                 LaneData {
-                    name: "Plan".to_string(),
-                    cards: vec![],
-                },
-                LaneData {
-                    name: "Spec".to_string(),
+                    name: "In the spec".to_string(),
+                    key: "Spec".to_string(),
                     cards: vec![],
                 },
             ],
         };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("Ideas"));
-        assert!(rendered.contains("Plan"));
-        assert!(rendered.contains("Spec"));
+        assert!(rendered.contains("Parked"));
+        assert!(rendered.contains("In the spec"));
+        // The drop target uses the lane *key*, not the display label.
+        assert!(rendered.contains("data-lane=\"Ideas\""));
+        assert!(rendered.contains("data-lane=\"Spec\""));
     }
 
     #[test]
@@ -4225,7 +4207,8 @@ mod tests {
         let tmpl = BoardTemplate {
             spec_id: "01HTEST".to_string(),
             lanes: vec![LaneData {
-                name: "Ideas".to_string(),
+                name: "Parked".to_string(),
+                key: "Ideas".to_string(),
                 cards: vec![CardData {
                     card_id: "01HCARD".to_string(),
                     card_type: "idea".to_string(),
@@ -4234,7 +4217,6 @@ mod tests {
                     body_html: Some("<p>An interesting idea</p>\n".to_string()),
                     lane: "Ideas".to_string(),
                     order: 1.0,
-                    created_by: "human".to_string(),
                     updated_at: "12:00:00".to_string(),
                 }],
             }],
@@ -4242,6 +4224,30 @@ mod tests {
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("My Idea"));
         assert!(rendered.contains("An interesting idea"));
+    }
+
+    #[test]
+    fn cards_by_lane_collapses_to_parked_and_in_the_spec() {
+        let mut state = SpecState::new();
+        for (lane, title) in [("Ideas", "raw"), ("Plan", "shaping"), ("Spec", "final")] {
+            let mut c =
+                barnstormer_core::Card::new("idea".to_string(), title.to_string(), "human".to_string());
+            c.lane = lane.to_string();
+            state.cards.insert(c.card_id, c);
+        }
+
+        let lanes = cards_by_lane(&state);
+        assert_eq!(lanes.len(), 2, "exactly two columns");
+        assert_eq!(lanes[0].name, "Parked");
+        assert_eq!(lanes[0].key, "Ideas");
+        assert_eq!(lanes[0].cards.len(), 1, "only the Ideas card is parked");
+        assert_eq!(lanes[1].name, "In the spec");
+        assert_eq!(lanes[1].key, "Spec");
+        assert_eq!(
+            lanes[1].cards.len(),
+            2,
+            "Plan + Spec cards both count as in-the-spec"
+        );
     }
 
     #[test]
@@ -4726,20 +4732,24 @@ mod tests {
             "should contain capsule view toggles"
         );
         assert!(
-            rendered.contains("data-view=\"document\""),
-            "should contain document toggle"
+            !rendered.contains("data-view=\"document\""),
+            "Document toggle should be gone (one output: the Spec)"
         );
         assert!(
             rendered.contains("data-view=\"board\""),
             "should contain board toggle"
         );
         assert!(
+            rendered.contains("hx-get=\"/web/specs/01HTEST/board\""),
+            "refining view should default the canvas to the board"
+        );
+        assert!(
             rendered.contains("data-view=\"spec\""),
             "should contain spec toggle"
         );
         assert!(
-            rendered.contains("view-toggle active"),
-            "document toggle should be active"
+            rendered.contains("view-toggle active\" data-view=\"board\""),
+            "board toggle should be the active default"
         );
         // Canvas and chat rail
         assert!(
@@ -8053,8 +8063,12 @@ mod tests {
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(
-            html.contains("data-view=\"document\""),
-            "should have document tab toggle"
+            !html.contains("data-view=\"document\""),
+            "Document toggle should be gone (one output: the Spec)"
+        );
+        assert!(
+            html.contains("data-view=\"board\"") && html.contains("data-view=\"spec\""),
+            "refining should have Board + Spec toggles"
         );
         assert!(
             html.contains("view-toggles-row"),
