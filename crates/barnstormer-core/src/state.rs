@@ -1207,6 +1207,25 @@ mod tests {
     }
 
     #[test]
+    fn apply_spec_pinned_and_unpinned_toggles_flag() {
+        let mut state = SpecState::new();
+        let sid = make_spec_id();
+        state.apply(&make_event(
+            1,
+            sid,
+            EventPayload::SpecCreated {
+                title: "t".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            },
+        ));
+        state.apply(&make_event(2, sid, EventPayload::SpecPinned));
+        assert!(state.core.as_ref().unwrap().pinned);
+        state.apply(&make_event(3, sid, EventPayload::SpecUnpinned));
+        assert!(!state.core.as_ref().unwrap().pinned);
+    }
+
+    #[test]
     fn apply_context_summarized_updates_summary() {
         let mut state = SpecState::new();
         let attachment_id = Ulid::new();
