@@ -1,0 +1,28 @@
+{# ABOUTME: Launchpad composer — the home screen and the "New spec" target. #}
+{# ABOUTME: Posts to /web/specs (multipart: description + files[]) → brainstorming. #}
+<main class="canvas" id="canvas">
+    <div class="launchpad">
+        <h1 class="launchpad-greeting">What do you want to spec out?</h1>
+        <p class="launchpad-sub">Describe your idea. Drop in any files, code, or docs you want the agents to read.</p>
+        <form id="launchpad-form" class="composer"
+              hx-post="/web/specs" hx-target="#workspace" hx-swap="innerHTML" hx-push-url="true"
+              hx-encoding="multipart/form-data" enctype="multipart/form-data">
+            <div class="composer-chips" id="composer-chips"></div>
+            <textarea name="description" required rows="3"
+                      placeholder="e.g. A weekly digest that checks which of my Letterboxd watchlist films just hit Netflix UK…"></textarea>
+            <div class="composer-bar">
+                <label class="attach-btn" tabindex="0">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                    Attach
+                    <input type="file" name="files" multiple class="composer-file-input" aria-label="Attach context files" style="display:none">
+                </label>
+                <span class="composer-spacer"></span>
+                <button type="submit" class="send-btn">
+                    Start Building
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+                </button>
+            </div>
+        </form>
+        <p class="launchpad-hint">Drag &amp; drop files anywhere · paste screenshots · <b>code, markdown, images, PDFs</b> welcome</p>
+    </div>
+</main>

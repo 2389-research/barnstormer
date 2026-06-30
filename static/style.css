@@ -663,6 +663,136 @@ html, body {
     border-color: var(--text-muted);
 }
 
+/* --- Launchpad (home screen composer) --- */
+.launchpad {
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+}
+
+.launchpad-greeting {
+    font-family: var(--font-display);
+    font-size: clamp(26px, 4vw, 34px);
+    line-height: 1.15;
+    text-align: center;
+    margin-bottom: 6px;
+}
+
+.launchpad-sub {
+    color: var(--text-muted);
+    text-align: center;
+    margin-bottom: 26px;
+    font-size: 15px;
+    max-width: 52ch;
+}
+
+.composer {
+    width: 100%;
+    max-width: 680px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.04);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.composer.drag {
+    border-color: var(--badge-planner);
+    box-shadow: 0 0 0 3px hsla(250, 30%, 55%, 0.15);
+}
+
+.composer-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 14px 16px 0;
+}
+
+.composer-chips:empty {
+    display: none;
+}
+
+.composer textarea {
+    width: 100%;
+    border: none;
+    outline: none;
+    resize: none;
+    background: transparent;
+    font-family: var(--font-body);
+    font-size: 16px;
+    color: var(--text-primary);
+    padding: 16px 18px 4px;
+}
+
+.composer textarea::placeholder {
+    color: var(--text-muted);
+}
+
+.composer-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 12px 12px;
+    flex-wrap: wrap;
+}
+
+.attach-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.attach-btn:hover {
+    background: var(--bg-secondary);
+    border-color: var(--text-muted);
+}
+
+.composer-spacer {
+    flex: 1;
+    min-width: 8px;
+}
+
+.send-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--text-primary);
+    color: var(--bg-surface);
+    border: none;
+    border-radius: 999px;
+    padding: 9px 18px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: var(--font-body);
+}
+
+.send-btn:hover {
+    opacity: 0.9;
+}
+
+.launchpad-hint {
+    margin-top: 14px;
+    color: var(--text-muted);
+    font-size: 12.5px;
+    text-align: center;
+}
+
+.launchpad-hint b {
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
 /* --- New spec button --- */
 .new-spec-btn {
     display: flex;

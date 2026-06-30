@@ -65,12 +65,12 @@ async fn read_field_capped(
     }
 }
 
-/// Index page showing the spec list and welcome message.
+/// Index page: the spec-list rail plus the launchpad composer in the workspace.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "index.html")]
 pub struct IndexTemplate {}
 
-/// GET / - Render the main index page.
+/// GET / - Render the home screen (launchpad).
 pub async fn index() -> IndexTemplate {
     IndexTemplate {}
 }
@@ -322,14 +322,15 @@ pub async fn archive_view(State(state): State<SharedState>) -> impl IntoResponse
     ArchiveListTemplate { specs }
 }
 
-/// Partial: create spec form.
+/// Partial: the launchpad composer — used as the home screen (`/`) and as the
+/// "New spec" target so both entry points are one canonical surface.
 #[derive(Template, AskamaIntoResponse)]
-#[template(path = "partials/create_spec_form.html")]
-pub struct CreateSpecFormTemplate {}
+#[template(path = "partials/launchpad.html")]
+pub struct LaunchpadTemplate {}
 
-/// GET /web/specs/new - Render the create spec form.
-pub async fn create_spec_form() -> CreateSpecFormTemplate {
-    CreateSpecFormTemplate {}
+/// GET /web/specs/new - Render the launchpad composer.
+pub async fn create_spec_form() -> LaunchpadTemplate {
+    LaunchpadTemplate {}
 }
 
 /// Extract a placeholder title from free-text description.
@@ -4026,7 +4027,9 @@ mod tests {
         let tmpl = IndexTemplate {};
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("barnstormer"));
-        assert!(rendered.contains("Select a spec"));
+        // Home is now the launchpad composer, not a "Select a spec" welcome.
+        assert!(rendered.contains("What do you want to spec out?"));
+        assert!(rendered.contains("hx-post=\"/web/specs\""));
     }
 
     #[test]
@@ -4069,11 +4072,15 @@ mod tests {
     }
 
     #[test]
-    fn create_spec_form_template_renders() {
-        let tmpl = CreateSpecFormTemplate {};
+    fn launchpad_template_renders() {
+        let tmpl = LaunchpadTemplate {};
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("description"));
-        assert!(rendered.contains("What do you want to build?"));
+        // The composer posts to /web/specs with a description + multi-file input.
+        assert!(rendered.contains("name=\"description\""));
+        assert!(rendered.contains("hx-post=\"/web/specs\""));
+        assert!(rendered.contains("name=\"files\""));
+        assert!(rendered.contains("multiple"));
+        assert!(rendered.contains("What do you want to spec out?"));
         assert!(rendered.contains("Start Building"));
     }
 
