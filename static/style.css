@@ -245,18 +245,6 @@ html, body {
     gap: 12px;
     flex-shrink: 0;
 }
-/* Title tooltip — left-aligned, shown when hovering the title */
-.command-bar-tooltip {
-    left: 20px;
-    top: calc(100% + 4px);
-}
-.command-bar-tooltip::before {
-    left: 20px;
-}
-.command-bar-left:hover ~ .command-bar-tooltip {
-    display: block;
-}
-
 /* --- View toggles (capsule) --- */
 .view-toggles-capsule {
     display: flex;
@@ -863,6 +851,23 @@ html, body {
 #context-panel.drag {
     outline: 2px dashed var(--badge-planner);
     outline-offset: -6px;
+}
+
+/* Clean × remove on a context card head */
+.context-card-x {
+    margin-left: 4px;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 4px;
+    flex-shrink: 0;
+}
+
+.context-card-x:hover {
+    color: var(--danger);
 }
 
 /* --- New spec button --- */

@@ -33,15 +33,8 @@
                         <span class="card-type badge-note">{{ att.extension }}</span>
                     {% endmatch %}
                     <span style="flex: 1; font-weight: 500; word-break: break-word;">{{ att.filename }}</span>
-                    {% if att.card_count > 0 %}
-                    <span class="has-tooltip">
-                        <span class="card-type badge-note context-card-count">{{ att.card_count }} card{% if att.card_count != 1 %}s{% endif %}</span>
-                        <span class="tooltip context-pill-tooltip">Cards synthesized from this file</span>
-                    </span>
-                    {% endif %}
-                    {# Four-state pill: (summary, summary_error) — ok / stale-with-error / pending / failed.
-                       Nested matches are used instead of tuple matching for compatibility with the
-                       Askama version pinned in this workspace. #}
+                    {# Status badge only for non-default states. A summarized,
+                       in-context file shows no badge — that's the quiet default. #}
                     {% match att.summary %}
                     {% when Some with (_) %}
                         {% match att.summary_error %}
@@ -51,17 +44,13 @@
                                 <span class="tooltip context-pill-tooltip">Last refresh failed; older summary in use</span>
                             </span>
                         {% when None %}
-                            <span class="has-tooltip">
-                                <span class="card-type badge-plan">in context</span>
-                                <span class="tooltip context-pill-tooltip">Included in agent context</span>
-                            </span>
                         {% endmatch %}
                     {% when None %}
                         {% match att.summary_error %}
                         {% when Some with (_) %}
                             <span class="has-tooltip">
                                 <span class="card-type badge-error">summary failed</span>
-                                <span class="tooltip context-pill-tooltip">Couldn't summarize; click Resummarize to retry</span>
+                                <span class="tooltip context-pill-tooltip">Couldn't summarize; use Retry</span>
                             </span>
                         {% when None %}
                             <span class="has-tooltip">
@@ -70,15 +59,17 @@
                             </span>
                         {% endmatch %}
                     {% endmatch %}
+                    <button type="button" class="context-card-x" aria-label="Remove file"
+                            onclick="event.stopPropagation()"
+                            hx-delete="/web/specs/{{ spec_id }}/context/{{ att.attachment_id }}"
+                            hx-target="#context-panel" hx-swap="outerHTML"
+                            hx-confirm="Remove this file?">&times;</button>
                 </span>
                 {% match att.user_notes %}
                 {% when Some with (n) %}
                     <span class="collapsed-notes" style="display: block; font-size: 0.78rem; color: var(--text-muted); font-style: italic; margin-top: var(--spacing-xs); word-break: break-word;">{{ n }}</span>
                 {% when None %}
                 {% endmatch %}
-                {% if att.summary.is_some() && att.card_count == 0 %}
-                <span class="context-card-awaiting" style="display: block; font-size: 0.78rem; color: var(--text-muted); margin-top: var(--spacing-xs);">Not yet synthesized</span>
-                {% endif %}
             </summary>
 
             <div class="context-card-body" style="margin-top: var(--spacing-sm);">
@@ -115,12 +106,14 @@
                     {% match att.summary_error %}
                     {% when Some with (err) %}
                         <div class="context-summary-stale-error">last attempt failed: {{ err }}</div>
+                        <button class="btn btn-sm" hx-post="/web/specs/{{ spec_id }}/context/{{ att.attachment_id }}/resummarize" hx-target="#context-panel" hx-swap="outerHTML">Retry</button>
                     {% when None %}
                     {% endmatch %}
                 {% when None %}
                     {% match att.summary_error %}
                     {% when Some with (err) %}
                         <div class="card-error">{{ err }}</div>
+                        <button class="btn btn-sm" hx-post="/web/specs/{{ spec_id }}/context/{{ att.attachment_id }}/resummarize" hx-target="#context-panel" hx-swap="outerHTML">Retry</button>
                     {% when None %}
                         <div class="context-summary-pending" style="font-size: 0.82rem; color: var(--text-muted); font-style: italic; margin-bottom: var(--spacing-sm);">
                             Summarizing&hellip;
@@ -136,17 +129,6 @@
                                   style="font-size: 0.82rem;">{% match att.user_notes %}{% when Some with (n) %}{{ n }}{% when None %}{% endmatch %}</textarea>
                     </div>
                 </form>
-                <div style="display: flex; justify-content: flex-end; gap: var(--spacing-sm);">
-                    <button class="btn btn-sm"
-                            hx-post="/web/specs/{{ spec_id }}/context/{{ att.attachment_id }}/resummarize"
-                            hx-target="#context-panel"
-                            hx-swap="outerHTML">Resummarize</button>
-                    <button class="btn btn-sm btn-danger"
-                            hx-delete="/web/specs/{{ spec_id }}/context/{{ att.attachment_id }}"
-                            hx-target="#context-panel"
-                            hx-swap="outerHTML"
-                            hx-confirm="Remove this file?">Remove</button>
-                </div>
             </div>
         </details>
         {% endfor %}

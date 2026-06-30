@@ -2792,7 +2792,6 @@ struct ContextPanelItem {
     /// Number of non-removed cards whose `source_attachment_id` points at this
     /// attachment. Rendered in the collapsed header so the user can see at a
     /// glance how much of an attachment the Manager has synthesized.
-    card_count: usize,
     /// Coarse classification of the attachment for per-kind preview rendering
     /// and badge coloring in the template.
     kind: AttachmentKind,
@@ -2833,11 +2832,6 @@ async fn render_context_panel_for(state: &SharedState, spec_id: Ulid) -> Respons
         .iter()
         .filter(|a| !a.removed)
         .map(|a| {
-            let card_count = spec_state
-                .cards
-                .values()
-                .filter(|c| c.source_attachment_id == Some(a.attachment_id))
-                .count();
             ContextPanelItem {
                 attachment_id: a.attachment_id.to_string(),
                 filename: a.filename.clone(),
@@ -2852,7 +2846,6 @@ async fn render_context_panel_for(state: &SharedState, spec_id: Ulid) -> Respons
                 summary_html: a.summary.as_deref().map(render_markdown),
                 summary_error: a.summary_error.clone(),
                 user_notes: a.user_notes.clone(),
-                card_count,
                 kind: AttachmentKind::from_mime(&a.mime_type),
                 mime_type: a.mime_type.clone(),
                 raw_url: format!("/web/specs/{}/context/{}/raw", spec_id, a.attachment_id),
@@ -4793,9 +4786,9 @@ mod tests {
     }
 
     #[test]
-    fn context_panel_shows_in_context_badge_when_summary_present() {
-        // An attachment that has a summary should render the "in context" pill —
-        // signalling to the user that it's been included in the agent's prompt.
+    fn context_panel_summarized_file_shows_no_status_badge() {
+        // A summarized, in-context file is the quiet default: no status badge.
+        // (The old "in context" pill was removed — it stated the obvious.)
         let tmpl = ContextPanelTemplate {
             spec_id: "01HTEST".to_string(),
             attachments: vec![ContextPanelItem {
@@ -4811,27 +4804,21 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
         assert!(
-            rendered.contains("in context"),
-            "summary present should show 'in context' pill"
-        );
-        // The hover hint must use the shared .tooltip component rather than a
-        // native `title=` attribute, so it renders as a styled popover.
-        assert!(
-            rendered.contains(r#"class="has-tooltip""#),
-            "in-context pill must be wrapped in .has-tooltip"
+            !rendered.contains("in context"),
+            "summarized file should not show an 'in context' badge"
         );
         assert!(
-            rendered.contains(r#"class="tooltip context-pill-tooltip""#),
-            "in-context hint must use the .tooltip component"
+            !rendered.contains("badge-plan"),
+            "no status pill for the default summarized state"
         );
+        // It should still offer a clean × to remove the file.
         assert!(
-            rendered.contains("Included in agent context"),
-            "tooltip text must be present"
+            rendered.contains("context-card-x"),
+            "card should have a clean × remove control"
         );
     }
 
@@ -4853,7 +4840,6 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -4886,7 +4872,6 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -4926,7 +4911,6 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -4938,10 +4922,10 @@ mod tests {
     }
 
     #[test]
-    fn context_panel_delete_button_is_outside_summary() {
-        // The delete button should live in the expanded section so clicking it
-        // doesn't toggle the card. Concretely: the `hx-delete` attribute must
-        // appear AFTER the closing `</summary>` tag.
+    fn context_panel_delete_x_lives_in_summary_with_stoppropagation() {
+        // The clean × remove now lives in the header (<summary>) like the upload
+        // chips. Because clicking inside a <summary> would toggle the card, the
+        // button must stop propagation so it removes without expanding/collapsing.
         let tmpl = ContextPanelTemplate {
             spec_id: "01HTEST".to_string(),
             attachments: vec![ContextPanelItem {
@@ -4957,7 +4941,6 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -4968,46 +4951,21 @@ mod tests {
             .find("</summary>")
             .expect("should have </summary> tag");
         assert!(
-            delete_idx > summary_close_idx,
-            "delete button (hx-delete) must appear after </summary>, got delete at {} vs </summary> at {}",
+            delete_idx < summary_close_idx,
+            "the × delete must live inside <summary> now, got delete at {} vs </summary> at {}",
             delete_idx,
             summary_close_idx,
         );
-    }
-
-    #[test]
-    fn context_panel_shows_card_count_when_cards_sourced() {
-        // When the Manager has synthesized cards from an attachment, the
-        // collapsed header should show a small count so the user can see
-        // at a glance how much of a file has been processed.
-        let tmpl = ContextPanelTemplate {
-            spec_id: "01HTEST".to_string(),
-            attachments: vec![ContextPanelItem {
-                attachment_id: "01HATT".to_string(),
-                filename: "vibes.md".to_string(),
-                extension: "md".to_string(),
-                size_display: "2 KB".to_string(),
-                added_display: "12:34".to_string(),
-                summary: Some("design vibes".to_string()),
-                summary_html: Some("<p>design vibes</p>\n".to_string()),
-                user_notes: None,
-                summary_error: None,
-                kind: AttachmentKind::Text,
-                mime_type: "text/plain".to_string(),
-                raw_url: "/raw".to_string(),
-                card_count: 3,
-            }],
-        };
-        let rendered = tmpl.render().unwrap();
         assert!(
-            rendered.contains("3 cards"),
-            "panel should show card count when > 0, got: {rendered}"
+            rendered.contains("event.stopPropagation()"),
+            "the × must stop propagation so it doesn't toggle the <details>"
         );
     }
 
     #[test]
-    fn context_panel_pluralizes_single_card_count() {
-        // Singular form when exactly one card references the attachment.
+    fn context_panel_no_longer_shows_card_count_or_synthesis_hints() {
+        // The "N cards" count and the "Not yet synthesized" hint were removed —
+        // they leaned on jargon (what's a "card"?) for little value on the card face.
         let tmpl = ContextPanelTemplate {
             spec_id: "01HTEST".to_string(),
             attachments: vec![ContextPanelItem {
@@ -5023,43 +4981,16 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 1,
             }],
         };
         let rendered = tmpl.render().unwrap();
         assert!(
-            rendered.contains("1 card") && !rendered.contains("1 cards"),
-            "panel should use singular 'card' for count of 1, got: {rendered}"
+            !rendered.contains("3 cards") && !rendered.contains("card-count"),
+            "card count must not appear on the card face, got: {rendered}"
         );
-    }
-
-    #[test]
-    fn context_panel_shows_not_yet_synthesized_when_summarized_but_no_cards() {
-        // An attachment that has a summary but hasn't been ingested yet should
-        // display a subtle hint so the user knows the Manager is expected to
-        // process it.
-        let tmpl = ContextPanelTemplate {
-            spec_id: "01HTEST".to_string(),
-            attachments: vec![ContextPanelItem {
-                attachment_id: "01HATT".to_string(),
-                filename: "vibes.md".to_string(),
-                extension: "md".to_string(),
-                size_display: "2 KB".to_string(),
-                added_display: "12:34".to_string(),
-                summary: Some("design vibes".to_string()),
-                summary_html: Some("<p>design vibes</p>\n".to_string()),
-                user_notes: None,
-                summary_error: None,
-                kind: AttachmentKind::Text,
-                mime_type: "text/plain".to_string(),
-                raw_url: "/raw".to_string(),
-                card_count: 0,
-            }],
-        };
-        let rendered = tmpl.render().unwrap();
         assert!(
-            rendered.contains("Not yet synthesized"),
-            "panel should show 'Not yet synthesized' when summary is Some and card_count is 0"
+            !rendered.contains("Not yet synthesized"),
+            "the 'Not yet synthesized' hint must be gone"
         );
     }
 
@@ -5081,7 +5012,6 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -5110,7 +5040,6 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 2,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -5139,7 +5068,6 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -5202,7 +5130,6 @@ mod tests {
                 summary_html: Some("<p>a diagram</p>\n".to_string()),
                 summary_error: None,
                 user_notes: None,
-                card_count: 0,
                 kind: AttachmentKind::ImageRaster,
                 mime_type: "image/png".to_string(),
                 raw_url: "/web/specs/01HSPEC/context/01HATT/raw".to_string(),
@@ -5242,7 +5169,6 @@ mod tests {
                 summary_html: Some("a brief draft".to_string()),
                 summary_error: None,
                 user_notes: None,
-                card_count: 0,
                 kind: AttachmentKind::Pdf,
                 mime_type: "application/pdf".to_string(),
                 raw_url: format!("/web/specs/01HSPEC/context/{}/raw", att_id),
@@ -5287,7 +5213,6 @@ mod tests {
                 summary_html: Some("<p>a voice memo</p>\n".to_string()),
                 summary_error: None,
                 user_notes: None,
-                card_count: 0,
                 kind: AttachmentKind::Audio,
                 mime_type: "audio/mpeg".to_string(),
                 raw_url: "/web/specs/01HSPEC/context/01HATT/raw".to_string(),
@@ -5306,8 +5231,35 @@ mod tests {
     }
 
     #[test]
-    fn context_panel_resummarize_button_targets_correct_endpoint() {
-        let tmpl = ContextPanelTemplate {
+    fn context_panel_retry_appears_only_on_failure_and_targets_resummarize() {
+        // Resummarize is no longer on the happy path — a failed summary shows a
+        // single "Retry" that POSTs to the resummarize endpoint.
+        let failed = ContextPanelTemplate {
+            spec_id: "01HSPEC".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "notes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "1 KB".to_string(),
+                added_display: "12:00".to_string(),
+                summary: None,
+                summary_html: None,
+                summary_error: Some("model timed out".to_string()),
+                user_notes: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/markdown".to_string(),
+                raw_url: "/raw".to_string(),
+            }],
+        };
+        let rendered = failed.render().unwrap();
+        assert!(
+            rendered.contains(r#"hx-post="/web/specs/01HSPEC/context/01HATT/resummarize""#),
+            "failed state must offer Retry -> resummarize endpoint"
+        );
+        assert!(rendered.contains(">Retry<"), "failure button label must be 'Retry'");
+
+        // Happy path (summary present, no error) shows NO retry/resummarize.
+        let ok = ContextPanelTemplate {
             spec_id: "01HSPEC".to_string(),
             attachments: vec![ContextPanelItem {
                 attachment_id: "01HATT".to_string(),
@@ -5319,20 +5271,15 @@ mod tests {
                 summary_html: Some("<p>a summary</p>\n".to_string()),
                 summary_error: None,
                 user_notes: None,
-                card_count: 0,
                 kind: AttachmentKind::Text,
                 mime_type: "text/markdown".to_string(),
                 raw_url: "/raw".to_string(),
             }],
         };
-        let rendered = tmpl.render().unwrap();
+        let ok_rendered = ok.render().unwrap();
         assert!(
-            rendered.contains(r#"hx-post="/web/specs/01HSPEC/context/01HATT/resummarize""#),
-            "Resummarize button must POST to the resummarize endpoint"
-        );
-        assert!(
-            rendered.contains(">Resummarize<"),
-            "button label must be 'Resummarize'"
+            !ok_rendered.contains("/resummarize"),
+            "summarized file must not show a Retry/Resummarize control"
         );
     }
 
@@ -5353,7 +5300,6 @@ mod tests {
                 summary_html: None,
                 summary_error: Some("provider rejected payload".to_string()),
                 user_notes: None,
-                card_count: 0,
                 kind: AttachmentKind::Text,
                 mime_type: "application/octet-stream".to_string(),
                 raw_url: "/raw".to_string(),
@@ -5395,7 +5341,6 @@ mod tests {
                 summary_html: Some("<p>the original summary</p>\n".to_string()),
                 summary_error: Some("transient LLM error".to_string()),
                 user_notes: None,
-                card_count: 0,
                 kind: AttachmentKind::Text,
                 mime_type: "text/markdown".to_string(),
                 raw_url: "/raw".to_string(),
