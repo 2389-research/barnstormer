@@ -1767,11 +1767,15 @@ html, body {
     min-height: 0;
 }
 
-/* Question card wrapper — shrink so it doesn't steal all space from the feed */
+/* Question card wrapper. The agent's question is the call-to-action, so let it
+   take the height it needs and make the history feed yield/scroll instead — but
+   keep a sliver of feed visible and let the card scroll only in the extreme case
+   (more options than fit the whole panel). Previously capped at 50%, which
+   clipped multi-choice questions so the last options needed scrolling. */
 .chat-question-wrap {
     flex: 0 1 auto;
     min-height: 0;
-    max-height: 50%;
+    max-height: calc(100% - 64px);
     overflow-y: auto;
 }
 
