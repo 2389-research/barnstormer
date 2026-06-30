@@ -59,8 +59,12 @@
                             </span>
                         {% endmatch %}
                     {% endmatch %}
+                    {# preventDefault cancels the <details> toggle (the summary's
+                       activation default) so removing doesn't expand the card;
+                       stopPropagation is belt-and-suspenders. HTMX's hx-delete is
+                       delegated at document level and still fires either way. #}
                     <button type="button" class="context-card-x" aria-label="Remove file"
-                            onclick="event.stopPropagation()"
+                            onclick="event.preventDefault(); event.stopPropagation();"
                             hx-delete="/web/specs/{{ spec_id }}/context/{{ att.attachment_id }}"
                             hx-target="#context-panel" hx-swap="outerHTML"
                             hx-confirm="Remove this file?">&times;</button>
