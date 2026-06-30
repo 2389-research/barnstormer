@@ -793,6 +793,78 @@ html, body {
     font-weight: 500;
 }
 
+/* --- Composer file chips --- */
+.chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px 8px 6px 10px;
+    font-size: 12.5px;
+    max-width: 240px;
+}
+
+.chip-ic {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+    text-transform: uppercase;
+}
+
+.chip-ic-img { background: var(--badge-planner); }
+.chip-ic-pdf { background: var(--danger); }
+.chip-ic-code { background: var(--text-primary); }
+.chip-ic-note { background: var(--text-muted); }
+
+.chip-meta {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+    overflow: hidden;
+}
+
+.chip-name {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chip-sub {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.chip-x {
+    margin-left: 2px;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+    padding: 2px;
+}
+
+.chip-x:hover {
+    color: var(--danger);
+}
+
+/* Context panel drop highlight */
+#context-panel.drag {
+    outline: 2px dashed var(--badge-planner);
+    outline-offset: -6px;
+}
+
 /* --- New spec button --- */
 .new-spec-btn {
     display: flex;

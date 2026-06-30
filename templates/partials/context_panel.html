@@ -169,9 +169,9 @@
                `.context-add-btn:focus-within` paints the visible focus ring on the
                label, and Space/Enter on the focused input opens the OS picker. #}
             <label class="btn btn-primary context-add-btn">
-                + Add file
-                <input type="file" name="file" class="context-file-input"
-                       aria-label="Add context file"
+                + Add files
+                <input type="file" name="file" class="context-file-input" multiple
+                       aria-label="Add context files"
                        onchange="this.form.requestSubmit()">
             </label>
         </form>

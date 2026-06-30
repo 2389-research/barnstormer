@@ -298,3 +298,50 @@ async fn web_project_management_flow() {
         404
     );
 }
+
+#[tokio::test]
+async fn web_context_multi_file_upload() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let home = dir.path().to_path_buf();
+    let _storage = StorageManager::new(home.clone()).unwrap();
+    let state = test_app_state(home.clone());
+
+    // Create a spec (lands in Brainstorming, which gates context upload).
+    let create_body = serde_json::json!({"title":"Ctx","one_liner":"x","goal":"y"});
+    let resp = create_router(Arc::clone(&state), None)
+        .oneshot(
+            Request::post("/api/specs")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&create_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let spec_id = json_body(resp).await["spec_id"].as_str().unwrap().to_string();
+
+    // Two markdown files in one multipart request, both named "file".
+    let boundary = "BTESTBOUNDARY";
+    let body = format!(
+        "--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"one.md\"\r\n\r\n# First file\r\n--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"two.md\"\r\n\r\n# Second file\r\n--{b}--\r\n",
+        b = boundary
+    );
+    let resp = create_router(Arc::clone(&state), None)
+        .oneshot(
+            Request::post(format!("/web/specs/{spec_id}/context"))
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "multi-file upload should succeed");
+
+    // The context panel should now list both files.
+    let (status, panel) = get_text(&state, &format!("/web/specs/{spec_id}/context-panel")).await;
+    assert_eq!(status, 200);
+    assert!(panel.contains("one.md"), "panel should show first file");
+    assert!(panel.contains("two.md"), "panel should show second file");
+}

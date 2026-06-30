@@ -2985,26 +2985,24 @@ pub async fn upload_context(
             .into_response();
     }
 
-    // Extract first `file` part. Streamed-and-capped so a request can't
-    // buffer up to the configured global body cap before we reject it.
-    let mut file_bytes: Option<Vec<u8>> = None;
-    let mut filename: Option<String> = None;
+    // Collect every `file` part. Streamed-and-capped per field so a request
+    // can't buffer up to the configured global body cap before we reject it.
+    let mut raw_files: Vec<(String, Vec<u8>)> = Vec::new();
     loop {
         match multipart.next_field().await {
             Ok(Some(mut field)) => {
                 if field.name() == Some("file") {
-                    filename = field.file_name().map(str::to_string);
+                    let fname = field
+                        .file_name()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| "file".to_string());
                     // Browser-claimed content type is intentionally ignored;
                     // the server sniffs the bytes below.
-                    let bytes = match read_field_capped(&mut field).await {
-                        Ok(Some(b)) => b,
-                        Ok(None) => {
-                            return (StatusCode::BAD_REQUEST, "empty file part").into_response();
-                        }
+                    match read_field_capped(&mut field).await {
+                        Ok(Some(b)) => raw_files.push((fname, b)),
+                        Ok(None) => continue, // skip empty parts
                         Err(resp) => return resp,
-                    };
-                    file_bytes = Some(bytes);
-                    break;
+                    }
                 }
             }
             Ok(None) => break,
@@ -3018,122 +3016,134 @@ pub async fn upload_context(
         }
     }
 
-    let Some(bytes) = file_bytes else {
+    if raw_files.is_empty() {
         return (StatusCode::BAD_REQUEST, "missing file part").into_response();
-    };
+    }
 
-    // Sniff MIME from bytes. Browser-supplied content-type is not trusted —
-    // a client can claim anything, but we serve, summarize, and gate on what
-    // the bytes actually are.
-    let detected_mime = match crate::context_storage::sniff_mime(
-        &bytes,
-        filename.as_deref().unwrap_or("file"),
-    ) {
-        Some(m) => m,
-        None => {
+    // Validate the whole batch up front (sniff + whitelist) so one bad file
+    // rejects the request before anything is written to disk or attached.
+    // Browser-supplied content-type is not trusted — we gate on the bytes.
+    let mut prepared: Vec<(String, String, Vec<u8>)> = Vec::new(); // (sanitized_name, mime, bytes)
+    for (fname, bytes) in raw_files {
+        let detected_mime = match crate::context_storage::sniff_mime(&bytes, &fname) {
+            Some(m) => m,
+            None => {
+                return (
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    format!("couldn't identify file type for '{fname}' — uploads must be a recognized image, document, audio, video, or UTF-8 text file"),
+                )
+                    .into_response();
+            }
+        };
+        if !crate::context_storage::is_whitelisted_mime(&detected_mime) {
             return (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "couldn't identify file type — uploads must be a recognized image, document, audio, video, or UTF-8 text file",
+                format!("file type '{detected_mime}' ('{fname}') is not supported"),
             )
                 .into_response();
         }
-    };
-    if !crate::context_storage::is_whitelisted_mime(&detected_mime) {
-        return (
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            format!("file type '{detected_mime}' is not supported"),
-        )
-            .into_response();
+        prepared.push((
+            crate::context_storage::sanitize_filename(&fname),
+            detected_mime,
+            bytes,
+        ));
     }
 
-    let filename = crate::context_storage::sanitize_filename(filename.as_deref().unwrap_or("file"));
-    let attachment_id = Ulid::new();
+    // Write + attach + summarize each prepared file.
+    for (filename, detected_mime, bytes) in prepared {
+        let attachment_id = Ulid::new();
 
-    let path = crate::context_storage::attachment_path(
-        &state.barnstormer_home,
-        spec_id,
-        attachment_id,
-        &filename,
-    );
-    if let Err(e) = crate::context_storage::write_bytes(&path, &bytes) {
-        tracing::error!("failed to write attachment: {e}");
-        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
-    }
+        let path = crate::context_storage::attachment_path(
+            &state.barnstormer_home,
+            spec_id,
+            attachment_id,
+            &filename,
+        );
+        if let Err(e) = crate::context_storage::write_bytes(&path, &bytes) {
+            tracing::error!("failed to write attachment: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+        }
 
-    // SVG-specific: rasterize and cache alongside the original. Failure
-    // degrades to markup-only summarization; the original SVG is still on
-    // disk and the upload still lands.
-    if detected_mime == "image/svg+xml"
-        && let Ok(markup) = std::str::from_utf8(&bytes)
-    {
-        match crate::svg_raster::rasterize_svg(markup) {
-            Ok(png) => {
-                let raster_path = crate::context_storage::attachment_dir(
-                    &state.barnstormer_home,
-                    spec_id,
-                    attachment_id,
-                )
-                .join("rasterized.png");
-                if let Err(e) = crate::context_storage::write_bytes(&raster_path, &png) {
-                    tracing::warn!("failed to cache rasterized SVG: {e}");
+        // SVG-specific: rasterize and cache alongside the original. Failure
+        // degrades to markup-only summarization; the original SVG is still on
+        // disk and the upload still lands.
+        if detected_mime == "image/svg+xml"
+            && let Ok(markup) = std::str::from_utf8(&bytes)
+        {
+            match crate::svg_raster::rasterize_svg(markup) {
+                Ok(png) => {
+                    let raster_path = crate::context_storage::attachment_dir(
+                        &state.barnstormer_home,
+                        spec_id,
+                        attachment_id,
+                    )
+                    .join("rasterized.png");
+                    if let Err(e) = crate::context_storage::write_bytes(&raster_path, &png) {
+                        tracing::warn!("failed to cache rasterized SVG: {e}");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("SVG rasterization failed for {filename}: {e}");
                 }
             }
-            Err(e) => {
-                tracing::warn!("SVG rasterization failed for {filename}: {e}");
+        }
+
+        let size_bytes = bytes.len() as u64;
+        let cmd = Command::AttachContext {
+            attachment_id,
+            filename: filename.clone(),
+            mime_type: detected_mime.clone(),
+            size_bytes,
+        };
+        if let Err(e) = handle.send_command(cmd).await {
+            // Bytes already on disk — without the event referencing them they'd
+            // leak and the filesystem would drift from actor state. Best-effort
+            // cleanup of the whole attachment dir (also drops SVG's
+            // `rasterized.png` sibling instead of leaving it orphaned).
+            let dir = crate::context_storage::attachment_dir(
+                &state.barnstormer_home,
+                spec_id,
+                attachment_id,
+            );
+            if let Err(remove_err) = std::fs::remove_dir_all(&dir) {
+                tracing::warn!("failed to clean up orphaned context dir {dir:?}: {remove_err}");
             }
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("command failed: {e}"),
+            )
+                .into_response();
         }
-    }
 
-    let size_bytes = bytes.len() as u64;
-    let cmd = Command::AttachContext {
-        attachment_id,
-        filename: filename.clone(),
-        mime_type: detected_mime.clone(),
-        size_bytes,
-    };
-    if let Err(e) = handle.send_command(cmd).await {
-        // Bytes already on disk — without the event referencing them they'd
-        // leak and the filesystem would drift from actor state. Best-effort
-        // cleanup (failure is logged but doesn't block the error response).
-        // Remove the whole attachment dir so we also drop SVG's
-        // `rasterized.png` sibling instead of leaving it orphaned.
-        let dir =
-            crate::context_storage::attachment_dir(&state.barnstormer_home, spec_id, attachment_id);
-        if let Err(remove_err) = std::fs::remove_dir_all(&dir) {
-            tracing::warn!("failed to clean up orphaned context dir {dir:?}: {remove_err}");
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("command failed: {e}"),
-        )
-            .into_response();
-    }
-
-    // Build per-kind SummarizerInput from disk and dispatch — fire-and-forget.
-    // Summary will land via SSE when done. Notes aren't available at upload
-    // time; they're populated later via PATCH.
-    let attachment_opt = handle
-        .read_state()
-        .await
-        .context_attachments
-        .iter()
-        .find(|a| a.attachment_id == attachment_id)
-        .cloned();
-    if let Some(att) = attachment_opt {
-        match crate::context_storage::build_summarizer_input(&state.barnstormer_home, spec_id, &att)
+        // Build per-kind SummarizerInput from disk and dispatch — fire-and-forget.
+        // Summary lands via SSE when done. Notes aren't available at upload time.
+        let attachment_opt = handle
+            .read_state()
             .await
-        {
-            Ok(input) => {
-                crate::summarizer::spawn_summarize(
-                    handle.clone(),
-                    attachment_id,
-                    filename.clone(),
-                    None,
-                    input,
-                );
-            }
-            Err(e) => {
-                tracing::warn!("could not build summarizer input for {attachment_id}: {e}");
+            .context_attachments
+            .iter()
+            .find(|a| a.attachment_id == attachment_id)
+            .cloned();
+        if let Some(att) = attachment_opt {
+            match crate::context_storage::build_summarizer_input(
+                &state.barnstormer_home,
+                spec_id,
+                &att,
+            )
+            .await
+            {
+                Ok(input) => {
+                    crate::summarizer::spawn_summarize(
+                        handle.clone(),
+                        attachment_id,
+                        filename.clone(),
+                        None,
+                        input,
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("could not build summarizer input for {attachment_id}: {e}");
+                }
             }
         }
     }
