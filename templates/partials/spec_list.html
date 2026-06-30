@@ -1,14 +1,12 @@
-{% if specs.is_empty() %}
+{% if pinned.is_empty() && recent.is_empty() %}
 <p class="empty-state">No specs yet. Create one to get started.</p>
 {% else %}
-{% for spec in specs %}
-<a class="spec-list-item"
-   hx-get="/web/specs/{{ spec.spec_id }}"
-   hx-target="#workspace"
-   hx-swap="innerHTML"
-   hx-push-url="/web/specs/{{ spec.spec_id }}">
-    <span class="spec-title">{{ spec.title }}</span>
-    <span class="one-liner">{{ spec.one_liner }}</span>
-</a>
-{% endfor %}
+{% if !pinned.is_empty() %}
+<div class="rail-group-label">Pinned</div>
+{% for spec in pinned %}{% include "partials/spec_list_row.html" %}{% endfor %}
+{% endif %}
+{% if !recent.is_empty() %}
+<div class="rail-group-label">Recent</div>
+{% for spec in recent %}{% include "partials/spec_list_row.html" %}{% endfor %}
+{% endif %}
 {% endif %}

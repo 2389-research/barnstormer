@@ -79,13 +79,15 @@ pub async fn index() -> IndexTemplate {
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/spec_list.html")]
 pub struct SpecListTemplate {
-    pub specs: Vec<SpecSummary>,
+    pub pinned: Vec<SpecSummary>,
+    pub recent: Vec<SpecSummary>,
 }
 
-/// GET /web/specs - Return the spec list as an HTML partial.
+/// GET /web/specs - Return the spec list as an HTML partial, grouped into
+/// pinned and recent (both newest-first), archived specs excluded.
 pub async fn spec_list(State(state): State<SharedState>) -> impl IntoResponse {
     let actors = state.actors.read().await;
-    let mut specs = Vec::new();
+    let mut all = Vec::new();
 
     for (spec_id, handle) in actors.iter() {
         let spec_state = handle.read_state().await;
@@ -93,7 +95,7 @@ pub async fn spec_list(State(state): State<SharedState>) -> impl IntoResponse {
             if core.archived {
                 continue; // archived specs live under Settings → Archive
             }
-            specs.push(SpecSummary {
+            all.push(SpecSummary {
                 spec_id: spec_id.to_string(),
                 title: core.title.clone(),
                 one_liner: core.one_liner.clone(),
@@ -103,7 +105,9 @@ pub async fn spec_list(State(state): State<SharedState>) -> impl IntoResponse {
         }
     }
 
-    SpecListTemplate { specs }
+    all.sort_by(|a, b| b.updated_at.cmp(&a.updated_at)); // newest first
+    let (pinned, recent): (Vec<_>, Vec<_>) = all.into_iter().partition(|s| s.pinned);
+    SpecListTemplate { pinned, recent }
 }
 
 /// POST /web/specs/{id}/pin — pin a spec to the top of the rail.
@@ -202,6 +206,43 @@ pub async fn rename_spec(
         }
     }
     spec_list(State(state)).await.into_response()
+}
+
+/// Inline rename form swapped into a single rail row.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/spec_list_row_edit.html")]
+pub struct SpecRowEditTemplate {
+    pub spec_id: String,
+    pub title: String,
+}
+
+/// GET /web/specs/{id}/rename-form — replace a rail row with an inline edit form.
+pub async fn rename_form(State(state): State<SharedState>, Path(id): Path<String>) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    let actors = state.actors.read().await;
+    let Some(handle) = actors.get(&spec_id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+        )
+            .into_response();
+    };
+    let guard = handle.read_state().await;
+    let Some(core) = guard.core.as_ref() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+        )
+            .into_response();
+    };
+    SpecRowEditTemplate {
+        spec_id: id,
+        title: core.title.clone(),
+    }
+    .into_response()
 }
 
 /// Send an archive/unarchive command to a spec actor. Returns `Err(Response)`
@@ -3990,7 +4031,10 @@ mod tests {
 
     #[test]
     fn spec_list_template_renders_empty() {
-        let tmpl = SpecListTemplate { specs: vec![] };
+        let tmpl = SpecListTemplate {
+            pinned: vec![],
+            recent: vec![],
+        };
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("No specs yet"));
     }
@@ -3998,7 +4042,14 @@ mod tests {
     #[test]
     fn spec_list_template_renders_with_specs() {
         let tmpl = SpecListTemplate {
-            specs: vec![SpecSummary {
+            pinned: vec![SpecSummary {
+                spec_id: "01HPIN".to_string(),
+                title: "Pinned Spec".to_string(),
+                one_liner: "stays on top".to_string(),
+                updated_at: "2025-01-02T00:00:00Z".to_string(),
+                pinned: true,
+            }],
+            recent: vec![SpecSummary {
                 spec_id: "01HTEST".to_string(),
                 title: "My Spec".to_string(),
                 one_liner: "A test spec".to_string(),
@@ -4007,8 +4058,14 @@ mod tests {
             }],
         };
         let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Pinned"));
+        assert!(rendered.contains("Recent"));
+        assert!(rendered.contains("Pinned Spec"));
         assert!(rendered.contains("My Spec"));
         assert!(rendered.contains("A test spec"));
+        // ⋯ menu actions present
+        assert!(rendered.contains("/rename-form"));
+        assert!(rendered.contains("/archive"));
     }
 
     #[test]

@@ -1,0 +1,12 @@
+{# ABOUTME: Inline rename form swapped into a rail row. Escape reloads the rail. #}
+{# ABOUTME: `required` blocks empty submits client-side (no 400 round-trip). #}
+<div class="spec-list-item editing">
+    <form class="rename-form"
+          hx-post="/web/specs/{{ spec_id }}/rename"
+          hx-target="#spec-list" hx-swap="innerHTML">
+        <input class="rename-input" name="title" value="{{ title }}" required autofocus
+               aria-label="Spec title"
+               hx-get="/web/specs" hx-trigger="keyup[key=='Escape']"
+               hx-target="#spec-list" hx-swap="innerHTML">
+    </form>
+</div>

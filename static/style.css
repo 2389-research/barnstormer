@@ -490,15 +490,38 @@ html, body {
 }
 
 .spec-list-item {
+    position: relative;
     display: flex;
-    flex-direction: column;
-    padding: 12px;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px 6px 12px;
     border-radius: var(--radius-xl);
-    cursor: pointer;
-    text-decoration: none;
-    color: var(--text-primary);
     transition: all 0.15s ease;
     margin-bottom: 4px;
+}
+
+.spec-row-link {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+    text-decoration: none;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.spec-text {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+}
+
+.pin-ico {
+    display: flex;
+    flex-shrink: 0;
+    color: var(--text-muted);
 }
 
 .spec-list-item:hover {
@@ -530,6 +553,114 @@ html, body {
 .spec-list-item.active .one-liner {
     color: var(--bg-card);
     opacity: 0.6;
+}
+
+/* --- Rail group labels (Pinned / Recent) --- */
+.rail-group-label {
+    padding: 8px 12px 4px;
+    font-size: 10.5px;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+/* --- Rail row ⋯ menu --- */
+.spec-menu-wrap {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.spec-menu-wrap > summary {
+    list-style: none;
+}
+
+.spec-menu-wrap > summary::-webkit-details-marker {
+    display: none;
+}
+
+.kebab {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    color: var(--text-muted);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+
+.spec-list-item:hover .kebab,
+.spec-menu-wrap[open] .kebab,
+.kebab:focus-visible {
+    opacity: 1;
+}
+
+.kebab:hover {
+    background: var(--accent);
+    color: var(--text-primary);
+}
+
+.spec-menu {
+    position: absolute;
+    top: 30px;
+    right: 0;
+    z-index: 30;
+    min-width: 150px;
+    padding: 5px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+}
+
+.menu-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    background: none;
+    border-radius: 7px;
+    font-family: var(--font-body);
+    font-size: 13px;
+    color: var(--text-primary);
+    cursor: pointer;
+    text-align: left;
+}
+
+.menu-item:hover {
+    background: var(--bg-secondary);
+}
+
+.menu-sep {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--border-subtle);
+}
+
+/* --- Inline rename --- */
+.rename-form {
+    width: 100%;
+}
+
+.rename-input {
+    width: 100%;
+    padding: 7px 10px;
+    border: 1px solid var(--accent-hover);
+    border-radius: var(--radius);
+    font-family: var(--font-body);
+    font-size: 14px;
+    color: var(--text-primary);
+    background: var(--bg-surface);
+}
+
+.rename-input:focus {
+    outline: none;
+    border-color: var(--text-muted);
 }
 
 /* --- New spec button --- */
