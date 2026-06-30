@@ -4,9 +4,18 @@
     <form class="rename-form"
           hx-post="/web/specs/{{ spec_id }}/rename"
           hx-target="#spec-list" hx-swap="innerHTML">
-        <input class="rename-input" name="title" value="{{ title }}" required autofocus
+        <input class="rename-input" name="title" value="{{ title }}" required
                aria-label="Spec title"
                hx-get="/web/specs" hx-trigger="keyup[key=='Escape']"
                hx-target="#spec-list" hx-swap="innerHTML">
     </form>
 </div>
+{# autofocus attribute does not fire on HTMX-swapped nodes; focus + select here.
+   htmx-config sets allowScriptTags:true (base.html) so this runs after the swap. #}
+<script>
+    (function () {
+        var el = document.querySelector('.spec-list-item.editing .rename-input');
+        if (el) { el.focus(); el.select(); }
+    })();
+</script>
+
