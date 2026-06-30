@@ -661,6 +661,14 @@ Verify against deck slide 9: happy files = type badge + name + ×; only in-progr
 
 **Start points:** `crates/barnstormer-agent/src/streaming_hook.rs` (emits deltas) and the front-end `StreamDelta` token appender (chat transcript SSE handling — see `templates/partials/chat_transcript.html` and the CLAUDE.md note on appending streamed tokens). Most likely the first chunk is emitted/appended twice (an initial full-text emit followed by the same text as the first delta). Write a failing test reproducing the doubling at the isolated layer, then fix. Commit — `fix(stream): stop doubling the first streamed chunk`.
 
+### Task 9.4 (bug): Bottom content clipped — last item needs scrolling
+
+**Symptom (from review screenshot, 2026-06-30):** an agent panel's bottom edge sits oddly against the viewport bottom — the final bullet/item requires scrolling to reach; the panel doesn't size to the visible area.
+
+**Likely area:** one of the brainstorming-view panels has a height/overflow miscalculation — the flex column's last child is pushed below the fold. Candidates: `.chat-panel` / `.chat-transcript`, the agent activity feed, or the agent status/LEDs row in `templates/partials/` + their rules in `static/style.css`. The layout uses `height:100vh` on `.app-layout` with `overflow:hidden` and inner scroll regions, so a child with missing `min-height:0` (a classic flexbox overflow trap) or padding pushing past `100%` is the usual cause.
+
+**Needs:** confirm from Sophie which panel clips (agent activity feed / chat panel / agent status row). Then reproduce at a fixed viewport height, fix the flex sizing (`min-height:0` on the scroll container, ensure the panel's own height is `100%` of its flex parent, not content-driven), and verify the last item is reachable without page-level scroll. Commit — `fix(ui): contain panel scroll so last item is reachable`.
+
 ---
 
 ## Final verification (before declaring done)
