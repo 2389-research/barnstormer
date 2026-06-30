@@ -63,7 +63,6 @@
     {% if let Some( html) = card.body_html %}
     <div class="doc-content">{{ html|safe }}</div>
     {% endif %}
-    <p class="card-meta">by {{ card.created_by }}</p>
     {% endfor %}
     {% endif %}
     {% endfor %}

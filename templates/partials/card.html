@@ -4,7 +4,6 @@
     {% if let Some(html) = card.body_html %}
     <div class="card-body">{{ html|safe }}</div>
     {% endif %}
-    <div class="card-meta">by {{ card.created_by }}</div>
     <div class="card-actions">
         <button class="btn btn-sm"
                 hx-get="/web/specs/{{ spec_id }}/cards/{{ card.card_id }}/edit"

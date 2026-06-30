@@ -814,7 +814,6 @@ pub struct CardData {
     pub body_html: Option<String>,
     pub lane: String,
     pub order: f64,
-    pub created_by: String,
     pub updated_at: String,
 }
 
@@ -829,7 +828,6 @@ impl CardData {
             body_html,
             lane: card.lane.clone(),
             order: card.order,
-            created_by: card.created_by.clone(),
             updated_at: card.updated_at.format("%H:%M").to_string(),
         }
     }
@@ -4219,7 +4217,6 @@ mod tests {
                     body_html: Some("<p>An interesting idea</p>\n".to_string()),
                     lane: "Ideas".to_string(),
                     order: 1.0,
-                    created_by: "human".to_string(),
                     updated_at: "12:00:00".to_string(),
                 }],
             }],
