@@ -39,6 +39,8 @@ fn event_type_name(payload: &barnstormer_core::EventPayload) -> &'static str {
         barnstormer_core::EventPayload::ContextRemoved { .. } => "context_removed",
         barnstormer_core::EventPayload::SpecPinned => "spec_pinned",
         barnstormer_core::EventPayload::SpecUnpinned => "spec_unpinned",
+        barnstormer_core::EventPayload::SpecArchived => "spec_archived",
+        barnstormer_core::EventPayload::SpecUnarchived => "spec_unarchived",
     }
 }
 

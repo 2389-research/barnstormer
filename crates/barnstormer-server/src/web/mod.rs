@@ -90,6 +90,9 @@ pub async fn spec_list(State(state): State<SharedState>) -> impl IntoResponse {
     for (spec_id, handle) in actors.iter() {
         let spec_state = handle.read_state().await;
         if let Some(ref core) = spec_state.core {
+            if core.archived {
+                continue; // archived specs live under Settings → Archive
+            }
             specs.push(SpecSummary {
                 spec_id: spec_id.to_string(),
                 title: core.title.clone(),
@@ -199,6 +202,83 @@ pub async fn rename_spec(
         }
     }
     spec_list(State(state)).await.into_response()
+}
+
+/// Send an archive/unarchive command to a spec actor. Returns `Err(Response)`
+/// for the bad-id / not-found / actor-error paths; the read lock is released
+/// when this function returns, before the caller re-renders.
+async fn send_archive_cmd(state: &SharedState, id: &str, archive: bool) -> Result<(), Response> {
+    let spec_id = match parse_spec_id(id) {
+        Ok(id) => id,
+        Err(resp) => return Err(*resp),
+    };
+    let actors = state.actors.read().await;
+    let Some(handle) = actors.get(&spec_id) else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+        )
+            .into_response());
+    };
+    let cmd = if archive {
+        Command::ArchiveSpec
+    } else {
+        Command::UnarchiveSpec
+    };
+    if let Err(e) = handle.send_command(cmd).await {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(format!("<p class=\"error-msg\">Error: {}</p>", e)),
+        )
+            .into_response());
+    }
+    Ok(())
+}
+
+/// POST /web/specs/{id}/archive — hide a spec from the rail; re-render `#spec-list`.
+pub async fn archive_spec(State(state): State<SharedState>, Path(id): Path<String>) -> Response {
+    if let Err(resp) = send_archive_cmd(&state, &id, true).await {
+        return resp;
+    }
+    spec_list(State(state)).await.into_response()
+}
+
+/// POST /web/specs/{id}/unarchive — restore a spec; re-render the archive view.
+pub async fn unarchive_spec(State(state): State<SharedState>, Path(id): Path<String>) -> Response {
+    if let Err(resp) = send_archive_cmd(&state, &id, false).await {
+        return resp;
+    }
+    archive_view(State(state)).await.into_response()
+}
+
+/// Settings → Archive view: archived specs only, newest first.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/archive_list.html")]
+pub struct ArchiveListTemplate {
+    pub specs: Vec<SpecSummary>,
+}
+
+/// GET /web/settings/archive — render the archive view into `#workspace`.
+pub async fn archive_view(State(state): State<SharedState>) -> impl IntoResponse {
+    let actors = state.actors.read().await;
+    let mut specs = Vec::new();
+    for (spec_id, handle) in actors.iter() {
+        let spec_state = handle.read_state().await;
+        if let Some(ref core) = spec_state.core {
+            if !core.archived {
+                continue;
+            }
+            specs.push(SpecSummary {
+                spec_id: spec_id.to_string(),
+                title: core.title.clone(),
+                one_liner: core.one_liner.clone(),
+                updated_at: core.updated_at.to_rfc3339(),
+                pinned: core.pinned,
+            });
+        }
+    }
+    specs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    ArchiveListTemplate { specs }
 }
 
 /// Partial: create spec form.

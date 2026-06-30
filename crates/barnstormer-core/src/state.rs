@@ -116,6 +116,7 @@ impl SpecState {
                     created_at: event.timestamp,
                     updated_at: event.timestamp,
                     pinned: false,
+                    archived: false,
                 });
             }
 
@@ -168,6 +169,20 @@ impl SpecState {
             EventPayload::SpecUnpinned => {
                 if let Some(ref mut core) = self.core {
                     core.pinned = false;
+                    core.updated_at = event.timestamp;
+                }
+            }
+
+            EventPayload::SpecArchived => {
+                if let Some(ref mut core) = self.core {
+                    core.archived = true;
+                    core.updated_at = event.timestamp;
+                }
+            }
+
+            EventPayload::SpecUnarchived => {
+                if let Some(ref mut core) = self.core {
+                    core.archived = false;
                     core.updated_at = event.timestamp;
                 }
             }
@@ -1223,6 +1238,25 @@ mod tests {
         assert!(state.core.as_ref().unwrap().pinned);
         state.apply(&make_event(3, sid, EventPayload::SpecUnpinned));
         assert!(!state.core.as_ref().unwrap().pinned);
+    }
+
+    #[test]
+    fn apply_spec_archived_and_unarchived_toggles_flag() {
+        let mut state = SpecState::new();
+        let sid = make_spec_id();
+        state.apply(&make_event(
+            1,
+            sid,
+            EventPayload::SpecCreated {
+                title: "t".into(),
+                one_liner: "o".into(),
+                goal: "g".into(),
+            },
+        ));
+        state.apply(&make_event(2, sid, EventPayload::SpecArchived));
+        assert!(state.core.as_ref().unwrap().archived);
+        state.apply(&make_event(3, sid, EventPayload::SpecUnarchived));
+        assert!(!state.core.as_ref().unwrap().archived);
     }
 
     #[test]

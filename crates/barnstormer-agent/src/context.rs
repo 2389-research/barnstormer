@@ -254,6 +254,8 @@ fn describe_event_payload(payload: &EventPayload) -> String {
         }
         EventPayload::SpecPinned => "spec pinned".to_string(),
         EventPayload::SpecUnpinned => "spec unpinned".to_string(),
+        EventPayload::SpecArchived => "spec archived".to_string(),
+        EventPayload::SpecUnarchived => "spec unarchived".to_string(),
         EventPayload::StreamingDelta { agent_id, .. } => {
             format!("streaming delta from {}", agent_id)
         }

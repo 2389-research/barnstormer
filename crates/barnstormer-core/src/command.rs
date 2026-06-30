@@ -107,6 +107,10 @@ pub enum Command {
     PinSpec,
     /// Remove the pin.
     UnpinSpec,
+    /// Archive this spec (hide from the rail; keep recoverable).
+    ArchiveSpec,
+    /// Restore an archived spec back to the rail.
+    UnarchiveSpec,
     Undo,
     StreamDelta {
         agent_id: String,
@@ -124,7 +128,12 @@ mod tests {
 
     #[test]
     fn pin_unpin_commands_round_trip() {
-        for c in [Command::PinSpec, Command::UnpinSpec] {
+        for c in [
+            Command::PinSpec,
+            Command::UnpinSpec,
+            Command::ArchiveSpec,
+            Command::UnarchiveSpec,
+        ] {
             let s = serde_json::to_string(&c).unwrap();
             let back: Command = serde_json::from_str(&s).unwrap();
             assert_eq!(format!("{back:?}"), format!("{c:?}"));

@@ -115,6 +115,8 @@ pub enum EventPayload {
     },
     SpecPinned,
     SpecUnpinned,
+    SpecArchived,
+    SpecUnarchived,
 }
 
 impl EventPayload {

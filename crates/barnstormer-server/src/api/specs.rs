@@ -44,6 +44,9 @@ pub async fn list_specs(State(state): State<SharedState>) -> Json<Vec<SpecSummar
     for (spec_id, handle) in actors.iter() {
         let spec_state = handle.read_state().await;
         if let Some(ref core) = spec_state.core {
+            if core.archived {
+                continue; // archived specs are excluded from the normal list
+            }
             summaries.push(SpecSummary {
                 spec_id: spec_id.to_string(),
                 title: core.title.clone(),

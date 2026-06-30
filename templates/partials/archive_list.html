@@ -1,0 +1,31 @@
+{# ABOUTME: Settings → Archive view — archived specs with restore/open actions. #}
+{# ABOUTME: Loaded into #workspace; restore re-renders this same #archive-view. #}
+<div id="archive-view" class="archive-view">
+    <header class="archive-header">
+        <h1>Archived specs</h1>
+        <p class="archive-sub">Archived specs are hidden from your rail but kept. Restore one to bring it back.</p>
+    </header>
+    {% if specs.is_empty() %}
+    <p class="empty-state">No archived specs.</p>
+    {% else %}
+    <ul class="archive-list">
+        {% for spec in specs %}
+        <li class="archive-row">
+            <div class="archive-row-text">
+                <span class="archive-row-title">{{ spec.title }}</span>
+                <span class="archive-row-sub">{{ spec.one_liner }}</span>
+            </div>
+            <div class="archive-row-actions">
+                <a class="btn btn-sm"
+                   hx-get="/web/specs/{{ spec.spec_id }}"
+                   hx-target="#workspace" hx-swap="innerHTML"
+                   hx-push-url="/web/specs/{{ spec.spec_id }}">Open</a>
+                <button class="btn btn-sm"
+                        hx-post="/web/specs/{{ spec.spec_id }}/unarchive"
+                        hx-target="#archive-view" hx-swap="outerHTML">Restore</button>
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+</div>

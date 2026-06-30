@@ -554,6 +554,95 @@ html, body {
     background: var(--accent);
 }
 
+/* --- Rail settings / archive entry --- */
+.rail-settings-btn {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 8px;
+    border-radius: var(--radius-xl);
+    background: transparent;
+    padding: 8px 12px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-muted);
+    border: none;
+    cursor: pointer;
+    font-family: var(--font-body);
+    transition: all 0.15s ease;
+}
+
+.rail-settings-btn:hover {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+/* --- Settings → Archive view --- */
+.archive-view {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: var(--spacing-xl) var(--spacing-lg);
+}
+
+.archive-header h1 {
+    font-family: var(--font-display);
+    font-size: 28px;
+    margin-bottom: 4px;
+}
+
+.archive-sub {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin-bottom: var(--spacing-lg);
+}
+
+.archive-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.archive-row {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-surface);
+}
+
+.archive-row-text {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+}
+
+.archive-row-title {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.archive-row-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.archive-row-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
 /* --- Buttons --- */
 .btn {
     display: inline-flex;

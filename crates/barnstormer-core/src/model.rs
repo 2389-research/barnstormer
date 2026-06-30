@@ -23,6 +23,10 @@ pub struct SpecCore {
     /// so snapshots written before this field existed still deserialize.
     #[serde(default)]
     pub pinned: bool,
+    /// Whether the spec is archived (hidden from the rail, shown under
+    /// Settings → Archive). `#[serde(default)]` so old snapshots load.
+    #[serde(default)]
+    pub archived: bool,
 }
 
 impl SpecCore {
@@ -43,6 +47,7 @@ impl SpecCore {
             created_at: now,
             updated_at: now,
             pinned: false,
+            archived: false,
         }
     }
 }
@@ -63,6 +68,7 @@ mod tests {
         }"#;
         let core: SpecCore = serde_json::from_str(json).unwrap();
         assert!(!core.pinned);
+        assert!(!core.archived);
     }
 
     #[test]
