@@ -4726,20 +4726,24 @@ mod tests {
             "should contain capsule view toggles"
         );
         assert!(
-            rendered.contains("data-view=\"document\""),
-            "should contain document toggle"
+            !rendered.contains("data-view=\"document\""),
+            "Document toggle should be gone (one output: the Spec)"
         );
         assert!(
             rendered.contains("data-view=\"board\""),
             "should contain board toggle"
         );
         assert!(
+            rendered.contains("hx-get=\"/web/specs/01HTEST/board\""),
+            "refining view should default the canvas to the board"
+        );
+        assert!(
             rendered.contains("data-view=\"spec\""),
             "should contain spec toggle"
         );
         assert!(
-            rendered.contains("view-toggle active"),
-            "document toggle should be active"
+            rendered.contains("view-toggle active\" data-view=\"board\""),
+            "board toggle should be the active default"
         );
         // Canvas and chat rail
         assert!(
@@ -8053,8 +8057,12 @@ mod tests {
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(
-            html.contains("data-view=\"document\""),
-            "should have document tab toggle"
+            !html.contains("data-view=\"document\""),
+            "Document toggle should be gone (one output: the Spec)"
+        );
+        assert!(
+            html.contains("data-view=\"board\"") && html.contains("data-view=\"spec\""),
+            "refining should have Board + Spec toggles"
         );
         assert!(
             html.contains("view-toggles-row"),
