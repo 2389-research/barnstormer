@@ -720,6 +720,11 @@ pub async fn create_spec(
         SpecPhase::Refining => "refining".to_string(),
         SpecPhase::Complete => "complete".to_string(),
     };
+    let has_sidebar_content = !spec_state.cards.is_empty()
+        || spec_state
+            .context_attachments
+            .iter()
+            .any(|a| !a.removed);
 
     let mut response = SpecViewTemplate {
         spec_id: spec_id_str.clone(),
@@ -728,6 +733,7 @@ pub async fn create_spec(
         goal: core.goal.clone(),
         phase,
         lanes,
+        has_sidebar_content,
     }
     .into_response();
 
@@ -834,7 +840,7 @@ impl CardData {
             lane: card.lane.clone(),
             order: card.order,
             created_by: card.created_by.clone(),
-            updated_at: card.updated_at.format("%H:%M:%S").to_string(),
+            updated_at: card.updated_at.format("%H:%M").to_string(),
         }
     }
 }
@@ -855,6 +861,9 @@ pub struct SpecViewTemplate {
     pub goal: String,
     pub phase: String,
     pub lanes: Vec<LaneData>,
+    /// True when the spec has at least one card or live context attachment.
+    /// Drives whether the brainstorming sidebar shows or stays hidden.
+    pub has_sidebar_content: bool,
 }
 
 impl SpecViewTemplate {
@@ -889,6 +898,8 @@ pub struct SpecPageTemplate {
     pub goal: String,
     pub phase: String,
     pub lanes: Vec<LaneData>,
+    /// See `SpecViewTemplate::has_sidebar_content`.
+    pub has_sidebar_content: bool,
 }
 
 impl SpecPageTemplate {
@@ -957,6 +968,11 @@ pub async fn spec_view(
         SpecPhase::Refining => "refining".to_string(),
         SpecPhase::Complete => "complete".to_string(),
     };
+    let has_sidebar_content = !spec_state.cards.is_empty()
+        || spec_state
+            .context_attachments
+            .iter()
+            .any(|a| !a.removed);
 
     if is_htmx {
         SpecViewTemplate {
@@ -966,6 +982,7 @@ pub async fn spec_view(
             goal: core.goal.clone(),
             phase,
             lanes,
+            has_sidebar_content,
         }
         .into_response()
     } else {
@@ -976,6 +993,7 @@ pub async fn spec_view(
             goal: core.goal.clone(),
             phase,
             lanes,
+            has_sidebar_content,
         }
         .into_response()
     }
@@ -1503,7 +1521,7 @@ fn to_transcript_entry(m: &barnstormer_core::TranscriptMessage) -> TranscriptEnt
         role_class,
         content: m.content.clone(),
         content_html,
-        timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+        timestamp: m.timestamp.format("%H:%M").to_string(),
         repeat_count: 1,
     }
 }
@@ -4358,6 +4376,24 @@ mod tests {
     /// rendered HTML — otherwise Chromium refuses to submit the Yes/No buttons because
     /// the hidden textarea fails form validation ("invalid form control is not focusable").
     /// The onclick handler is responsible for setting `required=true` when the textarea
+    #[test]
+    fn chat_transcript_binds_streaming_listeners_once() {
+        // Regression: the streaming-delta listener must be guarded so it binds
+        // only once per compositor — otherwise repeated renders stack listeners
+        // and each delta is appended N times ("I'll readI'll read…").
+        let tmpl = ChatTranscriptTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("streamingBound"),
+            "streaming listeners must be bound once per compositor (dedup guard)"
+        );
+    }
+
     /// becomes visible.
     #[test]
     fn chat_transcript_boolean_question_textarea_is_not_required_initially() {
@@ -4649,6 +4685,7 @@ mod tests {
             goal: "Test goal".to_string(),
             phase: "refining".to_string(),
             lanes: vec![],
+            has_sidebar_content: true,
         };
         let rendered = tmpl.render().unwrap();
         // Command bar with title and subtitle
@@ -4737,6 +4774,7 @@ mod tests {
                 goal: "g".to_string(),
                 phase: phase.to_string(),
                 lanes: vec![],
+                has_sidebar_content: true,
             };
             let rendered = tmpl.render().unwrap();
 
@@ -4762,6 +4800,36 @@ mod tests {
     }
 
     #[test]
+    fn spec_view_hides_sidebar_when_no_cards_or_context() {
+        fn make(has: bool) -> SpecViewTemplate {
+            SpecViewTemplate {
+                spec_id: "01HTEST".to_string(),
+                title: "T".to_string(),
+                one_liner: "o".to_string(),
+                goal: "g".to_string(),
+                phase: "brainstorming".to_string(),
+                lanes: vec![],
+                has_sidebar_content: has,
+            }
+        }
+        // Match the class attribute specifically — the JS reveal handler also
+        // mentions the string "sidebar-empty", so a bare substring check is loose.
+        let empty = make(false).render().unwrap();
+        assert!(
+            empty.contains("spec-body sidebar-empty"),
+            "an empty brainstorm should carry the sidebar-empty class"
+        );
+        // Markup stays present so SSE subscriptions remain live and can reveal it.
+        assert!(empty.contains("brainstorm-sidebar"));
+
+        let full = make(true).render().unwrap();
+        assert!(
+            !full.contains("spec-body sidebar-empty"),
+            "with cards/context the sidebar-empty class must be absent"
+        );
+    }
+
+    #[test]
     fn spec_view_brainstorming_wires_context_sse_via_hx_trigger() {
         // The context rail must rely on the declarative `hx-trigger="sse:..."` pattern
         // (which htmx-ext-sse 2.2.2 actually supports) rather than a JS listener on
@@ -4773,6 +4841,7 @@ mod tests {
             goal: "Think big".to_string(),
             phase: "brainstorming".to_string(),
             lanes: vec![],
+            has_sidebar_content: true,
         };
         let rendered = tmpl.render().unwrap();
         assert!(

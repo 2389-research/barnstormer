@@ -870,6 +870,13 @@ html, body {
     color: var(--danger);
 }
 
+/* Brainstorming: hide the Cards/Context sidebar until there's something in it.
+   The markup stays in the DOM (so SSE subscriptions stay live); JS removes
+   .sidebar-empty when the first card/context arrives. */
+.spec-body.sidebar-empty .sidebar-tabs {
+    display: none;
+}
+
 /* --- New spec button --- */
 .new-spec-btn {
     display: flex;
