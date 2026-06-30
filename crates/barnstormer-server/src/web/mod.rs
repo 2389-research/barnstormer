@@ -68,11 +68,15 @@ async fn read_field_capped(
 /// Index page: the spec-list rail plus the launchpad composer in the workspace.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "index.html")]
-pub struct IndexTemplate {}
+pub struct IndexTemplate {
+    pub drive: Option<crate::app_state::DriveConfig>,
+}
 
 /// GET / - Render the home screen (launchpad).
-pub async fn index() -> IndexTemplate {
-    IndexTemplate {}
+pub async fn index(State(state): State<SharedState>) -> IndexTemplate {
+    IndexTemplate {
+        drive: state.drive.clone(),
+    }
 }
 
 /// Partial: list of specs for the left rail.
@@ -326,11 +330,15 @@ pub async fn archive_view(State(state): State<SharedState>) -> impl IntoResponse
 /// "New spec" target so both entry points are one canonical surface.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/launchpad.html")]
-pub struct LaunchpadTemplate {}
+pub struct LaunchpadTemplate {
+    pub drive: Option<crate::app_state::DriveConfig>,
+}
 
 /// GET /web/specs/new - Render the launchpad composer.
-pub async fn create_spec_form() -> LaunchpadTemplate {
-    LaunchpadTemplate {}
+pub async fn create_spec_form(State(state): State<SharedState>) -> LaunchpadTemplate {
+    LaunchpadTemplate {
+        drive: state.drive.clone(),
+    }
 }
 
 /// Extract a placeholder title from free-text description.
@@ -4045,7 +4053,7 @@ mod tests {
 
     #[test]
     fn index_template_renders() {
-        let tmpl = IndexTemplate {};
+        let tmpl = IndexTemplate { drive: None };
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("barnstormer"));
         // Home is now the launchpad composer, not a "Select a spec" welcome.
@@ -4094,8 +4102,10 @@ mod tests {
 
     #[test]
     fn launchpad_template_renders() {
-        let tmpl = LaunchpadTemplate {};
+        let tmpl = LaunchpadTemplate { drive: None };
         let rendered = tmpl.render().unwrap();
+        // Drive button hidden when unconfigured.
+        assert!(!rendered.contains("data-drive-picker"));
         // The composer posts to /web/specs with a description + multi-file input.
         assert!(rendered.contains("name=\"description\""));
         assert!(rendered.contains("hx-post=\"/web/specs\""));
@@ -4103,6 +4113,21 @@ mod tests {
         assert!(rendered.contains("multiple"));
         assert!(rendered.contains("What do you want to spec out?"));
         assert!(rendered.contains("Start Building"));
+    }
+
+    #[test]
+    fn launchpad_shows_drive_button_when_configured() {
+        let tmpl = LaunchpadTemplate {
+            drive: Some(crate::app_state::DriveConfig {
+                client_id: "cid.apps.googleusercontent.com".to_string(),
+                api_key: "AIzaTEST".to_string(),
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("data-drive-picker"), "Drive button shows when configured");
+        assert!(rendered.contains("cid.apps.googleusercontent.com"));
+        assert!(rendered.contains("AIzaTEST"));
+        assert!(rendered.contains("Google Drive"));
     }
 
     #[test]

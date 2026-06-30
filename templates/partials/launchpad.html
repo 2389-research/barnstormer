@@ -16,6 +16,16 @@
                     Attach
                     <input type="file" name="files" multiple class="composer-file-input" aria-label="Attach context files" style="display:none">
                 </label>
+                {# Google Drive button — only when configured (GOOGLE_DRIVE_* env). #}
+                {% match drive %}
+                {% when Some with (d) %}
+                <button type="button" class="attach-btn drive-btn" data-drive-picker
+                        data-client-id="{{ d.client_id }}" data-api-key="{{ d.api_key }}">
+                    <svg width="15" height="15" viewBox="0 0 24 24"><path fill="#1a73e8" d="M7.7 3.5 1.2 14.8l3.3 5.7 6.5-11.3z"/><path fill="#0f9d58" d="m22.8 14.8-6.5-11.3H9.3l6.5 11.3z"/><path fill="#ffcd40" d="m4.5 20.5 3.2-5.7h13l-3.2 5.7z"/></svg>
+                    Google Drive
+                </button>
+                {% when None %}
+                {% endmatch %}
                 <span class="composer-spacer"></span>
                 <button type="submit" class="send-btn">
                     Start Building

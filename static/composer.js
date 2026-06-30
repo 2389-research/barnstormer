@@ -53,6 +53,11 @@
             render();
         }
 
+        // External sources (e.g. the Google Drive picker) inject files as chips.
+        form.addEventListener("composer:add-files", function (e) {
+            if (e.detail && e.detail.files && e.detail.files.length) add(e.detail.files);
+        });
+
         input.addEventListener("change", function () {
             // The native picker replaces selection; merge into our held set.
             add(input.files);
