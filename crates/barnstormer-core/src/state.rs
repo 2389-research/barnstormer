@@ -115,6 +115,7 @@ impl SpecState {
                     notes: None,
                     created_at: event.timestamp,
                     updated_at: event.timestamp,
+                    pinned: false,
                 });
             }
 
@@ -153,6 +154,20 @@ impl SpecState {
                     if let Some(n) = notes {
                         core.notes = Some(n.clone());
                     }
+                    core.updated_at = event.timestamp;
+                }
+            }
+
+            EventPayload::SpecPinned => {
+                if let Some(ref mut core) = self.core {
+                    core.pinned = true;
+                    core.updated_at = event.timestamp;
+                }
+            }
+
+            EventPayload::SpecUnpinned => {
+                if let Some(ref mut core) = self.core {
+                    core.pinned = false;
                     core.updated_at = event.timestamp;
                 }
             }

@@ -459,6 +459,7 @@ mod tests {
             notes: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            pinned: false,
         };
         SpecState {
             core: Some(core),
@@ -1050,6 +1051,7 @@ mod tests {
             notes: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            pinned: false,
         };
         let state = SpecState {
             core: Some(core),
@@ -1116,6 +1118,7 @@ mod tests {
             notes: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            pinned: false,
         };
         let state = SpecState {
             core: Some(core),

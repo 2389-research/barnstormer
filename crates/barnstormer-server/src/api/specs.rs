@@ -19,6 +19,7 @@ pub struct SpecSummary {
     pub title: String,
     pub one_liner: String,
     pub updated_at: String,
+    pub pinned: bool,
 }
 
 /// Request body for creating a new spec.
@@ -48,6 +49,7 @@ pub async fn list_specs(State(state): State<SharedState>) -> Json<Vec<SpecSummar
                 title: core.title.clone(),
                 one_liner: core.one_liner.clone(),
                 updated_at: core.updated_at.to_rfc3339(),
+                pinned: core.pinned,
             });
         }
     }

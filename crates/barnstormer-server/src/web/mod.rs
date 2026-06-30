@@ -95,11 +95,55 @@ pub async fn spec_list(State(state): State<SharedState>) -> impl IntoResponse {
                 title: core.title.clone(),
                 one_liner: core.one_liner.clone(),
                 updated_at: core.updated_at.to_rfc3339(),
+                pinned: core.pinned,
             });
         }
     }
 
     SpecListTemplate { specs }
+}
+
+/// POST /web/specs/{id}/pin — pin a spec to the top of the rail.
+pub async fn pin_spec(State(state): State<SharedState>, Path(id): Path<String>) -> Response {
+    set_pin(state, id, true).await
+}
+
+/// POST /web/specs/{id}/unpin — remove the pin.
+pub async fn unpin_spec(State(state): State<SharedState>, Path(id): Path<String>) -> Response {
+    set_pin(state, id, false).await
+}
+
+/// Shared pin/unpin body. Sends the command (persistence is handled downstream
+/// of `send_command`, same as `transition_phase`) and re-renders the rail so
+/// HTMX can swap `#spec-list`.
+async fn set_pin(state: SharedState, id: String, pin: bool) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    let cmd = if pin {
+        Command::PinSpec
+    } else {
+        Command::UnpinSpec
+    };
+    {
+        let actors = state.actors.read().await;
+        let Some(handle) = actors.get(&spec_id) else {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        };
+        if let Err(e) = handle.send_command(cmd).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(format!("<p class=\"error-msg\">Error: {}</p>", e)),
+            )
+                .into_response();
+        }
+    }
+    spec_list(State(state)).await.into_response()
 }
 
 /// Partial: create spec form.
@@ -3824,6 +3868,7 @@ mod tests {
                 title: "My Spec".to_string(),
                 one_liner: "A test spec".to_string(),
                 updated_at: "2025-01-01T00:00:00Z".to_string(),
+                pinned: false,
             }],
         };
         let rendered = tmpl.render().unwrap();

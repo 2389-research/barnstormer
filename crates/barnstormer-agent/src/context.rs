@@ -252,6 +252,8 @@ fn describe_event_payload(payload: &EventPayload) -> String {
         EventPayload::ContextRemoved { attachment_id } => {
             format!("context attachment {} removed", attachment_id)
         }
+        EventPayload::SpecPinned => "spec pinned".to_string(),
+        EventPayload::SpecUnpinned => "spec unpinned".to_string(),
         EventPayload::StreamingDelta { agent_id, .. } => {
             format!("streaming delta from {}", agent_id)
         }
