@@ -2,10 +2,10 @@
     {% for lane in lanes %}
     <div class="lane">
         <div class="lane-header">
-            <h3 title="{% if lane.name == "Ideas" %}Raw ideas from brainstorming — unstructured thoughts and suggestions.{% else if lane.name == "Plan" %}Items being refined into actionable tasks for the spec.{% else if lane.name == "Spec" %}Finalized spec items that define the implementation.{% else %}{{ lane.name }}{% endif %}">{{ lane.name }}</h3>
+            <h3 title="{% if lane.name == "Parked" %}Ideas you're not building — kept out of the spec.{% else %}Items that go into the spec handed to the build.{% endif %}">{{ lane.name }}</h3>
             <span class="lane-count">{{ lane.cards.len() }}</span>
         </div>
-        <div class="lane-cards" data-lane="{{ lane.name }}">
+        <div class="lane-cards" data-lane="{{ lane.key }}">
             {% for card in lane.cards %}
             {% include "partials/card.html" %}
             {% endfor %}
