@@ -27,6 +27,8 @@ pub struct RuntimeConfig {
     pub auth_token: Option<String>,
     pub static_dir: PathBuf,
     pub open_browser: bool,
+    /// Per-session countable-token tranche for each spec swarm. `None` is unlimited.
+    pub token_budget: Option<u64>,
 }
 
 impl RuntimeConfig {
@@ -56,6 +58,19 @@ impl RuntimeConfig {
         let static_dir = options
             .static_dir
             .unwrap_or_else(|| PathBuf::from("static"));
+        let token_budget = match std::env::var("BARNSTORMER_TOKEN_BUDGET") {
+            Ok(value) => match value.parse::<u64>() {
+                Ok(0) => None,
+                Ok(value) => Some(value),
+                Err(err) => {
+                    return Err(anyhow::anyhow!(
+                        "BARNSTORMER_TOKEN_BUDGET is not a valid non-negative integer ({value}): {err}"
+                    ));
+                }
+            },
+            Err(std::env::VarError::NotPresent) => Some(2_000_000),
+            Err(err) => return Err(err.into()),
+        };
 
         Ok(Self {
             home,
@@ -63,6 +78,7 @@ impl RuntimeConfig {
             auth_token,
             static_dir,
             open_browser: options.open_browser,
+            token_budget,
         })
     }
 }
@@ -215,5 +231,70 @@ mod tests {
             err_msg.contains("BARNSTORMER_BIND is not a valid socket address"),
             "expected clear error message, got: {err_msg}"
         );
+    }
+
+    fn with_token_budget_env(value: Option<&str>, test: impl FnOnce()) {
+        let prior = std::env::var("BARNSTORMER_TOKEN_BUDGET").ok();
+        match value {
+            Some(value) => unsafe { std::env::set_var("BARNSTORMER_TOKEN_BUDGET", value) },
+            None => unsafe { std::env::remove_var("BARNSTORMER_TOKEN_BUDGET") },
+        }
+        test();
+        match prior {
+            Some(value) => unsafe { std::env::set_var("BARNSTORMER_TOKEN_BUDGET", value) },
+            None => unsafe { std::env::remove_var("BARNSTORMER_TOKEN_BUDGET") },
+        }
+    }
+
+    fn token_budget_config() -> RuntimeOptions {
+        RuntimeOptions {
+            home: Some(PathBuf::from("/tmp/barnstormer-test")),
+            bind: Some("127.0.0.1:0".parse().unwrap()),
+            auth_token: None,
+            static_dir: None,
+            open_browser: false,
+            disable_auth_fallback: true,
+        }
+    }
+
+    #[test]
+    fn token_budget_defaults_to_two_million() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        with_token_budget_env(None, || {
+            let config = RuntimeConfig::from_parts(token_budget_config()).unwrap();
+            assert_eq!(config.token_budget, Some(2_000_000));
+        });
+    }
+
+    #[test]
+    fn token_budget_honors_numeric_value() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        with_token_budget_env(Some("123456"), || {
+            let config = RuntimeConfig::from_parts(token_budget_config()).unwrap();
+            assert_eq!(config.token_budget, Some(123_456));
+        });
+    }
+
+    #[test]
+    fn zero_token_budget_is_unlimited() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        with_token_budget_env(Some("0"), || {
+            let config = RuntimeConfig::from_parts(token_budget_config()).unwrap();
+            assert_eq!(config.token_budget, None);
+        });
+    }
+
+    #[test]
+    fn invalid_token_budget_returns_startup_error() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        for value in ["not-a-number", "-1"] {
+            with_token_budget_env(Some(value), || {
+                let error = RuntimeConfig::from_parts(token_budget_config()).unwrap_err();
+                assert!(
+                    error.to_string().contains("BARNSTORMER_TOKEN_BUDGET"),
+                    "expected token budget error, got: {error}"
+                );
+            });
+        }
     }
 }

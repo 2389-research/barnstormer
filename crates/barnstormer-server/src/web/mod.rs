@@ -3776,7 +3776,7 @@ mod tests {
             providers: vec![],
             any_available: false,
         };
-        Arc::new(AppState::new(dir.keep(), provider_status))
+        Arc::new(AppState::new(dir.keep(), provider_status, None))
     }
 
     /// Test multipart boundary used by `mp_description_body`. Tests that
@@ -5767,7 +5767,7 @@ mod tests {
             providers: vec![],
             any_available: false,
         };
-        Arc::new(AppState::new(dir.keep(), provider_status))
+        Arc::new(AppState::new(dir.keep(), provider_status, None))
     }
 
     #[tokio::test]
