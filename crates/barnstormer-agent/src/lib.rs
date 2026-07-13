@@ -13,5 +13,6 @@ pub mod testing;
 pub use attachment_summarizer::AttachmentSummarizer;
 pub use context::{AgentContext, AgentRole, contexts_from_snapshot_map, contexts_to_snapshot_map};
 pub use swarm::{
-    AgentRunner, SwarmOrchestrator, render_context_files_section, run_loop, system_prompt_for_role,
+    AgentRunner, StepOutcome, SwarmOrchestrator, countable_tokens, render_context_files_section,
+    run_loop, system_prompt_for_role,
 };

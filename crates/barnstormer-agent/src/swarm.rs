@@ -12,7 +12,7 @@ use ulid::Ulid;
 
 use mux::agent::{AgentDefinition, SubAgent};
 use mux::hook::HookRegistry;
-use mux::llm::{LlmClient, SystemBlock};
+use mux::llm::{LlmClient, SystemBlock, Usage};
 
 use crate::streaming_hook::StreamingHook;
 
@@ -195,6 +195,20 @@ pub struct AgentRunner {
     pub role: AgentRole,
     pub context: AgentContext,
     pub agent_id: String,
+}
+
+/// Result of one swarm agent step, including the tokens charged to the session budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StepOutcome {
+    pub did_work: bool,
+    pub countable_tokens: u64,
+}
+
+/// Return the provider tokens charged to the swarm session budget.
+pub fn countable_tokens(usage: &Usage) -> u64 {
+    u64::from(usage.input_tokens)
+        .saturating_add(u64::from(usage.output_tokens))
+        .saturating_add(u64::from(usage.cache_write_tokens))
 }
 
 impl AgentRunner {
@@ -416,7 +430,7 @@ impl SwarmOrchestrator {
     ///
     /// Creates a fresh SubAgent with the domain tool registry, sends it the
     /// agent's context as a task prompt, and lets mux handle the think-act loop.
-    /// Returns true if the agent produced useful work, false if idle/error.
+    /// Returns whether the agent did useful work and its countable token usage.
     #[allow(clippy::too_many_arguments)]
     pub async fn run_agent_step(
         runner: &mut AgentRunner,
@@ -428,7 +442,7 @@ impl SwarmOrchestrator {
         phase: &SpecPhase,
         home: &Path,
         summarizer: &Arc<dyn crate::AttachmentSummarizer>,
-    ) -> bool {
+    ) -> StepOutcome {
         // Start agent step
         let start_cmd = Command::StartAgentStep {
             agent_id: runner.agent_id.clone(),
@@ -502,9 +516,13 @@ impl SwarmOrchestrator {
                 // so we do not send it here to avoid duplicate events.
 
                 // Agent did work if it used any tools
-                result.tool_use_count > 0
+                StepOutcome {
+                    did_work: result.tool_use_count > 0,
+                    countable_tokens: countable_tokens(&result.usage),
+                }
             }
             Err(e) => {
+                let partial_countable_tokens = countable_tokens(sub_agent.usage());
                 // Log the full error details for debugging
                 tracing::error!(
                     agent = %runner.agent_id,
@@ -532,7 +550,10 @@ impl SwarmOrchestrator {
                         content: user_msg,
                     })
                     .await;
-                false
+                StepOutcome {
+                    did_work: false,
+                    countable_tokens: partial_countable_tokens,
+                }
             }
         }
     }
@@ -675,7 +696,7 @@ async fn run_agent_by_index(
 
     let phase = actor_ref.read_state().await.phase.clone();
 
-    let did_work = SwarmOrchestrator::run_agent_step(
+    let outcome = SwarmOrchestrator::run_agent_step(
         &mut runner,
         &actor_ref,
         &question_pending,
@@ -695,7 +716,7 @@ async fn run_agent_by_index(
         s.event_receivers[index] = event_rx;
     }
 
-    did_work
+    outcome.did_work
 }
 
 /// Find the index of the manager agent (first agent with AgentRole::Manager).
@@ -1012,7 +1033,11 @@ mod tests {
     use super::*;
     use crate::testing::StubLlmClient;
     use barnstormer_core::state::SpecState;
-    use std::sync::atomic::Ordering;
+    use futures::Stream;
+    use mux::error::LlmError;
+    use mux::llm::{ContentBlock, Request, Response, StopReason, StreamEvent};
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn make_test_actor() -> (Ulid, SpecActorHandle) {
         let spec_id = Ulid::new();
@@ -1022,6 +1047,18 @@ mod tests {
 
     fn make_test_client() -> Arc<dyn LlmClient> {
         Arc::new(StubLlmClient::done())
+    }
+
+    #[test]
+    fn countable_tokens_excludes_cache_reads() {
+        let usage = mux::llm::Usage {
+            input_tokens: 11,
+            output_tokens: 7,
+            cache_read_tokens: 999,
+            cache_write_tokens: 13,
+        };
+
+        assert_eq!(countable_tokens(&usage), 31);
     }
 
     /// No-op `AttachmentSummarizer` for swarm tests — never invoked, since
@@ -1043,6 +1080,47 @@ mod tests {
 
     fn make_test_summarizer() -> Arc<dyn crate::AttachmentSummarizer> {
         Arc::new(StubSummarizer)
+    }
+
+    #[derive(Debug)]
+    struct PartialUsageThenErrorClient {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmClient for PartialUsageThenErrorClient {
+        async fn create_message(&self, _req: &Request) -> Result<Response, LlmError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(Response {
+                    id: "partial-usage".to_string(),
+                    content: vec![ContentBlock::ToolUse {
+                        id: "narrate-1".to_string(),
+                        name: "emit_narration".to_string(),
+                        input: serde_json::json!({"message": "before error"}),
+                    }],
+                    stop_reason: StopReason::ToolUse,
+                    model: "stub-model".to_string(),
+                    usage: Usage {
+                        input_tokens: 40,
+                        output_tokens: 5,
+                        cache_read_tokens: 500,
+                        cache_write_tokens: 3,
+                    },
+                })
+            } else {
+                Err(LlmError::Api {
+                    status: 500,
+                    message: "later call failed".to_string(),
+                })
+            }
+        }
+
+        fn create_message_stream(
+            &self,
+            _req: &Request,
+        ) -> Pin<Box<dyn Stream<Item = Result<StreamEvent, LlmError>> + Send + 'static>> {
+            Box::pin(futures::stream::empty())
+        }
     }
 
     #[tokio::test]
@@ -1121,7 +1199,7 @@ mod tests {
 
         let home = PathBuf::from("/tmp/barnstormer-test");
         let summarizer = make_test_summarizer();
-        let did_work = SwarmOrchestrator::run_agent_step(
+        let outcome = SwarmOrchestrator::run_agent_step(
             &mut runner,
             &actor_arc,
             &question_pending,
@@ -1135,7 +1213,73 @@ mod tests {
         .await;
 
         // StubLlmClient returns text-only (no tool use), so agent does no tool work
-        assert!(!did_work);
+        assert!(!outcome.did_work);
+        assert_eq!(outcome.countable_tokens, 0);
+    }
+
+    #[tokio::test]
+    async fn run_agent_step_reports_countable_usage() {
+        let (spec_id, actor) = make_test_actor();
+        let usage = mux::llm::Usage {
+            input_tokens: 11,
+            output_tokens: 7,
+            cache_read_tokens: 999,
+            cache_write_tokens: 13,
+        };
+        let client: Arc<dyn LlmClient> =
+            Arc::new(StubLlmClient::with_usage("Done.", usage));
+        let actor = Arc::new(actor);
+        let question_pending = Arc::new(AtomicBool::new(false));
+        let pending_transition = Arc::new(Mutex::new(None));
+        let mut runner = AgentRunner::new(spec_id, AgentRole::Brainstormer);
+        let home = PathBuf::from("/tmp/barnstormer-test");
+        let summarizer = make_test_summarizer();
+
+        let outcome = SwarmOrchestrator::run_agent_step(
+            &mut runner,
+            &actor,
+            &question_pending,
+            &pending_transition,
+            &client,
+            "stub-model",
+            &SpecPhase::Refining,
+            &home,
+            &summarizer,
+        )
+        .await;
+
+        assert!(!outcome.did_work);
+        assert_eq!(outcome.countable_tokens, 31);
+    }
+
+    #[tokio::test]
+    async fn run_agent_step_reports_partial_usage_after_error() {
+        let (spec_id, actor) = make_test_actor();
+        let client: Arc<dyn LlmClient> = Arc::new(PartialUsageThenErrorClient {
+            calls: AtomicUsize::new(0),
+        });
+        let actor = Arc::new(actor);
+        let question_pending = Arc::new(AtomicBool::new(false));
+        let pending_transition = Arc::new(Mutex::new(None));
+        let mut runner = AgentRunner::new(spec_id, AgentRole::Brainstormer);
+        let home = PathBuf::from("/tmp/barnstormer-test");
+        let summarizer = make_test_summarizer();
+
+        let outcome = SwarmOrchestrator::run_agent_step(
+            &mut runner,
+            &actor,
+            &question_pending,
+            &pending_transition,
+            &client,
+            "stub-model",
+            &SpecPhase::Refining,
+            &home,
+            &summarizer,
+        )
+        .await;
+
+        assert!(!outcome.did_work);
+        assert_eq!(outcome.countable_tokens, 48);
     }
 
     #[tokio::test]
