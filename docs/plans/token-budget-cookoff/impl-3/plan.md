@@ -220,5 +220,5 @@ Run `git status --short`, stage the plan and any final test-only paths explicitl
 - Approved design correction: synchronize `question_pending` from actor state after every drained `QuestionAnswered`; the Resume regression then passed.
 - Real-loop integration: a 100-token budget froze the swarm after a 120-token step, Yes resumed work with a fresh tranche, and No paused it.
 - Paused-loop RED: both Yes and No timed out because the paused branch skipped answer draining. GREEN: Yes reset the tranche while preserving manual pause; No was processed without dispatch and one Resume re-asked.
-- Runtime wiring scenario: env-derived `100` reached `RuntimeConfig`, `AppState`, and a spawned real orchestrator; the local usage-bearing client exercised freeze, Yes/resume, and No/pause without a paid API call.
+- Production wiring proof: both web spawn sites use one tested factory that forwards `AppState.token_budget` to `SwarmOrchestrator::with_defaults`; separate real-loop coverage exercises freeze, Yes/resume, and No/pause without a paid API call.
 - Final gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test --all` pass.

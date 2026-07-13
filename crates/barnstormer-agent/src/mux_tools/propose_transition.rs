@@ -194,8 +194,10 @@ mod tests {
         assert!(result.content.contains("Transition proposal sent"));
 
         assert!(question_pending.load(Ordering::SeqCst));
-        let stored = pending_transition.lock().unwrap();
-        assert!(stored.is_some());
+        {
+            let stored = pending_transition.lock().unwrap();
+            assert!(stored.is_some());
+        }
 
         let state = handle.read_state().await;
         assert!(state.pending_question.is_some());

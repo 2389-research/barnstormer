@@ -907,11 +907,18 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
     //   because `recv()` consumes events; sharing one would silently drop
     //   `QuestionAnswered` and strand transitions (regression test:
     //   `run_loop_advances_phase_when_user_confirms_transition`).
-    let (mut answer_rx, mut wake_rx) = {
+    let (answer_rx, wake_rx) = {
         let s = swarm.lock().await;
         (s.actor.subscribe(), s.actor.subscribe())
     };
+    run_loop_with_receivers(swarm, answer_rx, wake_rx).await;
+}
 
+async fn run_loop_with_receivers(
+    swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>,
+    mut answer_rx: broadcast::Receiver<Event>,
+    mut wake_rx: broadcast::Receiver<Event>,
+) {
     loop {
         // Recover any empty slots from prior cancellations, then check pause.
         let (is_paused, agent_count, notify) = {
@@ -1425,8 +1432,15 @@ mod tests {
             budget_question_id(&state)
         };
         swarm.lock().await.pause();
-        let task = tokio::spawn(run_loop(Arc::clone(&swarm)));
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        let (answer_rx, wake_rx) = {
+            let swarm = swarm.lock().await;
+            (swarm.actor.subscribe(), swarm.actor.subscribe())
+        };
+        let task = tokio::spawn(run_loop_with_receivers(
+            Arc::clone(&swarm),
+            answer_rx,
+            wake_rx,
+        ));
 
         actor
             .send_command(Command::AnswerQuestion {

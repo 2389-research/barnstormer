@@ -274,7 +274,7 @@ mod tests {
         let result = sample_import_result();
         let commands = to_commands(&result);
 
-        assert!(commands.len() >= 1);
+        assert!(!commands.is_empty());
         match &commands[0] {
             Command::CreateSpec {
                 title,

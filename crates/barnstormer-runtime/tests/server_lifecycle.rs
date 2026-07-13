@@ -2,9 +2,9 @@
 // ABOUTME: Boots the embedded server, probes /health, and exercises graceful shutdown.
 
 use barnstormer_runtime::RuntimeOptions;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
 struct EnvGuard {
     name: &'static str,
@@ -44,7 +44,7 @@ fn runtime_options(home: std::path::PathBuf) -> RuntimeOptions {
 
 #[tokio::test]
 async fn embedded_server_reports_url_and_shuts_down() {
-    let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+    let _env_guard = ENV_LOCK.lock().await;
     let _budget_env = EnvGuard::set("BARNSTORMER_TOKEN_BUDGET", None);
     let temp = tempfile::tempdir().unwrap();
     let handle = barnstormer_runtime::launch(runtime_options(temp.path().to_path_buf()))
@@ -65,7 +65,7 @@ async fn embedded_server_reports_url_and_shuts_down() {
 
 #[tokio::test]
 async fn embedded_server_boots_with_unlimited_token_budget() {
-    let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+    let _env_guard = ENV_LOCK.lock().await;
     let _budget_env = EnvGuard::set("BARNSTORMER_TOKEN_BUDGET", Some("0"));
     let temp = tempfile::tempdir().unwrap();
 
@@ -81,7 +81,7 @@ async fn embedded_server_boots_with_unlimited_token_budget() {
 
 #[tokio::test]
 async fn embedded_server_boots_with_tiny_token_budget() {
-    let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+    let _env_guard = ENV_LOCK.lock().await;
     let _budget_env = EnvGuard::set("BARNSTORMER_TOKEN_BUDGET", Some("100"));
     let temp = tempfile::tempdir().unwrap();
 
@@ -97,7 +97,7 @@ async fn embedded_server_boots_with_tiny_token_budget() {
 
 #[tokio::test]
 async fn embedded_server_rejects_invalid_token_budget() {
-    let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+    let _env_guard = ENV_LOCK.lock().await;
     let _budget_env = EnvGuard::set("BARNSTORMER_TOKEN_BUDGET", Some("invalid"));
     let temp = tempfile::tempdir().unwrap();
 
