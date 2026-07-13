@@ -19,6 +19,7 @@ fn runtime_options(home: std::path::PathBuf) -> RuntimeOptions {
 
 #[tokio::test]
 async fn embedded_server_reports_url_and_shuts_down() {
+    let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
     let temp = tempfile::tempdir().unwrap();
     let handle = barnstormer_runtime::launch(runtime_options(temp.path().to_path_buf()))
     .await
