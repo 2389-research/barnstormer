@@ -125,9 +125,6 @@ mod tests {
         assert_eq!(response.usage.input_tokens, usage.input_tokens);
         assert_eq!(response.usage.output_tokens, usage.output_tokens);
         assert_eq!(response.usage.cache_read_tokens, usage.cache_read_tokens);
-        assert_eq!(
-            response.usage.cache_write_tokens,
-            usage.cache_write_tokens
-        );
+        assert_eq!(response.usage.cache_write_tokens, usage.cache_write_tokens);
     }
 }

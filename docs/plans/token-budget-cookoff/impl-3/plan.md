@@ -1,6 +1,6 @@
 # Swarm Token Budget Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Bound each in-memory swarm session by a configurable countable-token tranche and require explicit user consent before further dispatch.
 
@@ -33,7 +33,7 @@
 - Produces: `RuntimeConfig::token_budget: Option<u64>` and `AppState::token_budget: Option<u64>`.
 - Consumes: `BARNSTORMER_TOKEN_BUDGET`; `None` means unlimited.
 
-- [ ] **Step 1: Write failing config tests**
+- [x] **Step 1: Write failing config tests**
 
 Add serialized env tests that remove/set/restore `BARNSTORMER_TOKEN_BUDGET` and assert:
 
@@ -46,13 +46,13 @@ assert!(invalid.unwrap_err().to_string().contains("BARNSTORMER_TOKEN_BUDGET"));
 
 Add server-lifecycle cases that launch with `0`, launch with a tiny numeric value, and reject an invalid value before binding.
 
-- [ ] **Step 2: Run tests to verify RED**
+- [x] **Step 2: Run tests to verify RED**
 
 Run: `cargo test -p barnstormer-runtime config -- --nocapture`
 
 Expected: compile failure because `RuntimeConfig` has no `token_budget` field.
 
-- [ ] **Step 3: Implement the minimal parser and state wiring**
+- [x] **Step 3: Implement the minimal parser and state wiring**
 
 Parse the env value once in the runtime path:
 
@@ -72,13 +72,13 @@ let token_budget = match std::env::var("BARNSTORMER_TOKEN_BUDGET") {
 
 Carry that value into `AppState::new(home, provider_status, token_budget)` and pass `state.token_budget` to both `SwarmOrchestrator::with_defaults` calls. Update every constructor caller found by separate direct/type/string/test searches.
 
-- [ ] **Step 4: Run focused tests GREEN**
+- [x] **Step 4: Run focused tests GREEN**
 
 Run: `cargo test -p barnstormer-runtime -- --nocapture`
 
 Expected: all runtime unit and lifecycle tests pass with pristine output.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run `git status --short`, stage only Task 1 paths, then `git commit -m "feat: configure swarm token budget"`.
 
@@ -92,7 +92,7 @@ Run `git status --short`, stage only Task 1 paths, then `git commit -m "feat: co
 - Produces: `pub struct StepOutcome { pub did_work: bool, pub countable_tokens: u64 }` and `pub fn countable_tokens(usage: &Usage) -> u64`.
 - Consumes: mux `Usage` and existing `SubAgent::usage()` for best-effort error usage.
 
-- [ ] **Step 1: Write failing accounting tests**
+- [x] **Step 1: Write failing accounting tests**
 
 Add a pure test proving cache reads are excluded and a stub-driven step test proving returned usage is counted:
 
@@ -104,13 +104,13 @@ assert_eq!(countable_tokens(&usage), 31);
 
 Extend `StubLlmClient` with a usage-bearing constructor so the real mux runner returns nonzero usage without mocking orchestrator behavior. Add an error client test that proves `run_agent_step` reads partial accumulated usage from `SubAgent::usage()` after a later error.
 
-- [ ] **Step 2: Run tests to verify RED**
+- [x] **Step 2: Run tests to verify RED**
 
 Run: `cargo test -p barnstormer-agent countable_tokens -- --nocapture`
 
 Expected: compile failure because `countable_tokens` and `StepOutcome` do not exist.
 
-- [ ] **Step 3: Implement the minimal outcome**
+- [x] **Step 3: Implement the minimal outcome**
 
 Use saturating conversion/addition:
 
@@ -124,13 +124,13 @@ pub fn countable_tokens(usage: &Usage) -> u64 {
 
 Return `StepOutcome` on success and error, taking error-path usage from `sub_agent.usage()` before it is dropped. Update all direct callers and assertions for the public signature change.
 
-- [ ] **Step 4: Run focused tests GREEN**
+- [x] **Step 4: Run focused tests GREEN**
 
 Run: `cargo test -p barnstormer-agent countable_tokens run_agent_step -- --nocapture`
 
 Expected: focused tests pass and existing step tests remain green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run `git status --short`, stage the two agent files, then `git commit -m "feat: report countable swarm tokens"`.
 
@@ -144,33 +144,33 @@ Run `git status --short`, stage the two agent files, then `git commit -m "feat: 
 - Produces orchestrator fields `token_budget: Option<u64>`, `session_tokens_used: u64`, and `pending_budget_question: Option<Ulid>`.
 - Consumes existing `question_pending` CAS, `Command::AskQuestion`, `UserQuestion::Boolean`, `pause()`, and the shared transition-answer receiver.
 
-- [ ] **Step 1: Write failing behavior tests**
+- [x] **Step 1: Write failing behavior tests**
 
 Add real actor/stub tests for: unlimited never asks; ceiling asks exactly once while pending; preflight blocks the normal indexed dispatch; the human-notify manager priority path cannot dispatch over budget; Yes resets usage and clears the budget ID; No and any non-Yes pause and clear it; a nonmatching/stale answer changes nothing; a manual resume while still over budget asks again before work; tiny-budget integration emits `QuestionAsked`, freezes agents, resumes after Yes, and pauses after No.
 
 Tests observe actor state/events and stub request counts rather than internal fake behavior.
 
-- [ ] **Step 2: Run tests to verify RED**
+- [x] **Step 2: Run tests to verify RED**
 
 Run: `cargo test -p barnstormer-agent budget -- --nocapture`
 
 Expected: compile failures for the new constructor arguments/fields and behavior assertions failing because dispatch is not gated.
 
-- [ ] **Step 3: Implement the preflight and accounting**
+- [x] **Step 3: Implement the preflight and accounting**
 
 At the top of `run_agent_by_index`, short-circuit unlimited; when `session_tokens_used >= budget`, never take the runner. On first trip, win `question_pending.compare_exchange(false, true, ...)`, send one false-default boolean `AskQuestion`, and store its ULID. If the CAS loses, return without dispatch. After an allowed step, restore the runner and saturating-add `outcome.countable_tokens` under the swarm mutex.
 
-- [ ] **Step 4: Extend the one shared answer drain**
+- [x] **Step 4: Extend the one shared answer drain**
 
 Rename the drain to reflect both responsibilities. For matching budget IDs, clear the ID and either reset `session_tokens_used` for an exact Yes-shaped answer or call `pause()` for every other answer. Preserve transition behavior and ignore stale IDs. Do not independently clear `question_pending`.
 
-- [ ] **Step 5: Run focused tests GREEN**
+- [x] **Step 5: Run focused tests GREEN**
 
 Run: `cargo test -p barnstormer-agent budget -- --nocapture`
 
 Expected: all budget unit/integration tests pass with no warnings or leaked tasks.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run `git status --short`, stage only changed agent/caller paths, then `git commit -m "feat: require consent for additional swarm tokens"`.
 
@@ -180,11 +180,11 @@ Run `git status --short`, stage only changed agent/caller paths, then `git commi
 - Modify: `tests/smoke.rs` only if runtime lifecycle coverage does not exercise both required startup configurations.
 - Modify: `docs/plans/token-budget-cookoff/impl-3/plan.md` to check completed steps and record RED evidence.
 
-- [ ] **Step 1: Run real startup usage**
+- [x] **Step 1: Run real startup usage**
 
 Run server lifecycle tests under serialized env mutation for `BARNSTORMER_TOKEN_BUDGET=0` and a tiny budget, probe `/health`, and shut down cleanly. Run an invalid-value startup and assert the clear error.
 
-- [ ] **Step 2: Run complete quality gate**
+- [x] **Step 2: Run complete quality gate**
 
 Run exactly:
 
@@ -196,11 +196,11 @@ cargo test --all
 
 Expected: exit 0 and pristine output for all commands.
 
-- [ ] **Step 3: Self-review every design requirement**
+- [x] **Step 3: Self-review every design requirement**
 
 Verify count source, cache-read exclusion, error usage, both dispatch paths, one-question CAS behavior, Yes/no/stale/manual-resume edge cases, default/set/zero/invalid config, per-spec in-memory state, both server spawn sites, and E2E startup wiring. Perform separate searches for changed signatures in direct references, type references, string literals, dynamic imports/re-exports, and tests.
 
-- [ ] **Step 4: Commit final plan/evidence**
+- [x] **Step 4: Commit final plan/evidence**
 
 Run `git status --short`, stage the plan and any final test-only paths explicitly, then `git commit -m "test: verify swarm token budget end to end"`.
 
@@ -209,3 +209,14 @@ Run `git status --short`, stage the plan and any final test-only paths explicitl
 - Spec coverage: every approved mechanics, config, edge-case, unit, integration, and E2E requirement maps to Tasks 1–4.
 - Placeholder scan: no TBD/TODO/future implementation placeholders remain.
 - Type consistency: `Option<u64>` means unlimited only when `None`; `StepOutcome.countable_tokens` and `session_tokens_used` are `u64`; budget question identity is `Option<Ulid>`.
+
+## Execution Evidence
+
+- Runtime RED: E0609 for the missing `RuntimeConfig.token_budget` field.
+- Accounting RED: E0425/E0610 for missing `countable_tokens` and structured `StepOutcome`.
+- Partial-error RED: expected 48 accumulated countable tokens, observed 0.
+- Manager-priority RED: E0425 for the not-yet-extracted human-notification dispatch helper.
+- Resume RED: after a real budget-question atomic lifecycle, No → pause → Resume failed to re-ask because the cached question flag remained true.
+- Approved design correction: synchronize `question_pending` from actor state after every drained `QuestionAnswered`; the Resume regression then passed.
+- Real-loop integration: a 100-token budget froze the swarm after a 120-token step, Yes resumed work with a fresh tranche, and No paused it.
+- Final gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test --all` pass.
