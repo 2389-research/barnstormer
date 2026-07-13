@@ -12,7 +12,7 @@ use ulid::Ulid;
 
 use mux::agent::{AgentDefinition, SubAgent};
 use mux::hook::HookRegistry;
-use mux::llm::{LlmClient, SystemBlock};
+use mux::llm::{LlmClient, SystemBlock, Usage};
 
 use crate::streaming_hook::StreamingHook;
 
@@ -25,6 +25,7 @@ use barnstormer_core::actor::SpecActorHandle;
 use barnstormer_core::command::Command;
 use barnstormer_core::event::{Event, EventPayload};
 use barnstormer_core::state::SpecPhase;
+use barnstormer_core::transcript::UserQuestion;
 
 /// System prompt for the Manager agent role.
 const MANAGER_SYSTEM_PROMPT: &str = "You are the manager agent for a product specification. \
@@ -197,6 +198,20 @@ pub struct AgentRunner {
     pub agent_id: String,
 }
 
+/// Result of one swarm agent step, including the tokens charged to the session budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StepOutcome {
+    pub did_work: bool,
+    pub countable_tokens: u64,
+}
+
+/// Return the provider tokens charged to the swarm session budget.
+pub fn countable_tokens(usage: &Usage) -> u64 {
+    u64::from(usage.input_tokens)
+        .saturating_add(u64::from(usage.output_tokens))
+        .saturating_add(u64::from(usage.cache_write_tokens))
+}
+
 impl AgentRunner {
     /// Create a new runner for the given role.
     pub fn new(spec_id: Ulid, role: AgentRole) -> Self {
@@ -231,6 +246,12 @@ pub struct SwarmOrchestrator {
     /// Tracks the question ID of a pending transition question so the swarm
     /// can watch for its answer and trigger a phase transition automatically.
     pub pending_transition_question: Arc<Mutex<Option<Ulid>>>,
+    /// Countable-token tranche for this session. `None` disables budget checks.
+    pub token_budget: Option<u64>,
+    /// Countable tokens spent in the current consent tranche.
+    pub session_tokens_used: u64,
+    /// Question ID awaiting consent for another token tranche.
+    pub pending_budget_question: Option<Ulid>,
     /// Barnstormer data directory (home). Passed to tool registries so the
     /// retrieve_context tool can resolve attachment file paths.
     pub home: PathBuf,
@@ -253,6 +274,7 @@ impl SwarmOrchestrator {
         actor: SpecActorHandle,
         home: PathBuf,
         summarizer: Arc<dyn crate::AttachmentSummarizer>,
+        token_budget: Option<u64>,
     ) -> Result<Self, anyhow::Error> {
         let provider = std::env::var("BARNSTORMER_DEFAULT_PROVIDER")
             .unwrap_or_else(|_| "anthropic".to_string());
@@ -290,12 +312,16 @@ impl SwarmOrchestrator {
             model: resolved_model,
             human_message_notify: Arc::new(Notify::new()),
             pending_transition_question: Arc::new(Mutex::new(None)),
+            token_budget,
+            session_tokens_used: 0,
+            pending_budget_question: None,
             home,
             summarizer,
         })
     }
 
     /// Create an orchestrator with a specific set of agent runners and LLM client.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_agents(
         spec_id: Ulid,
         actor: SpecActorHandle,
@@ -304,6 +330,7 @@ impl SwarmOrchestrator {
         model: String,
         home: PathBuf,
         summarizer: Arc<dyn crate::AttachmentSummarizer>,
+        token_budget: Option<u64>,
     ) -> Self {
         let actor = Arc::new(actor);
         let event_receivers = agents.iter().map(|_| actor.subscribe()).collect();
@@ -319,6 +346,9 @@ impl SwarmOrchestrator {
             model,
             human_message_notify: Arc::new(Notify::new()),
             pending_transition_question: Arc::new(Mutex::new(None)),
+            token_budget,
+            session_tokens_used: 0,
+            pending_budget_question: None,
             home,
             summarizer,
         }
@@ -416,7 +446,7 @@ impl SwarmOrchestrator {
     ///
     /// Creates a fresh SubAgent with the domain tool registry, sends it the
     /// agent's context as a task prompt, and lets mux handle the think-act loop.
-    /// Returns true if the agent produced useful work, false if idle/error.
+    /// Returns whether the agent did useful work and its countable token usage.
     #[allow(clippy::too_many_arguments)]
     pub async fn run_agent_step(
         runner: &mut AgentRunner,
@@ -428,7 +458,7 @@ impl SwarmOrchestrator {
         phase: &SpecPhase,
         home: &Path,
         summarizer: &Arc<dyn crate::AttachmentSummarizer>,
-    ) -> bool {
+    ) -> StepOutcome {
         // Start agent step
         let start_cmd = Command::StartAgentStep {
             agent_id: runner.agent_id.clone(),
@@ -502,9 +532,13 @@ impl SwarmOrchestrator {
                 // so we do not send it here to avoid duplicate events.
 
                 // Agent did work if it used any tools
-                result.tool_use_count > 0
+                StepOutcome {
+                    did_work: result.tool_use_count > 0,
+                    countable_tokens: countable_tokens(&result.usage),
+                }
             }
             Err(e) => {
+                let partial_countable_tokens = countable_tokens(sub_agent.usage());
                 // Log the full error details for debugging
                 tracing::error!(
                     agent = %runner.agent_id,
@@ -532,7 +566,10 @@ impl SwarmOrchestrator {
                         content: user_msg,
                     })
                     .await;
-                false
+                StepOutcome {
+                    did_work: false,
+                    countable_tokens: partial_countable_tokens,
+                }
             }
         }
     }
@@ -602,6 +639,48 @@ async fn run_agent_by_index(
     swarm: &Arc<tokio::sync::Mutex<SwarmOrchestrator>>,
     index: usize,
 ) -> bool {
+    {
+        let mut s = swarm.lock().await;
+        if let Some(budget) = s.token_budget
+            && s.session_tokens_used >= budget
+        {
+            if s.pending_budget_question.is_none()
+                && s.question_pending
+                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+            {
+                let question_id = Ulid::new();
+                let question = format!(
+                    "This session has used {} countable tokens (budget: {}). Spend another {}?",
+                    format_token_count(s.session_tokens_used),
+                    format_token_count(budget),
+                    format_token_count(budget),
+                );
+                s.pending_budget_question = Some(question_id);
+                if let Err(error) = s
+                    .actor
+                    .send_command(Command::AskQuestion {
+                        question: UserQuestion::Boolean {
+                            question_id,
+                            question,
+                            default: Some(false),
+                        },
+                    })
+                    .await
+                {
+                    s.pending_budget_question = None;
+                    s.question_pending.store(false, Ordering::SeqCst);
+                    tracing::warn!(
+                        spec_id = %s.spec_id,
+                        %error,
+                        "failed to ask for another token budget tranche"
+                    );
+                }
+            }
+            return false;
+        }
+    }
+
     let extracted = {
         let mut s = swarm.lock().await;
         let actor_ref = Arc::clone(&s.actor);
@@ -675,7 +754,7 @@ async fn run_agent_by_index(
 
     let phase = actor_ref.read_state().await.phase.clone();
 
-    let did_work = SwarmOrchestrator::run_agent_step(
+    let outcome = SwarmOrchestrator::run_agent_step(
         &mut runner,
         &actor_ref,
         &question_pending,
@@ -693,9 +772,24 @@ async fn run_agent_by_index(
         let mut s = swarm.lock().await;
         s.agents[index] = Some(runner);
         s.event_receivers[index] = event_rx;
+        if s.token_budget.is_some() {
+            s.session_tokens_used = s
+                .session_tokens_used
+                .saturating_add(outcome.countable_tokens);
+        }
     }
 
-    did_work
+    outcome.did_work
+}
+
+fn format_token_count(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("~{:.1}M", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("~{:.1}K", tokens as f64 / 1_000.0)
+    } else {
+        tokens.to_string()
+    }
 }
 
 /// Find the index of the manager agent (first agent with AgentRole::Manager).
@@ -705,6 +799,18 @@ fn find_manager_index(swarm: &SwarmOrchestrator) -> Option<usize> {
             .map(|r| r.role == AgentRole::Manager)
             .unwrap_or(false)
     })
+}
+
+/// Priority-dispatch the manager after a human message when the swarm is active.
+async fn run_manager_priority_if_ready(swarm: &Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
+    let (manager_idx, is_paused) = {
+        let s = swarm.lock().await;
+        (find_manager_index(&s), s.is_paused())
+    };
+    if !is_paused && let Some(index) = manager_idx {
+        tracing::info!("human message received, prioritising manager agent");
+        run_agent_by_index(swarm, index).await;
+    }
 }
 
 /// Check if a QuestionAnswered event matches a pending transition question.
@@ -725,38 +831,48 @@ fn should_transition_on_answer(
     false
 }
 
-/// Drain `phase_rx` and fire `Command::TransitionPhase` for any
-/// `QuestionAnswered` event whose question id matches
-/// `pending_transition_question` with a yes-shaped answer.
+/// Drain `answer_rx`, applying phase-transition and token-budget answers.
 ///
 /// MUST be called *before* running the manager again after a human-message
 /// notify — otherwise the manager can re-run, call `propose_transition`
 /// itself, and overwrite `pending_transition_question` so the original
 /// answer no longer matches and the phase transition silently fails.
-async fn drain_transition_answers(
+async fn drain_question_answers(
     swarm: &Arc<tokio::sync::Mutex<SwarmOrchestrator>>,
-    phase_rx: &mut broadcast::Receiver<Event>,
+    answer_rx: &mut broadcast::Receiver<Event>,
 ) {
-    while let Ok(event) = phase_rx.try_recv() {
+    while let Ok(event) = answer_rx.try_recv() {
         if let EventPayload::QuestionAnswered {
             question_id,
             answer,
         } = &event.payload
         {
-            let s = swarm.lock().await;
-            if should_transition_on_answer(&s.pending_transition_question, *question_id, answer) {
+            let mut s = swarm.lock().await;
+            if s.pending_budget_question == Some(*question_id) {
+                s.pending_budget_question = None;
+                if answer.trim().eq_ignore_ascii_case("yes") {
+                    s.session_tokens_used = 0;
+                } else {
+                    s.pause();
+                }
+            } else if should_transition_on_answer(
+                &s.pending_transition_question,
+                *question_id,
+                answer,
+            ) {
                 let current_phase = s.actor.read_state().await.phase.clone();
                 let target = match current_phase {
-                    SpecPhase::Brainstorming => SpecPhase::Refining,
-                    SpecPhase::Refining => SpecPhase::Complete,
-                    SpecPhase::Complete => continue,
+                    SpecPhase::Brainstorming => Some(SpecPhase::Refining),
+                    SpecPhase::Refining => Some(SpecPhase::Complete),
+                    SpecPhase::Complete => None,
                 };
-                if let Err(e) = s
-                    .actor
-                    .send_command(Command::TransitionPhase {
-                        target: target.clone(),
-                    })
-                    .await
+                if let Some(target) = target
+                    && let Err(e) = s
+                        .actor
+                        .send_command(Command::TransitionPhase {
+                            target: target.clone(),
+                        })
+                        .await
                 {
                     tracing::warn!(
                         spec_id = %s.spec_id,
@@ -766,6 +882,9 @@ async fn drain_transition_answers(
                     );
                 }
             }
+            let question_is_pending = s.actor.read_state().await.pending_question.is_some();
+            s.question_pending
+                .store(question_is_pending, Ordering::SeqCst);
         }
     }
 }
@@ -781,19 +900,25 @@ async fn drain_transition_answers(
 pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
     // Two subscribers on the actor's broadcast channel:
     //
-    // - `phase_rx` is drained by `try_recv` after each agent pass so we can
-    //   spot `QuestionAnswered` events and fire `TransitionPhase` when the
-    //   matching `propose_transition` question is confirmed.
+    // - `answer_rx` is drained by `try_recv` after each agent pass so we can
+    //   process answers to phase-transition and token-budget questions.
     // - `wake_rx` exists only to interrupt the idle `select!` sleep when any
-    //   actor event lands. It must NOT be the same receiver as `phase_rx`,
+    //   actor event lands. It must NOT be the same receiver as `answer_rx`,
     //   because `recv()` consumes events; sharing one would silently drop
     //   `QuestionAnswered` and strand transitions (regression test:
     //   `run_loop_advances_phase_when_user_confirms_transition`).
-    let (mut phase_rx, mut wake_rx) = {
+    let (answer_rx, wake_rx) = {
         let s = swarm.lock().await;
         (s.actor.subscribe(), s.actor.subscribe())
     };
+    run_loop_with_receivers(swarm, answer_rx, wake_rx).await;
+}
 
+async fn run_loop_with_receivers(
+    swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>,
+    mut answer_rx: broadcast::Receiver<Event>,
+    mut wake_rx: broadcast::Receiver<Event>,
+) {
     loop {
         // Recover any empty slots from prior cancellations, then check pause.
         let (is_paused, agent_count, notify) = {
@@ -807,7 +932,12 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
         };
 
         if is_paused {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            drain_question_answers(&swarm, &mut answer_rx).await;
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
+                _ = notify.notified() => {}
+                _ = wake_rx.recv() => {}
+            }
             continue;
         }
 
@@ -853,13 +983,13 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
         }
 
         // Check for transition question answers buffered during the for-loop.
-        drain_transition_answers(&swarm, &mut phase_rx).await;
+        drain_question_answers(&swarm, &mut answer_rx).await;
 
         // Wait between cycles. Use tokio::select! so a human message
         // notification or any actor event can interrupt the idle sleep.
-        // `wake_rx` is a separate subscriber from `phase_rx` so consuming
+        // `wake_rx` is a separate subscriber from `answer_rx` so consuming
         // wake-up events here doesn't drop the `QuestionAnswered` events
-        // that the transition watcher above relies on.
+        // that the answer watcher above relies on.
         let sleep_duration = if any_work {
             std::time::Duration::from_secs(1)
         } else {
@@ -875,19 +1005,11 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
                 // manager runs again; otherwise the manager can re-propose and
                 // overwrite `pending_transition_question`, silently dropping
                 // the original answer.
-                drain_transition_answers(&swarm, &mut phase_rx).await;
+                drain_question_answers(&swarm, &mut answer_rx).await;
 
                 // Then prioritise the manager so it acts on the new phase
                 // (or the chat message) immediately, unless paused.
-                let (manager_idx, is_paused) = {
-                    let s = swarm.lock().await;
-                    (find_manager_index(&s), s.is_paused())
-                };
-                if !is_paused
-                    && let Some(idx) = manager_idx {
-                        tracing::info!("human message received, prioritising manager agent");
-                        run_agent_by_index(&swarm, idx).await;
-                }
+                run_manager_priority_if_ready(&swarm).await;
             }
             result = wake_rx.recv() => {
                 if let Ok(event) = result
@@ -1012,7 +1134,11 @@ mod tests {
     use super::*;
     use crate::testing::StubLlmClient;
     use barnstormer_core::state::SpecState;
-    use std::sync::atomic::Ordering;
+    use futures::Stream;
+    use mux::error::LlmError;
+    use mux::llm::{ContentBlock, Request, Response, StopReason, StreamEvent};
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn make_test_actor() -> (Ulid, SpecActorHandle) {
         let spec_id = Ulid::new();
@@ -1022,6 +1148,18 @@ mod tests {
 
     fn make_test_client() -> Arc<dyn LlmClient> {
         Arc::new(StubLlmClient::done())
+    }
+
+    #[test]
+    fn countable_tokens_excludes_cache_reads() {
+        let usage = mux::llm::Usage {
+            input_tokens: 11,
+            output_tokens: 7,
+            cache_read_tokens: 999,
+            cache_write_tokens: 13,
+        };
+
+        assert_eq!(countable_tokens(&usage), 31);
     }
 
     /// No-op `AttachmentSummarizer` for swarm tests — never invoked, since
@@ -1043,6 +1181,454 @@ mod tests {
 
     fn make_test_summarizer() -> Arc<dyn crate::AttachmentSummarizer> {
         Arc::new(StubSummarizer)
+    }
+
+    #[derive(Debug)]
+    struct PartialUsageThenErrorClient {
+        calls: AtomicUsize,
+    }
+
+    #[derive(Debug)]
+    struct CountingUsageClient {
+        calls: AtomicUsize,
+        usage: Usage,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmClient for CountingUsageClient {
+        async fn create_message(&self, _req: &Request) -> Result<Response, LlmError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Response {
+                id: "counting-usage".to_string(),
+                content: vec![ContentBlock::text("Done.")],
+                stop_reason: StopReason::EndTurn,
+                model: "stub-model".to_string(),
+                usage: self.usage.clone(),
+            })
+        }
+
+        fn create_message_stream(
+            &self,
+            _req: &Request,
+        ) -> Pin<Box<dyn Stream<Item = Result<StreamEvent, LlmError>> + Send + 'static>> {
+            Box::pin(futures::stream::empty())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmClient for PartialUsageThenErrorClient {
+        async fn create_message(&self, _req: &Request) -> Result<Response, LlmError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(Response {
+                    id: "partial-usage".to_string(),
+                    content: vec![ContentBlock::ToolUse {
+                        id: "narrate-1".to_string(),
+                        name: "emit_narration".to_string(),
+                        input: serde_json::json!({"message": "before error"}),
+                    }],
+                    stop_reason: StopReason::ToolUse,
+                    model: "stub-model".to_string(),
+                    usage: Usage {
+                        input_tokens: 40,
+                        output_tokens: 5,
+                        cache_read_tokens: 500,
+                        cache_write_tokens: 3,
+                    },
+                })
+            } else {
+                Err(LlmError::Api {
+                    status: 500,
+                    message: "later call failed".to_string(),
+                })
+            }
+        }
+
+        fn create_message_stream(
+            &self,
+            _req: &Request,
+        ) -> Pin<Box<dyn Stream<Item = Result<StreamEvent, LlmError>> + Send + 'static>> {
+            Box::pin(futures::stream::empty())
+        }
+    }
+
+    fn make_budget_swarm(
+        token_budget: Option<u64>,
+    ) -> (
+        SwarmOrchestrator,
+        Arc<CountingUsageClient>,
+        Arc<SpecActorHandle>,
+    ) {
+        let (spec_id, actor) = make_test_actor();
+        let actor_for_assertions = Arc::new(actor.clone());
+        let client = Arc::new(CountingUsageClient {
+            calls: AtomicUsize::new(0),
+            usage: Usage {
+                input_tokens: 80,
+                output_tokens: 30,
+                cache_read_tokens: 500,
+                cache_write_tokens: 10,
+            },
+        });
+        let llm_client: Arc<dyn LlmClient> = client.clone();
+        let swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            actor,
+            vec![AgentRunner::new(spec_id, AgentRole::Brainstormer)],
+            llm_client,
+            "stub-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
+            token_budget,
+        );
+        (swarm, client, actor_for_assertions)
+    }
+
+    fn budget_question_id(state: &SpecState) -> Ulid {
+        match state.pending_question.as_ref() {
+            Some(barnstormer_core::transcript::UserQuestion::Boolean {
+                question_id,
+                default,
+                ..
+            }) => {
+                assert_eq!(*default, Some(false));
+                *question_id
+            }
+            other => panic!("expected pending boolean budget question, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn budget_trip_asks_once_and_blocks_dispatch() {
+        let (mut swarm, client, actor) = make_budget_swarm(Some(100));
+        swarm.session_tokens_used = 100;
+        let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
+
+        assert!(!run_agent_by_index(&swarm, 0).await);
+        let state = actor.read_state().await;
+        let first_question = budget_question_id(&state);
+        drop(state);
+        assert!(!run_agent_by_index(&swarm, 0).await);
+
+        assert_eq!(client.calls.load(Ordering::SeqCst), 0);
+        let state = actor.read_state().await;
+        assert_eq!(budget_question_id(&state), first_question);
+        assert_eq!(
+            swarm.lock().await.pending_budget_question,
+            Some(first_question)
+        );
+    }
+
+    #[tokio::test]
+    async fn budget_blocks_human_message_manager_priority_dispatch() {
+        let (mut swarm, client, actor) = make_budget_swarm(Some(100));
+        swarm.agents[0].as_mut().unwrap().role = AgentRole::Manager;
+        swarm.session_tokens_used = 100;
+        let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
+
+        run_manager_priority_if_ready(&swarm).await;
+
+        assert_eq!(client.calls.load(Ordering::SeqCst), 0);
+        assert!(actor.read_state().await.pending_question.is_some());
+    }
+
+    #[tokio::test]
+    async fn unlimited_budget_never_trips_and_does_not_accumulate() {
+        let (mut swarm, client, actor) = make_budget_swarm(None);
+        swarm.session_tokens_used = u64::MAX;
+        let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
+
+        assert!(!run_agent_by_index(&swarm, 0).await);
+
+        assert_eq!(client.calls.load(Ordering::SeqCst), 1);
+        assert!(actor.read_state().await.pending_question.is_none());
+        assert_eq!(swarm.lock().await.session_tokens_used, u64::MAX);
+    }
+
+    #[tokio::test]
+    async fn dispatched_step_adds_countable_tokens_to_session() {
+        let (swarm, client, _actor) = make_budget_swarm(Some(1_000));
+        let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
+
+        assert!(!run_agent_by_index(&swarm, 0).await);
+
+        assert_eq!(client.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(swarm.lock().await.session_tokens_used, 120);
+    }
+
+    async fn ask_and_answer_budget_question(answer: &str) -> SwarmOrchestrator {
+        let (mut swarm, _client, actor) = make_budget_swarm(Some(100));
+        swarm.session_tokens_used = 100;
+        swarm.question_pending.store(true, Ordering::SeqCst);
+        let question_id = Ulid::new();
+        actor
+            .send_command(Command::AskQuestion {
+                question: barnstormer_core::transcript::UserQuestion::Boolean {
+                    question_id,
+                    question: "Spend another tranche?".to_string(),
+                    default: Some(false),
+                },
+            })
+            .await
+            .unwrap();
+        swarm.pending_budget_question = Some(question_id);
+        let mut event_rx = actor.subscribe();
+        actor
+            .send_command(Command::AnswerQuestion {
+                question_id,
+                answer: answer.to_string(),
+            })
+            .await
+            .unwrap();
+        let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
+        drain_question_answers(&swarm, &mut event_rx).await;
+        Arc::try_unwrap(swarm).ok().unwrap().into_inner()
+    }
+
+    #[tokio::test]
+    async fn budget_yes_resets_counter_and_clears_pending_id() {
+        let swarm = ask_and_answer_budget_question("Yes").await;
+        assert_eq!(swarm.session_tokens_used, 0);
+        assert_eq!(swarm.pending_budget_question, None);
+        assert!(!swarm.is_paused());
+    }
+
+    #[tokio::test]
+    async fn budget_non_yes_pauses_and_preserves_exhausted_counter() {
+        let swarm = ask_and_answer_budget_question("No").await;
+        assert_eq!(swarm.session_tokens_used, 100);
+        assert_eq!(swarm.pending_budget_question, None);
+        assert!(swarm.is_paused());
+    }
+
+    #[tokio::test]
+    async fn manual_resume_after_budget_no_reasks_before_dispatch() {
+        let swarm = ask_and_answer_budget_question("No").await;
+        let actor = Arc::clone(&swarm.actor);
+        swarm.resume();
+        let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
+
+        assert!(!run_agent_by_index(&swarm, 0).await);
+
+        assert!(
+            actor.read_state().await.pending_question.is_some(),
+            "manual resume must re-ask for budget consent before dispatch"
+        );
+    }
+
+    async fn answer_budget_question_while_loop_is_manually_paused(
+        answer: &str,
+    ) -> (
+        Arc<tokio::sync::Mutex<SwarmOrchestrator>>,
+        Arc<SpecActorHandle>,
+        Arc<CountingUsageClient>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (mut swarm, client, actor) = make_budget_swarm(Some(100));
+        swarm.session_tokens_used = 100;
+        let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
+        assert!(!run_agent_by_index(&swarm, 0).await);
+        let question_id = {
+            let state = actor.read_state().await;
+            budget_question_id(&state)
+        };
+        swarm.lock().await.pause();
+        let (answer_rx, wake_rx) = {
+            let swarm = swarm.lock().await;
+            (swarm.actor.subscribe(), swarm.actor.subscribe())
+        };
+        let task = tokio::spawn(run_loop_with_receivers(
+            Arc::clone(&swarm),
+            answer_rx,
+            wake_rx,
+        ));
+
+        actor
+            .send_command(Command::AnswerQuestion {
+                question_id,
+                answer: answer.to_string(),
+            })
+            .await
+            .unwrap();
+        swarm.lock().await.notify_human_message();
+
+        (swarm, actor, client, task)
+    }
+
+    #[tokio::test]
+    async fn paused_loop_processes_budget_yes_without_dispatching() {
+        let (swarm, _actor, client, task) =
+            answer_budget_question_while_loop_is_manually_paused("Yes").await;
+
+        wait_until("paused loop to process budget Yes", || async {
+            swarm.lock().await.session_tokens_used == 0
+        })
+        .await;
+
+        let swarm = swarm.lock().await;
+        assert!(swarm.is_paused(), "manual pause must remain in force");
+        assert_eq!(swarm.pending_budget_question, None);
+        assert_eq!(client.calls.load(Ordering::SeqCst), 0);
+        drop(swarm);
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn paused_loop_processes_budget_no_before_single_resume() {
+        let (swarm, actor, client, task) =
+            answer_budget_question_while_loop_is_manually_paused("No").await;
+
+        wait_until("paused loop to process budget No", || async {
+            swarm.lock().await.pending_budget_question.is_none()
+        })
+        .await;
+        swarm.lock().await.resume();
+        wait_until("single resume to re-ask for budget consent", || async {
+            actor.read_state().await.pending_question.is_some()
+        })
+        .await;
+
+        assert_eq!(client.calls.load(Ordering::SeqCst), 0);
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn stale_budget_answer_is_ignored() {
+        let (mut swarm, _client, actor) = make_budget_swarm(Some(100));
+        swarm.session_tokens_used = 100;
+        let stale_id = Ulid::new();
+        actor
+            .send_command(Command::AskQuestion {
+                question: barnstormer_core::transcript::UserQuestion::Boolean {
+                    question_id: stale_id,
+                    question: "Stale?".to_string(),
+                    default: Some(false),
+                },
+            })
+            .await
+            .unwrap();
+        let mut event_rx = actor.subscribe();
+        actor
+            .send_command(Command::AnswerQuestion {
+                question_id: stale_id,
+                answer: "Yes".to_string(),
+            })
+            .await
+            .unwrap();
+        let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
+
+        drain_question_answers(&swarm, &mut event_rx).await;
+
+        let swarm = swarm.lock().await;
+        assert_eq!(swarm.session_tokens_used, 100);
+        assert_eq!(swarm.pending_budget_question, None);
+        assert!(!swarm.is_paused());
+    }
+
+    async fn wait_until(description: &str, mut condition: impl AsyncFnMut() -> bool) {
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while !condition().await {
+                tokio::task::yield_now().await;
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {description}"));
+    }
+
+    #[tokio::test]
+    async fn real_swarm_tiny_budget_freezes_resumes_and_pauses() {
+        let (spec_id, actor) = make_test_actor();
+        actor
+            .send_command(Command::CreateSpec {
+                title: "Budget integration".to_string(),
+                one_liner: "Exercise the real loop".to_string(),
+                goal: "Prove budget consent".to_string(),
+            })
+            .await
+            .unwrap();
+        actor
+            .send_command(Command::TransitionPhase {
+                target: SpecPhase::Refining,
+            })
+            .await
+            .unwrap();
+        let actor = Arc::new(actor);
+        let client = Arc::new(CountingUsageClient {
+            calls: AtomicUsize::new(0),
+            usage: Usage {
+                input_tokens: 80,
+                output_tokens: 30,
+                cache_read_tokens: 500,
+                cache_write_tokens: 10,
+            },
+        });
+        let swarm = SwarmOrchestrator::with_agents(
+            spec_id,
+            actor.as_ref().clone(),
+            vec![AgentRunner::new(spec_id, AgentRole::Brainstormer)],
+            client.clone(),
+            "stub-model".to_string(),
+            PathBuf::from("/tmp/barnstormer-test"),
+            make_test_summarizer(),
+            Some(100),
+        );
+        let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
+        let task = tokio::spawn(run_loop(Arc::clone(&swarm)));
+
+        wait_until("first budget question", || async {
+            actor.read_state().await.pending_question.is_some()
+        })
+        .await;
+        let first_calls = client.calls.load(Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            client.calls.load(Ordering::SeqCst),
+            first_calls,
+            "agents must remain frozen while budget consent is pending"
+        );
+        let first_question = {
+            let state = actor.read_state().await;
+            budget_question_id(&state)
+        };
+        actor
+            .send_command(Command::AnswerQuestion {
+                question_id: first_question,
+                answer: "Yes".to_string(),
+            })
+            .await
+            .unwrap();
+        swarm.lock().await.notify_human_message();
+
+        wait_until("work after Yes", || async {
+            client.calls.load(Ordering::SeqCst) > first_calls
+        })
+        .await;
+        wait_until("second budget question", || async {
+            actor.read_state().await.pending_question.is_some()
+        })
+        .await;
+        let second_question = {
+            let state = actor.read_state().await;
+            budget_question_id(&state)
+        };
+        assert_ne!(second_question, first_question);
+        actor
+            .send_command(Command::AnswerQuestion {
+                question_id: second_question,
+                answer: "No".to_string(),
+            })
+            .await
+            .unwrap();
+        swarm.lock().await.notify_human_message();
+
+        wait_until("swarm pause after No", || async {
+            swarm.lock().await.is_paused()
+        })
+        .await;
+        task.abort();
+        let _ = task.await;
     }
 
     #[tokio::test]
@@ -1069,6 +1655,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
         );
 
         assert_eq!(swarm.agents.len(), 4);
@@ -1098,6 +1685,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
         );
 
         assert!(!swarm.is_paused());
@@ -1121,7 +1709,7 @@ mod tests {
 
         let home = PathBuf::from("/tmp/barnstormer-test");
         let summarizer = make_test_summarizer();
-        let did_work = SwarmOrchestrator::run_agent_step(
+        let outcome = SwarmOrchestrator::run_agent_step(
             &mut runner,
             &actor_arc,
             &question_pending,
@@ -1135,7 +1723,72 @@ mod tests {
         .await;
 
         // StubLlmClient returns text-only (no tool use), so agent does no tool work
-        assert!(!did_work);
+        assert!(!outcome.did_work);
+        assert_eq!(outcome.countable_tokens, 0);
+    }
+
+    #[tokio::test]
+    async fn run_agent_step_reports_countable_usage() {
+        let (spec_id, actor) = make_test_actor();
+        let usage = mux::llm::Usage {
+            input_tokens: 11,
+            output_tokens: 7,
+            cache_read_tokens: 999,
+            cache_write_tokens: 13,
+        };
+        let client: Arc<dyn LlmClient> = Arc::new(StubLlmClient::with_usage("Done.", usage));
+        let actor = Arc::new(actor);
+        let question_pending = Arc::new(AtomicBool::new(false));
+        let pending_transition = Arc::new(Mutex::new(None));
+        let mut runner = AgentRunner::new(spec_id, AgentRole::Brainstormer);
+        let home = PathBuf::from("/tmp/barnstormer-test");
+        let summarizer = make_test_summarizer();
+
+        let outcome = SwarmOrchestrator::run_agent_step(
+            &mut runner,
+            &actor,
+            &question_pending,
+            &pending_transition,
+            &client,
+            "stub-model",
+            &SpecPhase::Refining,
+            &home,
+            &summarizer,
+        )
+        .await;
+
+        assert!(!outcome.did_work);
+        assert_eq!(outcome.countable_tokens, 31);
+    }
+
+    #[tokio::test]
+    async fn run_agent_step_reports_partial_usage_after_error() {
+        let (spec_id, actor) = make_test_actor();
+        let client: Arc<dyn LlmClient> = Arc::new(PartialUsageThenErrorClient {
+            calls: AtomicUsize::new(0),
+        });
+        let actor = Arc::new(actor);
+        let question_pending = Arc::new(AtomicBool::new(false));
+        let pending_transition = Arc::new(Mutex::new(None));
+        let mut runner = AgentRunner::new(spec_id, AgentRole::Brainstormer);
+        let home = PathBuf::from("/tmp/barnstormer-test");
+        let summarizer = make_test_summarizer();
+
+        let outcome = SwarmOrchestrator::run_agent_step(
+            &mut runner,
+            &actor,
+            &question_pending,
+            &pending_transition,
+            &client,
+            "stub-model",
+            &SpecPhase::Refining,
+            &home,
+            &summarizer,
+        )
+        .await;
+
+        assert!(!outcome.did_work);
+        assert_eq!(outcome.countable_tokens, 48);
     }
 
     #[tokio::test]
@@ -1595,11 +2248,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drain_transition_answers_fires_transition_on_matching_yes() {
+    async fn drain_question_answers_fires_transition_on_matching_yes() {
         // Direct unit test on the helper that both run_loop drain points share.
-        // Both call sites (post-for-loop and notify arm) depend on this firing
-        // a TransitionPhase command for a Yes answer whose question id matches
-        // `pending_transition_question`.
+        // All call sites (paused, post-for-loop, and notify arm) depend on this
+        // firing a TransitionPhase command for a Yes answer whose question id
+        // matches `pending_transition_question`.
 
         let (spec_id, actor) = make_test_actor();
         actor
@@ -1619,6 +2272,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
         );
         let actor_handle = Arc::clone(&swarm.actor);
         let pending = Arc::clone(&swarm.pending_transition_question);
@@ -1637,7 +2291,7 @@ mod tests {
         *pending.lock().unwrap() = Some(q_id);
 
         // Subscribe BEFORE the answer so the drain receiver actually sees it.
-        let mut phase_rx = actor_handle.subscribe();
+        let mut answer_rx = actor_handle.subscribe();
 
         actor_handle
             .send_command(Command::AnswerQuestion {
@@ -1648,7 +2302,7 @@ mod tests {
             .unwrap();
 
         let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
-        drain_transition_answers(&swarm, &mut phase_rx).await;
+        drain_question_answers(&swarm, &mut answer_rx).await;
 
         assert_eq!(
             actor_handle.read_state().await.phase,
@@ -1662,7 +2316,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drain_transition_answers_ignores_no_answer() {
+    async fn drain_question_answers_ignores_no_answer() {
         let (spec_id, actor) = make_test_actor();
         actor
             .send_command(Command::CreateSpec {
@@ -1681,6 +2335,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
         );
         let actor_handle = Arc::clone(&swarm.actor);
 
@@ -1697,7 +2352,7 @@ mod tests {
             .unwrap();
         *swarm.pending_transition_question.lock().unwrap() = Some(q_id);
 
-        let mut phase_rx = actor_handle.subscribe();
+        let mut answer_rx = actor_handle.subscribe();
         actor_handle
             .send_command(Command::AnswerQuestion {
                 question_id: q_id,
@@ -1707,7 +2362,7 @@ mod tests {
             .unwrap();
 
         let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
-        drain_transition_answers(&swarm, &mut phase_rx).await;
+        drain_question_answers(&swarm, &mut answer_rx).await;
 
         assert_eq!(
             actor_handle.read_state().await.phase,
@@ -1759,6 +2414,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
         );
 
         // Simulate what propose_transition does: ask a Boolean question and
@@ -1838,6 +2494,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
         );
         let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
 
@@ -1868,6 +2525,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
         );
         assert_eq!(swarm.agent_count(), 2);
     }
@@ -1887,6 +2545,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
         );
         // Each agent should have a dedicated event receiver
         assert_eq!(
@@ -1925,6 +2584,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
         );
 
         let map = swarm.collect_agent_contexts();
@@ -1968,6 +2628,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
         );
 
         // Collect contexts
@@ -2046,6 +2707,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
         );
 
         // Restore the old contexts onto the new agents
@@ -2080,6 +2742,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
         );
         let notify = Arc::clone(&swarm.human_message_notify);
         let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
@@ -2116,6 +2779,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
         );
         assert_eq!(find_manager_index(&swarm), Some(1));
     }
@@ -2135,6 +2799,7 @@ mod tests {
             "stub-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
         );
         assert_eq!(find_manager_index(&swarm), None);
     }
@@ -2183,6 +2848,7 @@ mod tests {
             "test-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
         );
 
         // Verify: only Manager should run during brainstorming
@@ -2228,6 +2894,7 @@ mod tests {
             "test-model".to_string(),
             PathBuf::from("/tmp/barnstormer-test"),
             make_test_summarizer(),
+            None,
         );
 
         // All 3 agents should be present and none skipped in Active

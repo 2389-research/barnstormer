@@ -11,7 +11,7 @@ use tower::ServiceExt;
 
 /// Helper to create a test AppState with a temp directory.
 fn test_app_state(home: std::path::PathBuf) -> Arc<AppState> {
-    Arc::new(AppState::new(home, ProviderStatus::detect()))
+    Arc::new(AppState::new(home, ProviderStatus::detect(), None))
 }
 
 /// Helper to extract JSON body from a response.

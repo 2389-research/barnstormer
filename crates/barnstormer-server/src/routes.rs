@@ -158,6 +158,7 @@ mod tests {
         Arc::new(AppState::new(
             std::env::temp_dir().join("barnstormer-test"),
             provider_status,
+            None,
         ))
     }
 

@@ -3399,6 +3399,30 @@ pub async fn agent_leds(
     }
 }
 
+/// Construct a default swarm from the application state's shared configuration.
+fn construct_default_swarm<T>(
+    state: &SharedState,
+    spec_id: Ulid,
+    actor: barnstormer_core::SpecActorHandle,
+    factory: impl FnOnce(
+        Ulid,
+        barnstormer_core::SpecActorHandle,
+        std::path::PathBuf,
+        Arc<dyn barnstormer_agent::AttachmentSummarizer>,
+        Option<u64>,
+    ) -> T,
+) -> T {
+    factory(
+        spec_id,
+        actor,
+        state.barnstormer_home.clone(),
+        Arc::new(crate::attachment_summarizer::ServerSummarizer {
+            home: state.barnstormer_home.clone(),
+        }),
+        state.token_budget,
+    )
+}
+
 /// POST /web/specs/{id}/agents/start - Start agents for a spec.
 pub async fn start_agents(
     State(state): State<SharedState>,
@@ -3443,13 +3467,11 @@ pub async fn start_agents(
     }
 
     // Create swarm (sync operation, safe to hold write lock)
-    let swarm = match SwarmOrchestrator::with_defaults(
+    let swarm = match construct_default_swarm(
+        &state,
         spec_id,
         swarm_actor_handle,
-        state.barnstormer_home.clone(),
-        Arc::new(crate::attachment_summarizer::ServerSummarizer {
-            home: state.barnstormer_home.clone(),
-        }),
+        SwarmOrchestrator::with_defaults,
     ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {
@@ -3615,13 +3637,11 @@ pub async fn try_start_agents(
     }
 
     // Create swarm (sync operation, safe to hold write lock)
-    let swarm = match SwarmOrchestrator::with_defaults(
+    let swarm = match construct_default_swarm(
+        state,
         spec_id,
         swarm_actor_handle,
-        state.barnstormer_home.clone(),
-        Arc::new(crate::attachment_summarizer::ServerSummarizer {
-            home: state.barnstormer_home.clone(),
-        }),
+        SwarmOrchestrator::with_defaults,
     ) {
         Ok(s) => Arc::new(tokio::sync::Mutex::new(s)),
         Err(e) => {
@@ -3776,7 +3796,34 @@ mod tests {
             providers: vec![],
             any_available: false,
         };
-        Arc::new(AppState::new(dir.keep(), provider_status))
+        Arc::new(AppState::new(dir.keep(), provider_status, None))
+    }
+
+    #[tokio::test]
+    async fn runtime_budget_reaches_production_swarm_factory() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let provider_status = ProviderStatus {
+            default_provider: "anthropic".to_string(),
+            default_model: None,
+            providers: vec![],
+            any_available: false,
+        };
+        let state = Arc::new(AppState::new(
+            dir.path().to_path_buf(),
+            provider_status,
+            Some(321),
+        ));
+        let spec_id = Ulid::new();
+        let actor = barnstormer_core::spawn(spec_id, SpecState::new());
+
+        let forwarded_budget = construct_default_swarm(
+            &state,
+            spec_id,
+            actor,
+            |_spec_id, _actor, _home, _summarizer, token_budget| token_budget,
+        );
+
+        assert_eq!(forwarded_budget, Some(321));
     }
 
     /// Test multipart boundary used by `mp_description_body`. Tests that
@@ -5767,7 +5814,7 @@ mod tests {
             providers: vec![],
             any_available: false,
         };
-        Arc::new(AppState::new(dir.keep(), provider_status))
+        Arc::new(AppState::new(dir.keep(), provider_status, None))
     }
 
     #[tokio::test]

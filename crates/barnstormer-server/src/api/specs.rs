@@ -197,7 +197,7 @@ mod tests {
             providers: vec![],
             any_available: false,
         };
-        Arc::new(AppState::new(dir.keep(), provider_status))
+        Arc::new(AppState::new(dir.keep(), provider_status, None))
     }
 
     #[tokio::test]
