@@ -831,19 +831,17 @@ fn should_transition_on_answer(
     false
 }
 
-/// Drain `phase_rx` and fire `Command::TransitionPhase` for any
-/// `QuestionAnswered` event whose question id matches
-/// `pending_transition_question` with a yes-shaped answer.
+/// Drain `answer_rx`, applying phase-transition and token-budget answers.
 ///
 /// MUST be called *before* running the manager again after a human-message
 /// notify — otherwise the manager can re-run, call `propose_transition`
 /// itself, and overwrite `pending_transition_question` so the original
 /// answer no longer matches and the phase transition silently fails.
-async fn drain_transition_answers(
+async fn drain_question_answers(
     swarm: &Arc<tokio::sync::Mutex<SwarmOrchestrator>>,
-    phase_rx: &mut broadcast::Receiver<Event>,
+    answer_rx: &mut broadcast::Receiver<Event>,
 ) {
-    while let Ok(event) = phase_rx.try_recv() {
+    while let Ok(event) = answer_rx.try_recv() {
         if let EventPayload::QuestionAnswered {
             question_id,
             answer,
@@ -902,15 +900,14 @@ async fn drain_transition_answers(
 pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
     // Two subscribers on the actor's broadcast channel:
     //
-    // - `phase_rx` is drained by `try_recv` after each agent pass so we can
-    //   spot `QuestionAnswered` events and fire `TransitionPhase` when the
-    //   matching `propose_transition` question is confirmed.
+    // - `answer_rx` is drained by `try_recv` after each agent pass so we can
+    //   process answers to phase-transition and token-budget questions.
     // - `wake_rx` exists only to interrupt the idle `select!` sleep when any
-    //   actor event lands. It must NOT be the same receiver as `phase_rx`,
+    //   actor event lands. It must NOT be the same receiver as `answer_rx`,
     //   because `recv()` consumes events; sharing one would silently drop
     //   `QuestionAnswered` and strand transitions (regression test:
     //   `run_loop_advances_phase_when_user_confirms_transition`).
-    let (mut phase_rx, mut wake_rx) = {
+    let (mut answer_rx, mut wake_rx) = {
         let s = swarm.lock().await;
         (s.actor.subscribe(), s.actor.subscribe())
     };
@@ -928,7 +925,12 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
         };
 
         if is_paused {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            drain_question_answers(&swarm, &mut answer_rx).await;
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
+                _ = notify.notified() => {}
+                _ = wake_rx.recv() => {}
+            }
             continue;
         }
 
@@ -974,13 +976,13 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
         }
 
         // Check for transition question answers buffered during the for-loop.
-        drain_transition_answers(&swarm, &mut phase_rx).await;
+        drain_question_answers(&swarm, &mut answer_rx).await;
 
         // Wait between cycles. Use tokio::select! so a human message
         // notification or any actor event can interrupt the idle sleep.
-        // `wake_rx` is a separate subscriber from `phase_rx` so consuming
+        // `wake_rx` is a separate subscriber from `answer_rx` so consuming
         // wake-up events here doesn't drop the `QuestionAnswered` events
-        // that the transition watcher above relies on.
+        // that the answer watcher above relies on.
         let sleep_duration = if any_work {
             std::time::Duration::from_secs(1)
         } else {
@@ -996,7 +998,7 @@ pub async fn run_loop(swarm: Arc<tokio::sync::Mutex<SwarmOrchestrator>>) {
                 // manager runs again; otherwise the manager can re-propose and
                 // overwrite `pending_transition_question`, silently dropping
                 // the original answer.
-                drain_transition_answers(&swarm, &mut phase_rx).await;
+                drain_question_answers(&swarm, &mut answer_rx).await;
 
                 // Then prioritise the manager so it acts on the new phase
                 // (or the chat message) immediately, unless paused.
@@ -1371,7 +1373,7 @@ mod tests {
             .await
             .unwrap();
         let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
-        drain_transition_answers(&swarm, &mut event_rx).await;
+        drain_question_answers(&swarm, &mut event_rx).await;
         Arc::try_unwrap(swarm).ok().unwrap().into_inner()
     }
 
@@ -1406,6 +1408,77 @@ mod tests {
         );
     }
 
+    async fn answer_budget_question_while_loop_is_manually_paused(
+        answer: &str,
+    ) -> (
+        Arc<tokio::sync::Mutex<SwarmOrchestrator>>,
+        Arc<SpecActorHandle>,
+        Arc<CountingUsageClient>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (mut swarm, client, actor) = make_budget_swarm(Some(100));
+        swarm.session_tokens_used = 100;
+        let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
+        assert!(!run_agent_by_index(&swarm, 0).await);
+        let question_id = {
+            let state = actor.read_state().await;
+            budget_question_id(&state)
+        };
+        swarm.lock().await.pause();
+        let task = tokio::spawn(run_loop(Arc::clone(&swarm)));
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+        actor
+            .send_command(Command::AnswerQuestion {
+                question_id,
+                answer: answer.to_string(),
+            })
+            .await
+            .unwrap();
+        swarm.lock().await.notify_human_message();
+
+        (swarm, actor, client, task)
+    }
+
+    #[tokio::test]
+    async fn paused_loop_processes_budget_yes_without_dispatching() {
+        let (swarm, _actor, client, task) =
+            answer_budget_question_while_loop_is_manually_paused("Yes").await;
+
+        wait_until("paused loop to process budget Yes", || async {
+            swarm.lock().await.session_tokens_used == 0
+        })
+        .await;
+
+        let swarm = swarm.lock().await;
+        assert!(swarm.is_paused(), "manual pause must remain in force");
+        assert_eq!(swarm.pending_budget_question, None);
+        assert_eq!(client.calls.load(Ordering::SeqCst), 0);
+        drop(swarm);
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn paused_loop_processes_budget_no_before_single_resume() {
+        let (swarm, actor, client, task) =
+            answer_budget_question_while_loop_is_manually_paused("No").await;
+
+        wait_until("paused loop to process budget No", || async {
+            swarm.lock().await.pending_budget_question.is_none()
+        })
+        .await;
+        swarm.lock().await.resume();
+        wait_until("single resume to re-ask for budget consent", || async {
+            actor.read_state().await.pending_question.is_some()
+        })
+        .await;
+
+        assert_eq!(client.calls.load(Ordering::SeqCst), 0);
+        task.abort();
+        let _ = task.await;
+    }
+
     #[tokio::test]
     async fn stale_budget_answer_is_ignored() {
         let (mut swarm, _client, actor) = make_budget_swarm(Some(100));
@@ -1431,7 +1504,7 @@ mod tests {
             .unwrap();
         let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
 
-        drain_transition_answers(&swarm, &mut event_rx).await;
+        drain_question_answers(&swarm, &mut event_rx).await;
 
         let swarm = swarm.lock().await;
         assert_eq!(swarm.session_tokens_used, 100);
@@ -2161,11 +2234,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drain_transition_answers_fires_transition_on_matching_yes() {
+    async fn drain_question_answers_fires_transition_on_matching_yes() {
         // Direct unit test on the helper that both run_loop drain points share.
-        // Both call sites (post-for-loop and notify arm) depend on this firing
-        // a TransitionPhase command for a Yes answer whose question id matches
-        // `pending_transition_question`.
+        // All call sites (paused, post-for-loop, and notify arm) depend on this
+        // firing a TransitionPhase command for a Yes answer whose question id
+        // matches `pending_transition_question`.
 
         let (spec_id, actor) = make_test_actor();
         actor
@@ -2204,7 +2277,7 @@ mod tests {
         *pending.lock().unwrap() = Some(q_id);
 
         // Subscribe BEFORE the answer so the drain receiver actually sees it.
-        let mut phase_rx = actor_handle.subscribe();
+        let mut answer_rx = actor_handle.subscribe();
 
         actor_handle
             .send_command(Command::AnswerQuestion {
@@ -2215,7 +2288,7 @@ mod tests {
             .unwrap();
 
         let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
-        drain_transition_answers(&swarm, &mut phase_rx).await;
+        drain_question_answers(&swarm, &mut answer_rx).await;
 
         assert_eq!(
             actor_handle.read_state().await.phase,
@@ -2229,7 +2302,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drain_transition_answers_ignores_no_answer() {
+    async fn drain_question_answers_ignores_no_answer() {
         let (spec_id, actor) = make_test_actor();
         actor
             .send_command(Command::CreateSpec {
@@ -2265,7 +2338,7 @@ mod tests {
             .unwrap();
         *swarm.pending_transition_question.lock().unwrap() = Some(q_id);
 
-        let mut phase_rx = actor_handle.subscribe();
+        let mut answer_rx = actor_handle.subscribe();
         actor_handle
             .send_command(Command::AnswerQuestion {
                 question_id: q_id,
@@ -2275,7 +2348,7 @@ mod tests {
             .unwrap();
 
         let swarm = Arc::new(tokio::sync::Mutex::new(swarm));
-        drain_transition_answers(&swarm, &mut phase_rx).await;
+        drain_question_answers(&swarm, &mut answer_rx).await;
 
         assert_eq!(
             actor_handle.read_state().await.phase,

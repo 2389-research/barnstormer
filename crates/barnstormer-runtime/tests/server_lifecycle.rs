@@ -6,6 +6,31 @@ use std::sync::Mutex;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+struct EnvGuard {
+    name: &'static str,
+    prior: Option<std::ffi::OsString>,
+}
+
+impl EnvGuard {
+    fn set(name: &'static str, value: Option<&str>) -> Self {
+        let prior = std::env::var_os(name);
+        match value {
+            Some(value) => unsafe { std::env::set_var(name, value) },
+            None => unsafe { std::env::remove_var(name) },
+        }
+        Self { name, prior }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        match self.prior.take() {
+            Some(value) => unsafe { std::env::set_var(self.name, value) },
+            None => unsafe { std::env::remove_var(self.name) },
+        }
+    }
+}
+
 fn runtime_options(home: std::path::PathBuf) -> RuntimeOptions {
     RuntimeOptions {
         home: Some(home),
@@ -20,6 +45,7 @@ fn runtime_options(home: std::path::PathBuf) -> RuntimeOptions {
 #[tokio::test]
 async fn embedded_server_reports_url_and_shuts_down() {
     let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+    let _budget_env = EnvGuard::set("BARNSTORMER_TOKEN_BUDGET", None);
     let temp = tempfile::tempdir().unwrap();
     let handle = barnstormer_runtime::launch(runtime_options(temp.path().to_path_buf()))
         .await
@@ -40,8 +66,7 @@ async fn embedded_server_reports_url_and_shuts_down() {
 #[tokio::test]
 async fn embedded_server_boots_with_unlimited_token_budget() {
     let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
-    let prior = std::env::var("BARNSTORMER_TOKEN_BUDGET").ok();
-    unsafe { std::env::set_var("BARNSTORMER_TOKEN_BUDGET", "0") };
+    let _budget_env = EnvGuard::set("BARNSTORMER_TOKEN_BUDGET", Some("0"));
     let temp = tempfile::tempdir().unwrap();
 
     let handle = barnstormer_runtime::launch(runtime_options(temp.path().to_path_buf()))
@@ -52,18 +77,12 @@ async fn embedded_server_boots_with_unlimited_token_budget() {
         .unwrap();
     assert!(health.status().is_success());
     handle.shutdown().await.unwrap();
-
-    match prior {
-        Some(value) => unsafe { std::env::set_var("BARNSTORMER_TOKEN_BUDGET", value) },
-        None => unsafe { std::env::remove_var("BARNSTORMER_TOKEN_BUDGET") },
-    }
 }
 
 #[tokio::test]
 async fn embedded_server_boots_with_tiny_token_budget() {
     let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
-    let prior = std::env::var("BARNSTORMER_TOKEN_BUDGET").ok();
-    unsafe { std::env::set_var("BARNSTORMER_TOKEN_BUDGET", "100") };
+    let _budget_env = EnvGuard::set("BARNSTORMER_TOKEN_BUDGET", Some("100"));
     let temp = tempfile::tempdir().unwrap();
 
     let handle = barnstormer_runtime::launch(runtime_options(temp.path().to_path_buf()))
@@ -74,18 +93,12 @@ async fn embedded_server_boots_with_tiny_token_budget() {
         .unwrap();
     assert!(health.status().is_success());
     handle.shutdown().await.unwrap();
-
-    match prior {
-        Some(value) => unsafe { std::env::set_var("BARNSTORMER_TOKEN_BUDGET", value) },
-        None => unsafe { std::env::remove_var("BARNSTORMER_TOKEN_BUDGET") },
-    }
 }
 
 #[tokio::test]
 async fn embedded_server_rejects_invalid_token_budget() {
     let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
-    let prior = std::env::var("BARNSTORMER_TOKEN_BUDGET").ok();
-    unsafe { std::env::set_var("BARNSTORMER_TOKEN_BUDGET", "invalid") };
+    let _budget_env = EnvGuard::set("BARNSTORMER_TOKEN_BUDGET", Some("invalid"));
     let temp = tempfile::tempdir().unwrap();
 
     let error = barnstormer_runtime::launch(runtime_options(temp.path().to_path_buf()))
@@ -93,9 +106,4 @@ async fn embedded_server_rejects_invalid_token_budget() {
         .err()
         .expect("invalid token budget should fail startup");
     assert!(error.to_string().contains("BARNSTORMER_TOKEN_BUDGET"));
-
-    match prior {
-        Some(value) => unsafe { std::env::set_var("BARNSTORMER_TOKEN_BUDGET", value) },
-        None => unsafe { std::env::remove_var("BARNSTORMER_TOKEN_BUDGET") },
-    }
 }

@@ -17,6 +17,10 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
+barnstormer-agent.workspace = true
+mux.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 tempfile = "3"
+ulid.workspace = true

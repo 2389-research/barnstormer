@@ -93,8 +93,8 @@ over-budget session re-asks before spending anything.
 
 ### Answering
 
-`drain_transition_answers` is extended (single function; both of its call
-sites share one `phase_rx` broadcast receiver, and a sibling drain function
+`drain_question_answers` is extended (single function; all call sites share
+one `answer_rx` broadcast receiver, and a sibling drain function
 would steal events from it). For each `QuestionAnswered`:
 
 - Matches `pending_transition_question` → existing phase-transition behavior,

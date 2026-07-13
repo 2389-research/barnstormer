@@ -95,10 +95,42 @@ fn default_home() -> PathBuf {
 }
 
 #[cfg(test)]
+pub(crate) mod test_env {
+    use std::sync::Mutex;
+
+    pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    pub(crate) struct EnvGuard {
+        name: &'static str,
+        prior: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        pub(crate) fn set(name: &'static str, value: Option<&str>) -> Self {
+            let prior = std::env::var_os(name);
+            match value {
+                Some(value) => unsafe { std::env::set_var(name, value) },
+                None => unsafe { std::env::remove_var(name) },
+            }
+            Self { name, prior }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.prior.take() {
+                Some(value) => unsafe { std::env::set_var(self.name, value) },
+                None => unsafe { std::env::remove_var(self.name) },
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{RuntimeConfig, RuntimeOptions};
+    use crate::config::test_env::{ENV_LOCK, EnvGuard};
     use std::path::PathBuf;
-    use std::sync::Mutex;
 
     // Serializes any test that touches process env — both writers
     // (`disable_auth_fallback_skips_env_var`, the `BARNSTORMER_BIND` tests
@@ -106,8 +138,6 @@ mod tests {
     // `disable_auth_fallback: false`, which consult env). cargo test
     // parallelizes by default, so a reader that skips the lock will see
     // whatever junk a concurrent writer set and panic.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
     #[test]
     fn config_uses_explicit_home_when_provided() {
         let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
@@ -147,11 +177,7 @@ mod tests {
     fn disable_auth_fallback_skips_env_var() {
         let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
 
-        // SAFETY: the ENV_LOCK above serializes against any other env-mutating
-        // test in this crate; this test restores the prior value before
-        // returning.
-        let prior = std::env::var("BARNSTORMER_AUTH_TOKEN").ok();
-        unsafe { std::env::set_var("BARNSTORMER_AUTH_TOKEN", "leaked-token") };
+        let _auth_env = EnvGuard::set("BARNSTORMER_AUTH_TOKEN", Some("leaked-token"));
 
         let config = RuntimeConfig::from_parts(RuntimeOptions {
             home: Some(PathBuf::from("/tmp/barnstormer-test")),
@@ -163,11 +189,6 @@ mod tests {
         })
         .unwrap();
 
-        match prior {
-            Some(value) => unsafe { std::env::set_var("BARNSTORMER_AUTH_TOKEN", value) },
-            None => unsafe { std::env::remove_var("BARNSTORMER_AUTH_TOKEN") },
-        }
-
         assert!(
             config.auth_token.is_none(),
             "expected auth disabled when fallback is off"
@@ -178,10 +199,7 @@ mod tests {
     fn config_reads_bind_from_env_var_when_options_bind_is_none() {
         let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
 
-        // SAFETY: ENV_LOCK serializes against any other env-mutating test in
-        // this crate; this test restores the prior value before returning.
-        let prior = std::env::var("BARNSTORMER_BIND").ok();
-        unsafe { std::env::set_var("BARNSTORMER_BIND", "0.0.0.0:7331") };
+        let _bind_env = EnvGuard::set("BARNSTORMER_BIND", Some("0.0.0.0:7331"));
 
         let config = RuntimeConfig::from_parts(RuntimeOptions {
             home: Some(PathBuf::from("/tmp/barnstormer-test")),
@@ -192,11 +210,6 @@ mod tests {
             disable_auth_fallback: true,
         });
 
-        match prior {
-            Some(value) => unsafe { std::env::set_var("BARNSTORMER_BIND", value) },
-            None => unsafe { std::env::remove_var("BARNSTORMER_BIND") },
-        }
-
         let config = config.expect("BARNSTORMER_BIND=0.0.0.0:7331 should parse");
         assert_eq!(config.bind.ip().to_string(), "0.0.0.0");
         assert_eq!(config.bind.port(), 7331);
@@ -206,10 +219,7 @@ mod tests {
     fn config_returns_error_when_bind_env_var_is_invalid() {
         let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
 
-        // SAFETY: ENV_LOCK serializes against any other env-mutating test in
-        // this crate; this test restores the prior value before returning.
-        let prior = std::env::var("BARNSTORMER_BIND").ok();
-        unsafe { std::env::set_var("BARNSTORMER_BIND", "not-a-socket") };
+        let _bind_env = EnvGuard::set("BARNSTORMER_BIND", Some("not-a-socket"));
 
         let result = RuntimeConfig::from_parts(RuntimeOptions {
             home: Some(PathBuf::from("/tmp/barnstormer-test")),
@@ -220,30 +230,12 @@ mod tests {
             disable_auth_fallback: true,
         });
 
-        match prior {
-            Some(value) => unsafe { std::env::set_var("BARNSTORMER_BIND", value) },
-            None => unsafe { std::env::remove_var("BARNSTORMER_BIND") },
-        }
-
         let err = result.expect_err("expected parse error for invalid bind value");
         let err_msg = err.to_string();
         assert!(
             err_msg.contains("BARNSTORMER_BIND is not a valid socket address"),
             "expected clear error message, got: {err_msg}"
         );
-    }
-
-    fn with_token_budget_env(value: Option<&str>, test: impl FnOnce()) {
-        let prior = std::env::var("BARNSTORMER_TOKEN_BUDGET").ok();
-        match value {
-            Some(value) => unsafe { std::env::set_var("BARNSTORMER_TOKEN_BUDGET", value) },
-            None => unsafe { std::env::remove_var("BARNSTORMER_TOKEN_BUDGET") },
-        }
-        test();
-        match prior {
-            Some(value) => unsafe { std::env::set_var("BARNSTORMER_TOKEN_BUDGET", value) },
-            None => unsafe { std::env::remove_var("BARNSTORMER_TOKEN_BUDGET") },
-        }
     }
 
     fn token_budget_config() -> RuntimeOptions {
@@ -260,41 +252,37 @@ mod tests {
     #[test]
     fn token_budget_defaults_to_two_million() {
         let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
-        with_token_budget_env(None, || {
-            let config = RuntimeConfig::from_parts(token_budget_config()).unwrap();
-            assert_eq!(config.token_budget, Some(2_000_000));
-        });
+        let _budget_env = EnvGuard::set("BARNSTORMER_TOKEN_BUDGET", None);
+        let config = RuntimeConfig::from_parts(token_budget_config()).unwrap();
+        assert_eq!(config.token_budget, Some(2_000_000));
     }
 
     #[test]
     fn token_budget_honors_numeric_value() {
         let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
-        with_token_budget_env(Some("123456"), || {
-            let config = RuntimeConfig::from_parts(token_budget_config()).unwrap();
-            assert_eq!(config.token_budget, Some(123_456));
-        });
+        let _budget_env = EnvGuard::set("BARNSTORMER_TOKEN_BUDGET", Some("123456"));
+        let config = RuntimeConfig::from_parts(token_budget_config()).unwrap();
+        assert_eq!(config.token_budget, Some(123_456));
     }
 
     #[test]
     fn zero_token_budget_is_unlimited() {
         let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
-        with_token_budget_env(Some("0"), || {
-            let config = RuntimeConfig::from_parts(token_budget_config()).unwrap();
-            assert_eq!(config.token_budget, None);
-        });
+        let _budget_env = EnvGuard::set("BARNSTORMER_TOKEN_BUDGET", Some("0"));
+        let config = RuntimeConfig::from_parts(token_budget_config()).unwrap();
+        assert_eq!(config.token_budget, None);
     }
 
     #[test]
     fn invalid_token_budget_returns_startup_error() {
         let _env_guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
         for value in ["not-a-number", "-1"] {
-            with_token_budget_env(Some(value), || {
-                let error = RuntimeConfig::from_parts(token_budget_config()).unwrap_err();
-                assert!(
-                    error.to_string().contains("BARNSTORMER_TOKEN_BUDGET"),
-                    "expected token budget error, got: {error}"
-                );
-            });
+            let _budget_env = EnvGuard::set("BARNSTORMER_TOKEN_BUDGET", Some(value));
+            let error = RuntimeConfig::from_parts(token_budget_config()).unwrap_err();
+            assert!(
+                error.to_string().contains("BARNSTORMER_TOKEN_BUDGET"),
+                "expected token budget error, got: {error}"
+            );
         }
     }
 }
