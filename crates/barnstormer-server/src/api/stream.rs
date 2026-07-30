@@ -56,7 +56,9 @@ fn event_stream_from_receiver(
     })
 }
 
-/// GET /api/specs/{id}/events/stream - SSE endpoint for real-time event streaming.
+/// GET /web/specs/{id}/events/stream - SSE endpoint for real-time event streaming.
+/// Lives under /web/* (not /api/*) because browsers' EventSource API can't
+/// attach an Authorization header.
 pub async fn event_stream(
     State(state): State<SharedState>,
     Path(id): Path<String>,

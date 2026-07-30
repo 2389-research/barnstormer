@@ -162,13 +162,17 @@ Export via the web UI (`/web/specs/{id}/export/markdown|yaml|dot`) or the API.
 | `GET` | `/api/specs/{id}/state` | Get full spec state |
 | `POST` | `/api/specs/{id}/commands` | Submit commands |
 | `POST` | `/api/specs/{id}/undo` | Undo last command |
-| `GET` | `/api/specs/{id}/events/stream` | SSE event stream |
+| `GET` | `/web/specs/{id}/events/stream` | SSE event stream |
 
-When `BARNSTORMER_AUTH_TOKEN` is set, API routes require `Authorization: Bearer <token>`.
+When `BARNSTORMER_AUTH_TOKEN` is set, `/api/*` routes require `Authorization: Bearer <token>`. The SSE endpoint lives under `/web/*` because browsers' `EventSource` API cannot attach an Authorization header; remote browser access is gated by the cookie auth described below.
+
+### Remote browser access
+
+When the server is reachable from another host (`BARNSTORMER_BIND=0.0.0.0:7331` with `BARNSTORMER_ALLOW_REMOTE=true`) and `BARNSTORMER_AUTH_TOKEN` is set, `/web/*` is gated by a session cookie. To log in, visit `http://<host>:7331/?token=<your-token>` once. The server responds with `303 See Other` and `Set-Cookie: barnstormer_session=...; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000` (30 days). Subsequent visits to any `/web/*` URL pass through automatically; the cookie also travels on same-origin SSE connections. The Tauri desktop wrapper runs loopback-only without a token, so it is unaffected.
 
 ### SSE Events
 
-Subscribe to `/api/specs/{id}/events/stream` for real-time updates:
+Subscribe to `/web/specs/{id}/events/stream` for real-time updates:
 
 `spec_created`, `spec_core_updated`, `card_created`, `card_updated`, `card_moved`, `card_deleted`, `transcript_appended`, `question_asked`, `question_answered`, `agent_step_started`, `agent_step_finished`, `undo_applied`, `snapshot_written`
 

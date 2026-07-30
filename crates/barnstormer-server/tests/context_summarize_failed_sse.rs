@@ -80,7 +80,7 @@ async fn mark_summarize_failed_emits_named_sse_event() {
     // is registered in time to receive the event.
     let stream_req = Request::builder()
         .method("GET")
-        .uri(format!("/api/specs/{}/events/stream", ctx.spec_id))
+        .uri(format!("/web/specs/{}/events/stream", ctx.spec_id))
         .body(Body::empty())
         .unwrap();
     let stream_resp = ctx

@@ -9,7 +9,7 @@ use tower_http::services::ServeDir;
 
 use crate::api;
 use crate::app_state::SharedState;
-use crate::auth::AuthLayer;
+use crate::auth::{AuthLayer, WebAuthLayer};
 use crate::web;
 
 /// Build the complete Axum router with all routes and shared state.
@@ -38,11 +38,15 @@ pub fn create_router_with_static_dir(
             "/api/specs/{id}/commands",
             post(api::commands::submit_command),
         )
+        .route("/api/specs/{id}/undo", post(api::commands::undo))
+        // SSE event stream lives under /web/* because browsers' EventSource API
+        // can't attach an Authorization header. The auth model already exempts
+        // /web/* (which serves the same rendered chat content); locking that
+        // down is a separate change and will cover this endpoint too.
         .route(
-            "/api/specs/{id}/events/stream",
+            "/web/specs/{id}/events/stream",
             get(api::stream::event_stream),
         )
-        .route("/api/specs/{id}/undo", post(api::commands::undo))
         // Web UI routes (HTML)
         .route("/", get(web::index))
         .route(
@@ -124,7 +128,9 @@ pub fn create_router_with_static_dir(
         .with_state(state);
 
     if let Some(token) = auth_token {
-        router.layer(AuthLayer::new(token))
+        router
+            .layer(AuthLayer::new(token.clone()))
+            .layer(WebAuthLayer::new(token))
     } else {
         router
     }
@@ -252,5 +258,102 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn web_route_requires_cookie_when_token_provided() {
+        let app = create_router(test_state(), Some("secret-token".to_string()));
+        let resp = app
+            .oneshot(Request::get("/web/specs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            http::StatusCode::UNAUTHORIZED,
+            "/web/* should require cookie when auth_token configured"
+        );
+    }
+
+    #[tokio::test]
+    async fn web_route_accepts_valid_cookie_when_token_provided() {
+        let app = create_router(test_state(), Some("secret-token".to_string()));
+        let resp = app
+            .oneshot(
+                Request::get("/web/specs")
+                    .header("cookie", "barnstormer_session=secret-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(
+            resp.status(),
+            http::StatusCode::UNAUTHORIZED,
+            "valid cookie should bypass WebAuthLayer (actual handler may 200 or something else)"
+        );
+    }
+
+    #[tokio::test]
+    async fn web_route_open_when_no_token_configured() {
+        let app = create_router(test_state(), None);
+        let resp = app
+            .oneshot(Request::get("/web/specs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_ne!(
+            resp.status(),
+            http::StatusCode::UNAUTHORIZED,
+            "/web/* should be open without auth_token"
+        );
+    }
+
+    #[tokio::test]
+    async fn static_assets_open_when_token_provided() {
+        let app = create_router(test_state(), Some("secret-token".to_string()));
+        // The /static service serves from a real directory; missing files yield
+        // 404 (open), the point is the layer doesn't 401 them.
+        let resp = app
+            .oneshot(
+                Request::get("/static/style.css")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(
+            resp.status(),
+            http::StatusCode::UNAUTHORIZED,
+            "/static/* must stay open"
+        );
+    }
+
+    #[tokio::test]
+    async fn health_open_when_token_provided() {
+        let app = create_router(test_state(), Some("secret-token".to_string()));
+        let resp = app
+            .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn web_route_magic_token_sets_cookie_and_redirects() {
+        let app = create_router(test_state(), Some("secret-token".to_string()));
+        let resp = app
+            .oneshot(
+                Request::get("/?token=secret-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), http::StatusCode::SEE_OTHER);
+        let set_cookie = resp.headers().get("set-cookie").unwrap().to_str().unwrap();
+        assert!(
+            set_cookie.starts_with("barnstormer_session=secret-token"),
+            "set-cookie should start with barnstormer_session=secret-token, got: {}",
+            set_cookie
+        );
     }
 }
