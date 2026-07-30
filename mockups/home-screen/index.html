@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>barnstormer — Home screen mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg-primary:hsl(40,20%,97%); --bg-secondary:hsl(30,12%,93%); --bg-surface:#fff; --bg-card:#fff;
+  --text-primary:hsl(20,14%,12%); --text-secondary:hsl(20,10%,30%); --text-muted:hsl(20,6%,52%);
+  --accent:hsl(30,12%,91%); --accent-hover:hsl(30,12%,85%);
+  --border:hsl(30,10%,90%); --border-subtle:hsl(30,10%,93%);
+  --success:hsl(162,30%,48%); --warning:hsl(38,50%,55%); --danger:hsl(0,60%,50%);
+  --purple:hsl(250,30%,55%);
+  --nav-width:240px; --radius:8px; --radius-lg:12px; --radius-xl:16px;
+  --font-display:'DM Serif Display',Georgia,serif; --font-body:'DM Sans',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;font-family:var(--font-body);background:var(--bg-primary);color:var(--text-primary);font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased}
+.app-layout{display:grid;grid-template-columns:var(--nav-width) 1fr;height:100vh;overflow:hidden}
+
+/* ---------- nav rail ---------- */
+.nav-rail{background:var(--bg-card);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+.rail-header{padding:18px 18px 10px;font-family:var(--font-display);font-size:19px}
+.rail-section-label{padding:14px 18px 6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);font-weight:600}
+.spec-list{flex:1;overflow-y:auto;padding:0 8px}
+.spec-item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:var(--radius);cursor:pointer;color:var(--text-secondary)}
+.spec-item:hover{background:var(--bg-secondary)}
+.spec-item.active{background:var(--bg-secondary);color:var(--text-primary);font-weight:500}
+.spec-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13.5px}
+.dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.dot.needs{background:var(--warning);box-shadow:0 0 0 3px hsl(38,50%,55%,.18)}
+.dot.cooking{background:var(--purple);position:relative}
+.dot.cooking::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:1.5px solid var(--purple);opacity:.35;animation:pulse 1.6s ease-out infinite}
+@keyframes pulse{0%{transform:scale(.8);opacity:.5}100%{transform:scale(1.5);opacity:0}}
+.dot.done{background:var(--success)}
+.rail-footer{padding:12px;border-top:1px solid var(--border)}
+.new-spec-btn{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;padding:10px;border:1px dashed var(--border);background:transparent;border-radius:var(--radius);color:var(--text-secondary);font-family:var(--font-body);font-size:13.5px;cursor:pointer}
+.new-spec-btn:hover{border-color:var(--text-muted);background:var(--bg-secondary)}
+.provider{padding:10px 18px;border-top:1px solid var(--border);font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:8px}
+.provider .dot{width:7px;height:7px;background:var(--success)}
+
+/* ---------- workspace / launchpad ---------- */
+.workspace{overflow-y:auto;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px}
+.launchpad{width:100%;max-width:680px;display:flex;flex-direction:column;align-items:center}
+.greeting{font-family:var(--font-display);font-size:34px;line-height:1.2;text-align:center;margin-bottom:6px}
+.subgreeting{color:var(--text-muted);text-align:center;margin-bottom:28px;font-size:15px}
+
+.composer{width:100%;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-xl);box-shadow:0 1px 3px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.04);transition:border-color .15s,box-shadow .15s}
+.composer.drag{border-color:var(--purple);box-shadow:0 0 0 3px hsl(250,30%,55%,.15)}
+.composer-chips{display:flex;flex-wrap:wrap;gap:8px;padding:14px 16px 0}
+.chip{display:flex;align-items:center;gap:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:6px 8px 6px 10px;font-size:12.5px;max-width:240px}
+.chip .ico{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;flex-shrink:0}
+.ico.img{background:var(--purple)} .ico.pdf{background:var(--danger)} .ico.code{background:var(--text-primary)} .ico.drive{background:#1a73e8}
+.chip .meta{display:flex;flex-direction:column;line-height:1.2;overflow:hidden}
+.chip .fname{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip .fsub{color:var(--text-muted);font-size:11px}
+.chip .x{margin-left:2px;color:var(--text-muted);cursor:pointer;font-size:15px;line-height:1;padding:2px}
+.chip .x:hover{color:var(--danger)}
+.chip .src{font-size:10px;color:var(--text-muted)}
+textarea{width:100%;border:none;outline:none;resize:none;background:transparent;font-family:var(--font-body);font-size:16px;color:var(--text-primary);padding:16px 18px 4px;min-height:96px}
+textarea::placeholder{color:var(--text-muted)}
+.composer-bar{display:flex;align-items:center;gap:6px;padding:10px 12px 12px}
+.attach-btn{display:flex;align-items:center;gap:7px;border:1px solid var(--border);background:var(--bg-surface);border-radius:999px;padding:7px 12px;font-size:13px;color:var(--text-secondary);cursor:pointer;font-family:var(--font-body)}
+.attach-btn:hover{background:var(--bg-secondary);border-color:var(--text-muted)}
+.attach-btn svg{width:15px;height:15px}
+.drive-btn{border-color:hsl(214,82%,51%,.4)}
+.drive-btn:hover{background:hsl(214,82%,51%,.06)}
+.spacer{flex:1}
+.send-btn{display:flex;align-items:center;gap:8px;background:var(--text-primary);color:var(--bg-surface);border:none;border-radius:999px;padding:9px 18px;font-size:14px;font-weight:500;cursor:pointer;font-family:var(--font-body)}
+.send-btn:hover{opacity:.9}
+.send-btn svg{width:15px;height:15px}
+.hint{margin-top:14px;color:var(--text-muted);font-size:12.5px;text-align:center}
+.hint b{color:var(--text-secondary);font-weight:500}
+
+/* annotations */
+.note{position:fixed;background:hsl(38,50%,55%,.95);color:#fff;font-size:11.5px;font-weight:500;padding:5px 9px;border-radius:6px;max-width:200px;box-shadow:0 2px 8px rgba(0,0,0,.2);z-index:99;pointer-events:none}
+.note::after{content:"";position:absolute;border:6px solid transparent}
+.toggle-notes{position:fixed;top:14px;right:16px;z-index:100;background:var(--text-primary);color:#fff;border:none;border-radius:999px;padding:8px 14px;font-size:12.5px;font-family:var(--font-body);cursor:pointer}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<button class="toggle-notes" onclick="document.body.classList.toggle('show-notes')">Toggle design notes</button>
+
+<div class="app-layout">
+  <!-- LEFT RAIL: where existing specs live (home has no recent strip, per decision).
+       Status dots in the rail carry Justin's cooking/needs-you/done glance. -->
+  <nav class="nav-rail">
+    <div class="rail-header">barnstormer</div>
+
+    <div class="rail-section-label">Needs you</div>
+    <div class="spec-list">
+      <div class="spec-item"><span class="dot needs"></span><span class="spec-name">Letterboxd Checker</span></div>
+      <div class="spec-item"><span class="dot needs"></span><span class="spec-name">Invoice Bot</span></div>
+
+      <div class="rail-section-label" style="padding-left:10px">Cooking</div>
+      <div class="spec-item"><span class="dot cooking"></span><span class="spec-name">Portfolio Site</span></div>
+      <div class="spec-item"><span class="dot cooking"></span><span class="spec-name">Resume Tailor</span></div>
+      <div class="spec-item"><span class="dot cooking"></span><span class="spec-name">Taste Profile API</span></div>
+
+      <div class="rail-section-label" style="padding-left:10px">Done</div>
+      <div class="spec-item"><span class="dot done"></span><span class="spec-name">Meeting Summarizer</span></div>
+      <div class="spec-item"><span class="dot done"></span><span class="spec-name">Slack Digest Bot</span></div>
+    </div>
+
+    <div class="provider"><span class="dot"></span>Anthropic · connected</div>
+    <div class="rail-footer">
+      <button class="new-spec-btn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        New spec
+      </button>
+    </div>
+  </nav>
+
+  <!-- WORKSPACE = the new home screen: a launchpad composer, full-bleed -->
+  <div class="workspace">
+    <div class="launchpad">
+      <h1 class="greeting">What do you want to spec out?</h1>
+      <p class="subgreeting">Describe your idea. Drop in any files, code, or docs you want the agents to read.</p>
+
+      <div class="composer" id="composer">
+        <!-- attached files appear as chips, Claude-style -->
+        <div class="composer-chips">
+          <div class="chip">
+            <span class="ico img">PNG</span>
+            <span class="meta"><span class="fname">wireframe-v2.png</span><span class="fsub">image · 240 KB</span></span>
+            <span class="x">&times;</span>
+          </div>
+          <div class="chip">
+            <span class="ico code">RS</span>
+            <span class="meta"><span class="fname">scraper.rs</span><span class="fsub">code · 8 KB</span></span>
+            <span class="x">&times;</span>
+          </div>
+          <div class="chip">
+            <span class="ico drive">▴</span>
+            <span class="meta"><span class="fname">Product Brief.gdoc</span><span class="fsub src">from Google Drive</span></span>
+            <span class="x">&times;</span>
+          </div>
+        </div>
+
+        <textarea placeholder="e.g. A weekly digest that checks which of my Letterboxd watchlist films just hit Netflix UK…"></textarea>
+
+        <div class="composer-bar">
+          <button class="attach-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            Attach
+          </button>
+          <button class="attach-btn drive-btn">
+            <svg viewBox="0 0 24 24"><path fill="#1a73e8" d="M7.7 3.5 1.2 14.8l3.3 5.7 6.5-11.3z"/><path fill="#0f9d58" d="m22.8 14.8-6.5-11.3H9.3l6.5 11.3z"/><path fill="#ffcd40" d="m4.5 20.5 3.2-5.7h13l-3.2 5.7z"/></svg>
+            Google Drive
+          </button>
+          <div class="spacer"></div>
+          <button class="send-btn">
+            Start Building
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <p class="hint">Drag &amp; drop files anywhere · paste screenshots · <b>code, markdown, images, PDFs, Google Drive</b> all welcome</p>
+    </div>
+  </div>
+</div>
+
+<!-- ===== design-note annotations (toggle on/off) ===== -->
+<div class="note" id="n1">Rail groups specs by status — <b>Needs you / Cooking / Done</b>. Pulsing dot = agents working. This is where Justin's glanceable status lives.</div>
+<div class="note" id="n2">Attached files show as removable chips — same as Claude. Type badge + source ("from Google Drive").</div>
+<div class="note" id="n3">Attach is <b>in the composer</b>, not a separate tab. Google Drive sits right beside local upload.</div>
+<div class="note" id="n4">The whole composer is a drop zone, paste target, and accepts multiple files.</div>
+
+<script>
+const notes={n1:['.nav-rail','right'],n2:['.composer-chips','right'],n3:['.drive-btn','below'],n4:['.hint','above']};
+function place(){
+  for(const id in notes){
+    const [sel,pos]=notes[id]; const el=document.querySelector(sel); const n=document.getElementById(id);
+    if(!el)continue; const r=el.getBoundingClientRect();
+    if(pos==='right'){n.style.left=(r.right+14)+'px';n.style.top=(r.top+8)+'px';}
+    if(pos==='below'){n.style.left=(r.left)+'px';n.style.top=(r.bottom+10)+'px';}
+    if(pos==='above'){n.style.left=(r.left+r.width/2-100)+'px';n.style.top=(r.top-70)+'px';}
+  }
+}
+document.body.classList.add('show-notes');
+function sync(){document.querySelectorAll('.note').forEach(n=>n.style.display=document.body.classList.contains('show-notes')?'block':'none');place();}
+new MutationObserver(sync).observe(document.body,{attributes:true,attributeFilter:['class']});
+window.addEventListener('resize',place);window.addEventListener('scroll',place,true);
+sync();
+</script>
+</body>
+</html>

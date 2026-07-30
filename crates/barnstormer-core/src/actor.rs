@@ -465,6 +465,34 @@ impl SpecActor {
                 vec![EventPayload::ContextRemoved { attachment_id }]
             }
 
+            Command::PinSpec => {
+                if state.core.is_none() {
+                    return Err(ActorError::SpecNotCreated);
+                }
+                vec![EventPayload::SpecPinned]
+            }
+
+            Command::UnpinSpec => {
+                if state.core.is_none() {
+                    return Err(ActorError::SpecNotCreated);
+                }
+                vec![EventPayload::SpecUnpinned]
+            }
+
+            Command::ArchiveSpec => {
+                if state.core.is_none() {
+                    return Err(ActorError::SpecNotCreated);
+                }
+                vec![EventPayload::SpecArchived]
+            }
+
+            Command::UnarchiveSpec => {
+                if state.core.is_none() {
+                    return Err(ActorError::SpecNotCreated);
+                }
+                vec![EventPayload::SpecUnarchived]
+            }
+
             Command::StreamDelta { agent_id, text } => {
                 vec![EventPayload::StreamingDelta { agent_id, text }]
             }
@@ -605,6 +633,56 @@ mod tests {
 
         let state = handle.read_state().await;
         assert_eq!(state.cards.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn actor_pins_and_unpins_spec() {
+        let spec_id = Ulid::new();
+        let handle = spawn(spec_id, SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "Spec".to_string(),
+                one_liner: "One".to_string(),
+                goal: "Goal".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let events = handle.send_command(Command::PinSpec).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].payload, EventPayload::SpecPinned));
+        assert!(handle.read_state().await.core.as_ref().unwrap().pinned);
+
+        let events = handle.send_command(Command::UnpinSpec).await.unwrap();
+        assert!(matches!(events[0].payload, EventPayload::SpecUnpinned));
+        assert!(!handle.read_state().await.core.as_ref().unwrap().pinned);
+    }
+
+    #[tokio::test]
+    async fn actor_rejects_pin_before_spec_created() {
+        let handle = spawn(Ulid::new(), SpecState::new());
+        assert!(handle.send_command(Command::PinSpec).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn actor_archives_and_unarchives_spec() {
+        let handle = spawn(Ulid::new(), SpecState::new());
+        handle
+            .send_command(Command::CreateSpec {
+                title: "S".to_string(),
+                one_liner: "o".to_string(),
+                goal: "g".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let events = handle.send_command(Command::ArchiveSpec).await.unwrap();
+        assert!(matches!(events[0].payload, EventPayload::SpecArchived));
+        assert!(handle.read_state().await.core.as_ref().unwrap().archived);
+
+        let events = handle.send_command(Command::UnarchiveSpec).await.unwrap();
+        assert!(matches!(events[0].payload, EventPayload::SpecUnarchived));
+        assert!(!handle.read_state().await.core.as_ref().unwrap().archived);
     }
 
     #[tokio::test]

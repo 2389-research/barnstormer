@@ -65,51 +65,280 @@ async fn read_field_capped(
     }
 }
 
-/// Index page showing the spec list and welcome message.
+/// Index page: the spec-list rail plus the launchpad composer in the workspace.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "index.html")]
-pub struct IndexTemplate {}
+pub struct IndexTemplate {
+    pub drive: Option<crate::app_state::DriveConfig>,
+}
 
-/// GET / - Render the main index page.
-pub async fn index() -> IndexTemplate {
-    IndexTemplate {}
+/// GET / - Render the home screen (launchpad).
+pub async fn index(State(state): State<SharedState>) -> IndexTemplate {
+    IndexTemplate {
+        drive: state.drive.clone(),
+    }
 }
 
 /// Partial: list of specs for the left rail.
 #[derive(Template, AskamaIntoResponse)]
 #[template(path = "partials/spec_list.html")]
 pub struct SpecListTemplate {
-    pub specs: Vec<SpecSummary>,
+    pub pinned: Vec<SpecSummary>,
+    pub recent: Vec<SpecSummary>,
 }
 
-/// GET /web/specs - Return the spec list as an HTML partial.
+/// GET /web/specs - Return the spec list as an HTML partial, grouped into
+/// pinned and recent (both newest-first), archived specs excluded.
 pub async fn spec_list(State(state): State<SharedState>) -> impl IntoResponse {
     let actors = state.actors.read().await;
-    let mut specs = Vec::new();
+    let mut all = Vec::new();
 
     for (spec_id, handle) in actors.iter() {
         let spec_state = handle.read_state().await;
         if let Some(ref core) = spec_state.core {
+            if core.archived {
+                continue; // archived specs live under Settings → Archive
+            }
+            all.push(SpecSummary {
+                spec_id: spec_id.to_string(),
+                title: core.title.clone(),
+                one_liner: core.one_liner.clone(),
+                updated_at: core.updated_at.to_rfc3339(),
+                pinned: core.pinned,
+            });
+        }
+    }
+
+    all.sort_by(|a, b| b.updated_at.cmp(&a.updated_at)); // newest first
+    let (pinned, recent): (Vec<_>, Vec<_>) = all.into_iter().partition(|s| s.pinned);
+    SpecListTemplate { pinned, recent }
+}
+
+/// POST /web/specs/{id}/pin — pin a spec to the top of the rail.
+pub async fn pin_spec(State(state): State<SharedState>, Path(id): Path<String>) -> Response {
+    set_pin(state, id, true).await
+}
+
+/// POST /web/specs/{id}/unpin — remove the pin.
+pub async fn unpin_spec(State(state): State<SharedState>, Path(id): Path<String>) -> Response {
+    set_pin(state, id, false).await
+}
+
+/// Shared pin/unpin body. Sends the command (persistence is handled downstream
+/// of `send_command`, same as `transition_phase`) and re-renders the rail so
+/// HTMX can swap `#spec-list`.
+async fn set_pin(state: SharedState, id: String, pin: bool) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    let cmd = if pin {
+        Command::PinSpec
+    } else {
+        Command::UnpinSpec
+    };
+    {
+        let actors = state.actors.read().await;
+        let Some(handle) = actors.get(&spec_id) else {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        };
+        if let Err(e) = handle.send_command(cmd).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(format!("<p class=\"error-msg\">Error: {}</p>", e)),
+            )
+                .into_response();
+        }
+    }
+    spec_list(State(state)).await.into_response()
+}
+
+/// Form body for renaming a spec.
+#[derive(Deserialize)]
+pub struct RenameForm {
+    pub title: String,
+}
+
+/// POST /web/specs/{id}/rename — rename a spec via `UpdateSpecCore` (title only).
+/// Re-renders `#spec-list` so HTMX swaps the rail with the new title.
+pub async fn rename_spec(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    Form(form): Form<RenameForm>,
+) -> Response {
+    let title = form.title.trim().to_string();
+    if title.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Html("<p class=\"error-msg\">Title can't be empty.</p>".to_string()),
+        )
+            .into_response();
+    }
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    {
+        let actors = state.actors.read().await;
+        let Some(handle) = actors.get(&spec_id) else {
+            return (
+                StatusCode::NOT_FOUND,
+                Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+            )
+                .into_response();
+        };
+        let cmd = Command::UpdateSpecCore {
+            title: Some(title),
+            one_liner: None,
+            goal: None,
+            description: None,
+            constraints: None,
+            success_criteria: None,
+            risks: None,
+            notes: None,
+        };
+        if let Err(e) = handle.send_command(cmd).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(format!("<p class=\"error-msg\">Error: {}</p>", e)),
+            )
+                .into_response();
+        }
+    }
+    spec_list(State(state)).await.into_response()
+}
+
+/// Inline rename form swapped into a single rail row.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/spec_list_row_edit.html")]
+pub struct SpecRowEditTemplate {
+    pub spec_id: String,
+    pub title: String,
+}
+
+/// GET /web/specs/{id}/rename-form — replace a rail row with an inline edit form.
+pub async fn rename_form(State(state): State<SharedState>, Path(id): Path<String>) -> Response {
+    let spec_id = match parse_spec_id(&id) {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    let actors = state.actors.read().await;
+    let Some(handle) = actors.get(&spec_id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+        )
+            .into_response();
+    };
+    let guard = handle.read_state().await;
+    let Some(core) = guard.core.as_ref() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+        )
+            .into_response();
+    };
+    SpecRowEditTemplate {
+        spec_id: id,
+        title: core.title.clone(),
+    }
+    .into_response()
+}
+
+/// Send an archive/unarchive command to a spec actor. Returns `Err(Response)`
+/// for the bad-id / not-found / actor-error paths; the read lock is released
+/// when this function returns, before the caller re-renders.
+async fn send_archive_cmd(state: &SharedState, id: &str, archive: bool) -> Result<(), Response> {
+    let spec_id = match parse_spec_id(id) {
+        Ok(id) => id,
+        Err(resp) => return Err(*resp),
+    };
+    let actors = state.actors.read().await;
+    let Some(handle) = actors.get(&spec_id) else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Html("<p class=\"error-msg\">Spec not found.</p>".to_string()),
+        )
+            .into_response());
+    };
+    let cmd = if archive {
+        Command::ArchiveSpec
+    } else {
+        Command::UnarchiveSpec
+    };
+    if let Err(e) = handle.send_command(cmd).await {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(format!("<p class=\"error-msg\">Error: {}</p>", e)),
+        )
+            .into_response());
+    }
+    Ok(())
+}
+
+/// POST /web/specs/{id}/archive — hide a spec from the rail; re-render `#spec-list`.
+pub async fn archive_spec(State(state): State<SharedState>, Path(id): Path<String>) -> Response {
+    if let Err(resp) = send_archive_cmd(&state, &id, true).await {
+        return resp;
+    }
+    spec_list(State(state)).await.into_response()
+}
+
+/// POST /web/specs/{id}/unarchive — restore a spec; re-render the archive view.
+pub async fn unarchive_spec(State(state): State<SharedState>, Path(id): Path<String>) -> Response {
+    if let Err(resp) = send_archive_cmd(&state, &id, false).await {
+        return resp;
+    }
+    archive_view(State(state)).await.into_response()
+}
+
+/// Settings → Archive view: archived specs only, newest first.
+#[derive(Template, AskamaIntoResponse)]
+#[template(path = "partials/archive_list.html")]
+pub struct ArchiveListTemplate {
+    pub specs: Vec<SpecSummary>,
+}
+
+/// GET /web/settings/archive — render the archive view into `#workspace`.
+pub async fn archive_view(State(state): State<SharedState>) -> impl IntoResponse {
+    let actors = state.actors.read().await;
+    let mut specs = Vec::new();
+    for (spec_id, handle) in actors.iter() {
+        let spec_state = handle.read_state().await;
+        if let Some(ref core) = spec_state.core {
+            if !core.archived {
+                continue;
+            }
             specs.push(SpecSummary {
                 spec_id: spec_id.to_string(),
                 title: core.title.clone(),
                 one_liner: core.one_liner.clone(),
                 updated_at: core.updated_at.to_rfc3339(),
+                pinned: core.pinned,
             });
         }
     }
-
-    SpecListTemplate { specs }
+    specs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    ArchiveListTemplate { specs }
 }
 
-/// Partial: create spec form.
+/// Partial: the launchpad composer — used as the home screen (`/`) and as the
+/// "New spec" target so both entry points are one canonical surface.
 #[derive(Template, AskamaIntoResponse)]
-#[template(path = "partials/create_spec_form.html")]
-pub struct CreateSpecFormTemplate {}
+#[template(path = "partials/launchpad.html")]
+pub struct LaunchpadTemplate {
+    pub drive: Option<crate::app_state::DriveConfig>,
+}
 
-/// GET /web/specs/new - Render the create spec form.
-pub async fn create_spec_form() -> CreateSpecFormTemplate {
-    CreateSpecFormTemplate {}
+/// GET /web/specs/new - Render the launchpad composer.
+pub async fn create_spec_form(State(state): State<SharedState>) -> LaunchpadTemplate {
+    LaunchpadTemplate {
+        drive: state.drive.clone(),
+    }
 }
 
 /// Extract a placeholder title from free-text description.
@@ -499,6 +728,11 @@ pub async fn create_spec(
         SpecPhase::Refining => "refining".to_string(),
         SpecPhase::Complete => "complete".to_string(),
     };
+    let has_sidebar_content = !spec_state.cards.is_empty()
+        || spec_state
+            .context_attachments
+            .iter()
+            .any(|a| !a.removed);
 
     let mut response = SpecViewTemplate {
         spec_id: spec_id_str.clone(),
@@ -507,6 +741,7 @@ pub async fn create_spec(
         goal: core.goal.clone(),
         phase,
         lanes,
+        has_sidebar_content,
     }
     .into_response();
 
@@ -613,7 +848,7 @@ impl CardData {
             lane: card.lane.clone(),
             order: card.order,
             created_by: card.created_by.clone(),
-            updated_at: card.updated_at.format("%H:%M:%S").to_string(),
+            updated_at: card.updated_at.format("%H:%M").to_string(),
         }
     }
 }
@@ -634,6 +869,9 @@ pub struct SpecViewTemplate {
     pub goal: String,
     pub phase: String,
     pub lanes: Vec<LaneData>,
+    /// True when the spec has at least one card or live context attachment.
+    /// Drives whether the brainstorming sidebar shows or stays hidden.
+    pub has_sidebar_content: bool,
 }
 
 impl SpecViewTemplate {
@@ -668,6 +906,8 @@ pub struct SpecPageTemplate {
     pub goal: String,
     pub phase: String,
     pub lanes: Vec<LaneData>,
+    /// See `SpecViewTemplate::has_sidebar_content`.
+    pub has_sidebar_content: bool,
 }
 
 impl SpecPageTemplate {
@@ -736,6 +976,11 @@ pub async fn spec_view(
         SpecPhase::Refining => "refining".to_string(),
         SpecPhase::Complete => "complete".to_string(),
     };
+    let has_sidebar_content = !spec_state.cards.is_empty()
+        || spec_state
+            .context_attachments
+            .iter()
+            .any(|a| !a.removed);
 
     if is_htmx {
         SpecViewTemplate {
@@ -745,6 +990,7 @@ pub async fn spec_view(
             goal: core.goal.clone(),
             phase,
             lanes,
+            has_sidebar_content,
         }
         .into_response()
     } else {
@@ -755,6 +1001,7 @@ pub async fn spec_view(
             goal: core.goal.clone(),
             phase,
             lanes,
+            has_sidebar_content,
         }
         .into_response()
     }
@@ -1282,7 +1529,7 @@ fn to_transcript_entry(m: &barnstormer_core::TranscriptMessage) -> TranscriptEnt
         role_class,
         content: m.content.clone(),
         content_html,
-        timestamp: m.timestamp.format("%H:%M:%S").to_string(),
+        timestamp: m.timestamp.format("%H:%M").to_string(),
         repeat_count: 1,
     }
 }
@@ -2571,7 +2818,6 @@ struct ContextPanelItem {
     /// Number of non-removed cards whose `source_attachment_id` points at this
     /// attachment. Rendered in the collapsed header so the user can see at a
     /// glance how much of an attachment the Manager has synthesized.
-    card_count: usize,
     /// Coarse classification of the attachment for per-kind preview rendering
     /// and badge coloring in the template.
     kind: AttachmentKind,
@@ -2612,11 +2858,6 @@ async fn render_context_panel_for(state: &SharedState, spec_id: Ulid) -> Respons
         .iter()
         .filter(|a| !a.removed)
         .map(|a| {
-            let card_count = spec_state
-                .cards
-                .values()
-                .filter(|c| c.source_attachment_id == Some(a.attachment_id))
-                .count();
             ContextPanelItem {
                 attachment_id: a.attachment_id.to_string(),
                 filename: a.filename.clone(),
@@ -2631,7 +2872,6 @@ async fn render_context_panel_for(state: &SharedState, spec_id: Ulid) -> Respons
                 summary_html: a.summary.as_deref().map(render_markdown),
                 summary_error: a.summary_error.clone(),
                 user_notes: a.user_notes.clone(),
-                card_count,
                 kind: AttachmentKind::from_mime(&a.mime_type),
                 mime_type: a.mime_type.clone(),
                 raw_url: format!("/web/specs/{}/context/{}/raw", spec_id, a.attachment_id),
@@ -2764,26 +3004,24 @@ pub async fn upload_context(
             .into_response();
     }
 
-    // Extract first `file` part. Streamed-and-capped so a request can't
-    // buffer up to the configured global body cap before we reject it.
-    let mut file_bytes: Option<Vec<u8>> = None;
-    let mut filename: Option<String> = None;
+    // Collect every `file` part. Streamed-and-capped per field so a request
+    // can't buffer up to the configured global body cap before we reject it.
+    let mut raw_files: Vec<(String, Vec<u8>)> = Vec::new();
     loop {
         match multipart.next_field().await {
             Ok(Some(mut field)) => {
                 if field.name() == Some("file") {
-                    filename = field.file_name().map(str::to_string);
+                    let fname = field
+                        .file_name()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| "file".to_string());
                     // Browser-claimed content type is intentionally ignored;
                     // the server sniffs the bytes below.
-                    let bytes = match read_field_capped(&mut field).await {
-                        Ok(Some(b)) => b,
-                        Ok(None) => {
-                            return (StatusCode::BAD_REQUEST, "empty file part").into_response();
-                        }
+                    match read_field_capped(&mut field).await {
+                        Ok(Some(b)) => raw_files.push((fname, b)),
+                        Ok(None) => continue, // skip empty parts
                         Err(resp) => return resp,
-                    };
-                    file_bytes = Some(bytes);
-                    break;
+                    }
                 }
             }
             Ok(None) => break,
@@ -2797,122 +3035,134 @@ pub async fn upload_context(
         }
     }
 
-    let Some(bytes) = file_bytes else {
+    if raw_files.is_empty() {
         return (StatusCode::BAD_REQUEST, "missing file part").into_response();
-    };
+    }
 
-    // Sniff MIME from bytes. Browser-supplied content-type is not trusted —
-    // a client can claim anything, but we serve, summarize, and gate on what
-    // the bytes actually are.
-    let detected_mime = match crate::context_storage::sniff_mime(
-        &bytes,
-        filename.as_deref().unwrap_or("file"),
-    ) {
-        Some(m) => m,
-        None => {
+    // Validate the whole batch up front (sniff + whitelist) so one bad file
+    // rejects the request before anything is written to disk or attached.
+    // Browser-supplied content-type is not trusted — we gate on the bytes.
+    let mut prepared: Vec<(String, String, Vec<u8>)> = Vec::new(); // (sanitized_name, mime, bytes)
+    for (fname, bytes) in raw_files {
+        let detected_mime = match crate::context_storage::sniff_mime(&bytes, &fname) {
+            Some(m) => m,
+            None => {
+                return (
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    format!("couldn't identify file type for '{fname}' — uploads must be a recognized image, document, audio, video, or UTF-8 text file"),
+                )
+                    .into_response();
+            }
+        };
+        if !crate::context_storage::is_whitelisted_mime(&detected_mime) {
             return (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "couldn't identify file type — uploads must be a recognized image, document, audio, video, or UTF-8 text file",
+                format!("file type '{detected_mime}' ('{fname}') is not supported"),
             )
                 .into_response();
         }
-    };
-    if !crate::context_storage::is_whitelisted_mime(&detected_mime) {
-        return (
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            format!("file type '{detected_mime}' is not supported"),
-        )
-            .into_response();
+        prepared.push((
+            crate::context_storage::sanitize_filename(&fname),
+            detected_mime,
+            bytes,
+        ));
     }
 
-    let filename = crate::context_storage::sanitize_filename(filename.as_deref().unwrap_or("file"));
-    let attachment_id = Ulid::new();
+    // Write + attach + summarize each prepared file.
+    for (filename, detected_mime, bytes) in prepared {
+        let attachment_id = Ulid::new();
 
-    let path = crate::context_storage::attachment_path(
-        &state.barnstormer_home,
-        spec_id,
-        attachment_id,
-        &filename,
-    );
-    if let Err(e) = crate::context_storage::write_bytes(&path, &bytes) {
-        tracing::error!("failed to write attachment: {e}");
-        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
-    }
+        let path = crate::context_storage::attachment_path(
+            &state.barnstormer_home,
+            spec_id,
+            attachment_id,
+            &filename,
+        );
+        if let Err(e) = crate::context_storage::write_bytes(&path, &bytes) {
+            tracing::error!("failed to write attachment: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+        }
 
-    // SVG-specific: rasterize and cache alongside the original. Failure
-    // degrades to markup-only summarization; the original SVG is still on
-    // disk and the upload still lands.
-    if detected_mime == "image/svg+xml"
-        && let Ok(markup) = std::str::from_utf8(&bytes)
-    {
-        match crate::svg_raster::rasterize_svg(markup) {
-            Ok(png) => {
-                let raster_path = crate::context_storage::attachment_dir(
-                    &state.barnstormer_home,
-                    spec_id,
-                    attachment_id,
-                )
-                .join("rasterized.png");
-                if let Err(e) = crate::context_storage::write_bytes(&raster_path, &png) {
-                    tracing::warn!("failed to cache rasterized SVG: {e}");
+        // SVG-specific: rasterize and cache alongside the original. Failure
+        // degrades to markup-only summarization; the original SVG is still on
+        // disk and the upload still lands.
+        if detected_mime == "image/svg+xml"
+            && let Ok(markup) = std::str::from_utf8(&bytes)
+        {
+            match crate::svg_raster::rasterize_svg(markup) {
+                Ok(png) => {
+                    let raster_path = crate::context_storage::attachment_dir(
+                        &state.barnstormer_home,
+                        spec_id,
+                        attachment_id,
+                    )
+                    .join("rasterized.png");
+                    if let Err(e) = crate::context_storage::write_bytes(&raster_path, &png) {
+                        tracing::warn!("failed to cache rasterized SVG: {e}");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("SVG rasterization failed for {filename}: {e}");
                 }
             }
-            Err(e) => {
-                tracing::warn!("SVG rasterization failed for {filename}: {e}");
+        }
+
+        let size_bytes = bytes.len() as u64;
+        let cmd = Command::AttachContext {
+            attachment_id,
+            filename: filename.clone(),
+            mime_type: detected_mime.clone(),
+            size_bytes,
+        };
+        if let Err(e) = handle.send_command(cmd).await {
+            // Bytes already on disk — without the event referencing them they'd
+            // leak and the filesystem would drift from actor state. Best-effort
+            // cleanup of the whole attachment dir (also drops SVG's
+            // `rasterized.png` sibling instead of leaving it orphaned).
+            let dir = crate::context_storage::attachment_dir(
+                &state.barnstormer_home,
+                spec_id,
+                attachment_id,
+            );
+            if let Err(remove_err) = std::fs::remove_dir_all(&dir) {
+                tracing::warn!("failed to clean up orphaned context dir {dir:?}: {remove_err}");
             }
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("command failed: {e}"),
+            )
+                .into_response();
         }
-    }
 
-    let size_bytes = bytes.len() as u64;
-    let cmd = Command::AttachContext {
-        attachment_id,
-        filename: filename.clone(),
-        mime_type: detected_mime.clone(),
-        size_bytes,
-    };
-    if let Err(e) = handle.send_command(cmd).await {
-        // Bytes already on disk — without the event referencing them they'd
-        // leak and the filesystem would drift from actor state. Best-effort
-        // cleanup (failure is logged but doesn't block the error response).
-        // Remove the whole attachment dir so we also drop SVG's
-        // `rasterized.png` sibling instead of leaving it orphaned.
-        let dir =
-            crate::context_storage::attachment_dir(&state.barnstormer_home, spec_id, attachment_id);
-        if let Err(remove_err) = std::fs::remove_dir_all(&dir) {
-            tracing::warn!("failed to clean up orphaned context dir {dir:?}: {remove_err}");
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("command failed: {e}"),
-        )
-            .into_response();
-    }
-
-    // Build per-kind SummarizerInput from disk and dispatch — fire-and-forget.
-    // Summary will land via SSE when done. Notes aren't available at upload
-    // time; they're populated later via PATCH.
-    let attachment_opt = handle
-        .read_state()
-        .await
-        .context_attachments
-        .iter()
-        .find(|a| a.attachment_id == attachment_id)
-        .cloned();
-    if let Some(att) = attachment_opt {
-        match crate::context_storage::build_summarizer_input(&state.barnstormer_home, spec_id, &att)
+        // Build per-kind SummarizerInput from disk and dispatch — fire-and-forget.
+        // Summary lands via SSE when done. Notes aren't available at upload time.
+        let attachment_opt = handle
+            .read_state()
             .await
-        {
-            Ok(input) => {
-                crate::summarizer::spawn_summarize(
-                    handle.clone(),
-                    attachment_id,
-                    filename.clone(),
-                    None,
-                    input,
-                );
-            }
-            Err(e) => {
-                tracing::warn!("could not build summarizer input for {attachment_id}: {e}");
+            .context_attachments
+            .iter()
+            .find(|a| a.attachment_id == attachment_id)
+            .cloned();
+        if let Some(att) = attachment_opt {
+            match crate::context_storage::build_summarizer_input(
+                &state.barnstormer_home,
+                spec_id,
+                &att,
+            )
+            .await
+            {
+                Ok(input) => {
+                    crate::summarizer::spawn_summarize(
+                        handle.clone(),
+                        attachment_id,
+                        filename.clone(),
+                        None,
+                        input,
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("could not build summarizer input for {attachment_id}: {e}");
+                }
             }
         }
     }
@@ -3803,15 +4053,20 @@ mod tests {
 
     #[test]
     fn index_template_renders() {
-        let tmpl = IndexTemplate {};
+        let tmpl = IndexTemplate { drive: None };
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("barnstormer"));
-        assert!(rendered.contains("Select a spec"));
+        // Home is now the launchpad composer, not a "Select a spec" welcome.
+        assert!(rendered.contains("What do you want to spec out?"));
+        assert!(rendered.contains("hx-post=\"/web/specs\""));
     }
 
     #[test]
     fn spec_list_template_renders_empty() {
-        let tmpl = SpecListTemplate { specs: vec![] };
+        let tmpl = SpecListTemplate {
+            pinned: vec![],
+            recent: vec![],
+        };
         let rendered = tmpl.render().unwrap();
         assert!(rendered.contains("No specs yet"));
     }
@@ -3819,25 +4074,60 @@ mod tests {
     #[test]
     fn spec_list_template_renders_with_specs() {
         let tmpl = SpecListTemplate {
-            specs: vec![SpecSummary {
+            pinned: vec![SpecSummary {
+                spec_id: "01HPIN".to_string(),
+                title: "Pinned Spec".to_string(),
+                one_liner: "stays on top".to_string(),
+                updated_at: "2025-01-02T00:00:00Z".to_string(),
+                pinned: true,
+            }],
+            recent: vec![SpecSummary {
                 spec_id: "01HTEST".to_string(),
                 title: "My Spec".to_string(),
                 one_liner: "A test spec".to_string(),
                 updated_at: "2025-01-01T00:00:00Z".to_string(),
+                pinned: false,
             }],
         };
         let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("Pinned"));
+        assert!(rendered.contains("Recent"));
+        assert!(rendered.contains("Pinned Spec"));
         assert!(rendered.contains("My Spec"));
         assert!(rendered.contains("A test spec"));
+        // ⋯ menu actions present
+        assert!(rendered.contains("/rename-form"));
+        assert!(rendered.contains("/archive"));
     }
 
     #[test]
-    fn create_spec_form_template_renders() {
-        let tmpl = CreateSpecFormTemplate {};
+    fn launchpad_template_renders() {
+        let tmpl = LaunchpadTemplate { drive: None };
         let rendered = tmpl.render().unwrap();
-        assert!(rendered.contains("description"));
-        assert!(rendered.contains("What do you want to build?"));
+        // Drive button hidden when unconfigured.
+        assert!(!rendered.contains("data-drive-picker"));
+        // The composer posts to /web/specs with a description + multi-file input.
+        assert!(rendered.contains("name=\"description\""));
+        assert!(rendered.contains("hx-post=\"/web/specs\""));
+        assert!(rendered.contains("name=\"files\""));
+        assert!(rendered.contains("multiple"));
+        assert!(rendered.contains("What do you want to spec out?"));
         assert!(rendered.contains("Start Building"));
+    }
+
+    #[test]
+    fn launchpad_shows_drive_button_when_configured() {
+        let tmpl = LaunchpadTemplate {
+            drive: Some(crate::app_state::DriveConfig {
+                client_id: "cid.apps.googleusercontent.com".to_string(),
+                api_key: "AIzaTEST".to_string(),
+            }),
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(rendered.contains("data-drive-picker"), "Drive button shows when configured");
+        assert!(rendered.contains("cid.apps.googleusercontent.com"));
+        assert!(rendered.contains("AIzaTEST"));
+        assert!(rendered.contains("Google Drive"));
     }
 
     #[test]
@@ -4111,6 +4401,24 @@ mod tests {
     /// rendered HTML — otherwise Chromium refuses to submit the Yes/No buttons because
     /// the hidden textarea fails form validation ("invalid form control is not focusable").
     /// The onclick handler is responsible for setting `required=true` when the textarea
+    #[test]
+    fn chat_transcript_binds_streaming_listeners_once() {
+        // Regression: the streaming-delta listener must be guarded so it binds
+        // only once per compositor — otherwise repeated renders stack listeners
+        // and each delta is appended N times ("I'll readI'll read…").
+        let tmpl = ChatTranscriptTemplate {
+            spec_id: "01HTEST".to_string(),
+            container_id: "chat-transcript".to_string(),
+            transcript: vec![],
+            pending_question: None,
+        };
+        let rendered = tmpl.render().unwrap();
+        assert!(
+            rendered.contains("streamingBound"),
+            "streaming listeners must be bound once per compositor (dedup guard)"
+        );
+    }
+
     /// becomes visible.
     #[test]
     fn chat_transcript_boolean_question_textarea_is_not_required_initially() {
@@ -4402,6 +4710,7 @@ mod tests {
             goal: "Test goal".to_string(),
             phase: "refining".to_string(),
             lanes: vec![],
+            has_sidebar_content: true,
         };
         let rendered = tmpl.render().unwrap();
         // Command bar with title and subtitle
@@ -4490,6 +4799,7 @@ mod tests {
                 goal: "g".to_string(),
                 phase: phase.to_string(),
                 lanes: vec![],
+                has_sidebar_content: true,
             };
             let rendered = tmpl.render().unwrap();
 
@@ -4515,6 +4825,36 @@ mod tests {
     }
 
     #[test]
+    fn spec_view_hides_sidebar_when_no_cards_or_context() {
+        fn make(has: bool) -> SpecViewTemplate {
+            SpecViewTemplate {
+                spec_id: "01HTEST".to_string(),
+                title: "T".to_string(),
+                one_liner: "o".to_string(),
+                goal: "g".to_string(),
+                phase: "brainstorming".to_string(),
+                lanes: vec![],
+                has_sidebar_content: has,
+            }
+        }
+        // Match the class attribute specifically — the JS reveal handler also
+        // mentions the string "sidebar-empty", so a bare substring check is loose.
+        let empty = make(false).render().unwrap();
+        assert!(
+            empty.contains("spec-body sidebar-empty"),
+            "an empty brainstorm should carry the sidebar-empty class"
+        );
+        // Markup stays present so SSE subscriptions remain live and can reveal it.
+        assert!(empty.contains("brainstorm-sidebar"));
+
+        let full = make(true).render().unwrap();
+        assert!(
+            !full.contains("spec-body sidebar-empty"),
+            "with cards/context the sidebar-empty class must be absent"
+        );
+    }
+
+    #[test]
     fn spec_view_brainstorming_wires_context_sse_via_hx_trigger() {
         // The context rail must rely on the declarative `hx-trigger="sse:..."` pattern
         // (which htmx-ext-sse 2.2.2 actually supports) rather than a JS listener on
@@ -4526,6 +4866,7 @@ mod tests {
             goal: "Think big".to_string(),
             phase: "brainstorming".to_string(),
             lanes: vec![],
+            has_sidebar_content: true,
         };
         let rendered = tmpl.render().unwrap();
         assert!(
@@ -4539,9 +4880,9 @@ mod tests {
     }
 
     #[test]
-    fn context_panel_shows_in_context_badge_when_summary_present() {
-        // An attachment that has a summary should render the "in context" pill —
-        // signalling to the user that it's been included in the agent's prompt.
+    fn context_panel_summarized_file_shows_no_status_badge() {
+        // A summarized, in-context file is the quiet default: no status badge.
+        // (The old "in context" pill was removed — it stated the obvious.)
         let tmpl = ContextPanelTemplate {
             spec_id: "01HTEST".to_string(),
             attachments: vec![ContextPanelItem {
@@ -4557,27 +4898,21 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
         assert!(
-            rendered.contains("in context"),
-            "summary present should show 'in context' pill"
-        );
-        // The hover hint must use the shared .tooltip component rather than a
-        // native `title=` attribute, so it renders as a styled popover.
-        assert!(
-            rendered.contains(r#"class="has-tooltip""#),
-            "in-context pill must be wrapped in .has-tooltip"
+            !rendered.contains("in context"),
+            "summarized file should not show an 'in context' badge"
         );
         assert!(
-            rendered.contains(r#"class="tooltip context-pill-tooltip""#),
-            "in-context hint must use the .tooltip component"
+            !rendered.contains("badge-plan"),
+            "no status pill for the default summarized state"
         );
+        // It should still offer a clean × to remove the file.
         assert!(
-            rendered.contains("Included in agent context"),
-            "tooltip text must be present"
+            rendered.contains("context-card-x"),
+            "card should have a clean × remove control"
         );
     }
 
@@ -4599,7 +4934,6 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -4632,7 +4966,6 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -4672,7 +5005,6 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -4684,10 +5016,10 @@ mod tests {
     }
 
     #[test]
-    fn context_panel_delete_button_is_outside_summary() {
-        // The delete button should live in the expanded section so clicking it
-        // doesn't toggle the card. Concretely: the `hx-delete` attribute must
-        // appear AFTER the closing `</summary>` tag.
+    fn context_panel_delete_x_lives_in_summary_with_stoppropagation() {
+        // The clean × remove now lives in the header (<summary>) like the upload
+        // chips. Because clicking inside a <summary> would toggle the card, the
+        // button must stop propagation so it removes without expanding/collapsing.
         let tmpl = ContextPanelTemplate {
             spec_id: "01HTEST".to_string(),
             attachments: vec![ContextPanelItem {
@@ -4703,7 +5035,6 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -4714,46 +5045,21 @@ mod tests {
             .find("</summary>")
             .expect("should have </summary> tag");
         assert!(
-            delete_idx > summary_close_idx,
-            "delete button (hx-delete) must appear after </summary>, got delete at {} vs </summary> at {}",
+            delete_idx < summary_close_idx,
+            "the × delete must live inside <summary> now, got delete at {} vs </summary> at {}",
             delete_idx,
             summary_close_idx,
         );
-    }
-
-    #[test]
-    fn context_panel_shows_card_count_when_cards_sourced() {
-        // When the Manager has synthesized cards from an attachment, the
-        // collapsed header should show a small count so the user can see
-        // at a glance how much of a file has been processed.
-        let tmpl = ContextPanelTemplate {
-            spec_id: "01HTEST".to_string(),
-            attachments: vec![ContextPanelItem {
-                attachment_id: "01HATT".to_string(),
-                filename: "vibes.md".to_string(),
-                extension: "md".to_string(),
-                size_display: "2 KB".to_string(),
-                added_display: "12:34".to_string(),
-                summary: Some("design vibes".to_string()),
-                summary_html: Some("<p>design vibes</p>\n".to_string()),
-                user_notes: None,
-                summary_error: None,
-                kind: AttachmentKind::Text,
-                mime_type: "text/plain".to_string(),
-                raw_url: "/raw".to_string(),
-                card_count: 3,
-            }],
-        };
-        let rendered = tmpl.render().unwrap();
         assert!(
-            rendered.contains("3 cards"),
-            "panel should show card count when > 0, got: {rendered}"
+            rendered.contains("event.stopPropagation()"),
+            "the × must stop propagation so it doesn't toggle the <details>"
         );
     }
 
     #[test]
-    fn context_panel_pluralizes_single_card_count() {
-        // Singular form when exactly one card references the attachment.
+    fn context_panel_no_longer_shows_card_count_or_synthesis_hints() {
+        // The "N cards" count and the "Not yet synthesized" hint were removed —
+        // they leaned on jargon (what's a "card"?) for little value on the card face.
         let tmpl = ContextPanelTemplate {
             spec_id: "01HTEST".to_string(),
             attachments: vec![ContextPanelItem {
@@ -4769,43 +5075,16 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 1,
             }],
         };
         let rendered = tmpl.render().unwrap();
         assert!(
-            rendered.contains("1 card") && !rendered.contains("1 cards"),
-            "panel should use singular 'card' for count of 1, got: {rendered}"
+            !rendered.contains("3 cards") && !rendered.contains("card-count"),
+            "card count must not appear on the card face, got: {rendered}"
         );
-    }
-
-    #[test]
-    fn context_panel_shows_not_yet_synthesized_when_summarized_but_no_cards() {
-        // An attachment that has a summary but hasn't been ingested yet should
-        // display a subtle hint so the user knows the Manager is expected to
-        // process it.
-        let tmpl = ContextPanelTemplate {
-            spec_id: "01HTEST".to_string(),
-            attachments: vec![ContextPanelItem {
-                attachment_id: "01HATT".to_string(),
-                filename: "vibes.md".to_string(),
-                extension: "md".to_string(),
-                size_display: "2 KB".to_string(),
-                added_display: "12:34".to_string(),
-                summary: Some("design vibes".to_string()),
-                summary_html: Some("<p>design vibes</p>\n".to_string()),
-                user_notes: None,
-                summary_error: None,
-                kind: AttachmentKind::Text,
-                mime_type: "text/plain".to_string(),
-                raw_url: "/raw".to_string(),
-                card_count: 0,
-            }],
-        };
-        let rendered = tmpl.render().unwrap();
         assert!(
-            rendered.contains("Not yet synthesized"),
-            "panel should show 'Not yet synthesized' when summary is Some and card_count is 0"
+            !rendered.contains("Not yet synthesized"),
+            "the 'Not yet synthesized' hint must be gone"
         );
     }
 
@@ -4827,7 +5106,6 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -4856,7 +5134,6 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 2,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -4885,7 +5162,6 @@ mod tests {
                 kind: AttachmentKind::Text,
                 mime_type: "text/plain".to_string(),
                 raw_url: "/raw".to_string(),
-                card_count: 0,
             }],
         };
         let rendered = tmpl.render().unwrap();
@@ -4948,7 +5224,6 @@ mod tests {
                 summary_html: Some("<p>a diagram</p>\n".to_string()),
                 summary_error: None,
                 user_notes: None,
-                card_count: 0,
                 kind: AttachmentKind::ImageRaster,
                 mime_type: "image/png".to_string(),
                 raw_url: "/web/specs/01HSPEC/context/01HATT/raw".to_string(),
@@ -4988,7 +5263,6 @@ mod tests {
                 summary_html: Some("a brief draft".to_string()),
                 summary_error: None,
                 user_notes: None,
-                card_count: 0,
                 kind: AttachmentKind::Pdf,
                 mime_type: "application/pdf".to_string(),
                 raw_url: format!("/web/specs/01HSPEC/context/{}/raw", att_id),
@@ -5033,7 +5307,6 @@ mod tests {
                 summary_html: Some("<p>a voice memo</p>\n".to_string()),
                 summary_error: None,
                 user_notes: None,
-                card_count: 0,
                 kind: AttachmentKind::Audio,
                 mime_type: "audio/mpeg".to_string(),
                 raw_url: "/web/specs/01HSPEC/context/01HATT/raw".to_string(),
@@ -5052,8 +5325,35 @@ mod tests {
     }
 
     #[test]
-    fn context_panel_resummarize_button_targets_correct_endpoint() {
-        let tmpl = ContextPanelTemplate {
+    fn context_panel_retry_appears_only_on_failure_and_targets_resummarize() {
+        // Resummarize is no longer on the happy path — a failed summary shows a
+        // single "Retry" that POSTs to the resummarize endpoint.
+        let failed = ContextPanelTemplate {
+            spec_id: "01HSPEC".to_string(),
+            attachments: vec![ContextPanelItem {
+                attachment_id: "01HATT".to_string(),
+                filename: "notes.md".to_string(),
+                extension: "md".to_string(),
+                size_display: "1 KB".to_string(),
+                added_display: "12:00".to_string(),
+                summary: None,
+                summary_html: None,
+                summary_error: Some("model timed out".to_string()),
+                user_notes: None,
+                kind: AttachmentKind::Text,
+                mime_type: "text/markdown".to_string(),
+                raw_url: "/raw".to_string(),
+            }],
+        };
+        let rendered = failed.render().unwrap();
+        assert!(
+            rendered.contains(r#"hx-post="/web/specs/01HSPEC/context/01HATT/resummarize""#),
+            "failed state must offer Retry -> resummarize endpoint"
+        );
+        assert!(rendered.contains(">Retry<"), "failure button label must be 'Retry'");
+
+        // Happy path (summary present, no error) shows NO retry/resummarize.
+        let ok = ContextPanelTemplate {
             spec_id: "01HSPEC".to_string(),
             attachments: vec![ContextPanelItem {
                 attachment_id: "01HATT".to_string(),
@@ -5065,20 +5365,15 @@ mod tests {
                 summary_html: Some("<p>a summary</p>\n".to_string()),
                 summary_error: None,
                 user_notes: None,
-                card_count: 0,
                 kind: AttachmentKind::Text,
                 mime_type: "text/markdown".to_string(),
                 raw_url: "/raw".to_string(),
             }],
         };
-        let rendered = tmpl.render().unwrap();
+        let ok_rendered = ok.render().unwrap();
         assert!(
-            rendered.contains(r#"hx-post="/web/specs/01HSPEC/context/01HATT/resummarize""#),
-            "Resummarize button must POST to the resummarize endpoint"
-        );
-        assert!(
-            rendered.contains(">Resummarize<"),
-            "button label must be 'Resummarize'"
+            !ok_rendered.contains("/resummarize"),
+            "summarized file must not show a Retry/Resummarize control"
         );
     }
 
@@ -5099,7 +5394,6 @@ mod tests {
                 summary_html: None,
                 summary_error: Some("provider rejected payload".to_string()),
                 user_notes: None,
-                card_count: 0,
                 kind: AttachmentKind::Text,
                 mime_type: "application/octet-stream".to_string(),
                 raw_url: "/raw".to_string(),
@@ -5141,7 +5435,6 @@ mod tests {
                 summary_html: Some("<p>the original summary</p>\n".to_string()),
                 summary_error: Some("transient LLM error".to_string()),
                 user_notes: None,
-                card_count: 0,
                 kind: AttachmentKind::Text,
                 mime_type: "text/markdown".to_string(),
                 raw_url: "/raw".to_string(),

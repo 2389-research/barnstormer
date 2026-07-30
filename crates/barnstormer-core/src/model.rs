@@ -19,6 +19,14 @@ pub struct SpecCore {
     pub notes: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Whether the spec is pinned to the top of the rail. `#[serde(default)]`
+    /// so snapshots written before this field existed still deserialize.
+    #[serde(default)]
+    pub pinned: bool,
+    /// Whether the spec is archived (hidden from the rail, shown under
+    /// Settings → Archive). `#[serde(default)]` so old snapshots load.
+    #[serde(default)]
+    pub archived: bool,
 }
 
 impl SpecCore {
@@ -38,6 +46,8 @@ impl SpecCore {
             notes: None,
             created_at: now,
             updated_at: now,
+            pinned: false,
+            archived: false,
         }
     }
 }
@@ -45,6 +55,21 @@ impl SpecCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spec_core_defaults_pinned_false_on_deserialize() {
+        // Older snapshots written before `pinned` existed must still load.
+        let json = r#"{
+            "spec_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "title":"t","one_liner":"o","goal":"g",
+            "description":null,"constraints":null,"success_criteria":null,
+            "risks":null,"notes":null,
+            "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"
+        }"#;
+        let core: SpecCore = serde_json::from_str(json).unwrap();
+        assert!(!core.pinned);
+        assert!(!core.archived);
+    }
 
     #[test]
     fn spec_new_sets_required_fields() {

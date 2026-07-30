@@ -77,6 +77,13 @@ pub fn create_router_with_static_dir(
         )
         .route("/web/specs/{id}/phase", post(web::transition_phase))
         .route("/web/specs/{id}/phase-check", get(web::phase_check))
+        .route("/web/specs/{id}/pin", post(web::pin_spec))
+        .route("/web/specs/{id}/unpin", post(web::unpin_spec))
+        .route("/web/specs/{id}/rename", post(web::rename_spec))
+        .route("/web/specs/{id}/rename-form", get(web::rename_form))
+        .route("/web/specs/{id}/archive", post(web::archive_spec))
+        .route("/web/specs/{id}/unarchive", post(web::unarchive_spec))
+        .route("/web/settings/archive", get(web::archive_view))
         .route("/web/specs/{id}/cards-feed", get(web::cards_feed))
         .route(
             "/web/specs/{id}/context",

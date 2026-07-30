@@ -349,7 +349,11 @@ impl SqliteIndex {
                 }
             }
 
-            // Other event types don't affect the index
+            // Other event types don't affect the index. Note: SpecPinned/
+            // SpecUnpinned intentionally fall here — the index has no `pinned`
+            // column and rail ordering is served from in-memory actors, not the
+            // index. If a future change reads `pinned` or ordering from the
+            // index, add an arm here to bump `updated_at` on pin/unpin.
             _ => {}
         }
 

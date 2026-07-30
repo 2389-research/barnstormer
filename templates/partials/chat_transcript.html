@@ -64,7 +64,13 @@
 
         var compositor = document.querySelector('.spec-compositor');
         var throbberId = '{{ container_id }}-throbber';
-        if (compositor) {
+        // Bind streaming/throbber listeners exactly ONCE per compositor. This
+        // script can run multiple times within one compositor lifetime (e.g. the
+        // chat panel re-renders); without this guard each render stacks another
+        // sse:streaming_delta listener, so every delta is appended N times —
+        // the "I'll readI'll read the current state" doubling bug.
+        if (compositor && !compositor.dataset.streamingBound) {
+            compositor.dataset.streamingBound = '1';
             compositor.addEventListener('sse:agent_step_started', function() {
                 var th = document.getElementById(throbberId);
                 if (th) { th.style.display = ''; }

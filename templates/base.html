@@ -35,11 +35,16 @@
     <script>
         // Close mobile nav drawer when a link or button inside it is clicked
         document.querySelector('.nav-rail').addEventListener('click', function(e) {
+            // Keep the drawer open while using a row's ⋯ menu — its items are
+            // <button>s, and closing would slide the open menu away mid-action.
+            if (e.target.closest('.spec-menu-wrap')) return;
             if (e.target.closest('a') || e.target.closest('button')) {
                 document.querySelector('.app-layout').classList.remove('nav-open');
             }
         });
     </script>
+    <script src="/static/composer.js"></script>
+    <script src="/static/drive-picker.js"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

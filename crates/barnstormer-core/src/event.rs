@@ -113,6 +113,10 @@ pub enum EventPayload {
     ContextRemoved {
         attachment_id: Ulid,
     },
+    SpecPinned,
+    SpecUnpinned,
+    SpecArchived,
+    SpecUnarchived,
 }
 
 impl EventPayload {

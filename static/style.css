@@ -245,18 +245,6 @@ html, body {
     gap: 12px;
     flex-shrink: 0;
 }
-/* Title tooltip — left-aligned, shown when hovering the title */
-.command-bar-tooltip {
-    left: 20px;
-    top: calc(100% + 4px);
-}
-.command-bar-tooltip::before {
-    left: 20px;
-}
-.command-bar-left:hover ~ .command-bar-tooltip {
-    display: block;
-}
-
 /* --- View toggles (capsule) --- */
 .view-toggles-capsule {
     display: flex;
@@ -490,15 +478,38 @@ html, body {
 }
 
 .spec-list-item {
+    position: relative;
     display: flex;
-    flex-direction: column;
-    padding: 12px;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px 6px 12px;
     border-radius: var(--radius-xl);
-    cursor: pointer;
-    text-decoration: none;
-    color: var(--text-primary);
     transition: all 0.15s ease;
     margin-bottom: 4px;
+}
+
+.spec-row-link {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+    text-decoration: none;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.spec-text {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+}
+
+.pin-ico {
+    display: flex;
+    flex-shrink: 0;
+    color: var(--text-muted);
 }
 
 .spec-list-item:hover {
@@ -532,6 +543,340 @@ html, body {
     opacity: 0.6;
 }
 
+/* --- Rail group labels (Pinned / Recent) --- */
+.rail-group-label {
+    padding: 8px 12px 4px;
+    font-size: 10.5px;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+/* --- Rail row ⋯ menu --- */
+.spec-menu-wrap {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.spec-menu-wrap > summary {
+    list-style: none;
+}
+
+.spec-menu-wrap > summary::-webkit-details-marker {
+    display: none;
+}
+
+.kebab {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    color: var(--text-muted);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+
+.spec-list-item:hover .kebab,
+.spec-menu-wrap[open] .kebab,
+.kebab:focus-visible {
+    opacity: 1;
+}
+
+.kebab:hover {
+    background: var(--accent);
+    color: var(--text-primary);
+}
+
+.spec-menu {
+    position: absolute;
+    top: 30px;
+    right: 0;
+    z-index: 30;
+    min-width: 150px;
+    padding: 5px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+}
+
+.menu-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    background: none;
+    border-radius: 7px;
+    font-family: var(--font-body);
+    font-size: 13px;
+    color: var(--text-primary);
+    cursor: pointer;
+    text-align: left;
+}
+
+.menu-item:hover {
+    background: var(--bg-secondary);
+}
+
+.menu-sep {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--border-subtle);
+}
+
+/* --- Inline rename --- */
+.rename-form {
+    width: 100%;
+}
+
+.rename-input {
+    width: 100%;
+    padding: 7px 10px;
+    border: 1px solid var(--accent-hover);
+    border-radius: var(--radius);
+    font-family: var(--font-body);
+    font-size: 14px;
+    color: var(--text-primary);
+    background: var(--bg-surface);
+}
+
+.rename-input:focus {
+    outline: none;
+    border-color: var(--text-muted);
+}
+
+/* --- Launchpad (home screen composer) --- */
+.launchpad {
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+}
+
+.launchpad-greeting {
+    font-family: var(--font-display);
+    font-size: clamp(26px, 4vw, 34px);
+    line-height: 1.15;
+    text-align: center;
+    margin-bottom: 6px;
+}
+
+.launchpad-sub {
+    color: var(--text-muted);
+    text-align: center;
+    margin-bottom: 26px;
+    font-size: 15px;
+    max-width: 52ch;
+}
+
+.composer {
+    width: 100%;
+    max-width: 680px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.04);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.composer.drag {
+    border-color: var(--badge-planner);
+    box-shadow: 0 0 0 3px hsla(250, 30%, 55%, 0.15);
+}
+
+.composer-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 14px 16px 0;
+}
+
+.composer-chips:empty {
+    display: none;
+}
+
+.composer textarea {
+    width: 100%;
+    border: none;
+    outline: none;
+    resize: none;
+    background: transparent;
+    font-family: var(--font-body);
+    font-size: 16px;
+    color: var(--text-primary);
+    padding: 16px 18px 4px;
+}
+
+.composer textarea::placeholder {
+    color: var(--text-muted);
+}
+
+.composer-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 12px 12px;
+    flex-wrap: wrap;
+}
+
+.attach-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.attach-btn:hover {
+    background: var(--bg-secondary);
+    border-color: var(--text-muted);
+}
+
+.composer-spacer {
+    flex: 1;
+    min-width: 8px;
+}
+
+.send-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--text-primary);
+    color: var(--bg-surface);
+    border: none;
+    border-radius: 999px;
+    padding: 9px 18px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: var(--font-body);
+}
+
+.send-btn:hover {
+    opacity: 0.9;
+}
+
+.launchpad-hint {
+    margin-top: 14px;
+    color: var(--text-muted);
+    font-size: 12.5px;
+    text-align: center;
+}
+
+.launchpad-hint b {
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+/* --- Composer file chips --- */
+.chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px 8px 6px 10px;
+    font-size: 12.5px;
+    max-width: 240px;
+}
+
+.chip-ic {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+    text-transform: uppercase;
+}
+
+.chip-ic-img { background: var(--badge-planner); }
+.chip-ic-pdf { background: var(--danger); }
+.chip-ic-code { background: var(--text-primary); }
+.chip-ic-note { background: var(--text-muted); }
+
+.chip-meta {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+    overflow: hidden;
+}
+
+.chip-name {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chip-sub {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.chip-x {
+    margin-left: 2px;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+    padding: 2px;
+}
+
+.chip-x:hover {
+    color: var(--danger);
+}
+
+/* Context panel drop highlight */
+#context-panel.drag {
+    outline: 2px dashed var(--badge-planner);
+    outline-offset: -6px;
+}
+
+/* Clean × remove on a context card head */
+.context-card-x {
+    margin-left: 4px;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 4px;
+    flex-shrink: 0;
+}
+
+.context-card-x:hover {
+    color: var(--danger);
+}
+
+/* Brainstorming: hide the Cards/Context sidebar until there's something in it.
+   The markup stays in the DOM (so SSE subscriptions stay live); JS removes
+   .sidebar-empty when the first card/context arrives. */
+.spec-body.sidebar-empty .sidebar-tabs {
+    display: none;
+}
+
 /* --- New spec button --- */
 .new-spec-btn {
     display: flex;
@@ -552,6 +897,95 @@ html, body {
 
 .new-spec-btn:hover {
     background: var(--accent);
+}
+
+/* --- Rail settings / archive entry --- */
+.rail-settings-btn {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 8px;
+    border-radius: var(--radius-xl);
+    background: transparent;
+    padding: 8px 12px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-muted);
+    border: none;
+    cursor: pointer;
+    font-family: var(--font-body);
+    transition: all 0.15s ease;
+}
+
+.rail-settings-btn:hover {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+/* --- Settings → Archive view --- */
+.archive-view {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: var(--spacing-xl) var(--spacing-lg);
+}
+
+.archive-header h1 {
+    font-family: var(--font-display);
+    font-size: 28px;
+    margin-bottom: 4px;
+}
+
+.archive-sub {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin-bottom: var(--spacing-lg);
+}
+
+.archive-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.archive-row {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-surface);
+}
+
+.archive-row-text {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+}
+
+.archive-row-title {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.archive-row-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.archive-row-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
 }
 
 /* --- Buttons --- */
@@ -1333,11 +1767,15 @@ html, body {
     min-height: 0;
 }
 
-/* Question card wrapper — shrink so it doesn't steal all space from the feed */
+/* Question card wrapper. The agent's question is the call-to-action, so let it
+   take the height it needs and make the history feed yield/scroll instead — but
+   keep a sliver of feed visible and let the card scroll only in the extreme case
+   (more options than fit the whole panel). Previously capped at 50%, which
+   clipped multi-choice questions so the last options needed scrolling. */
 .chat-question-wrap {
     flex: 0 1 auto;
     min-height: 0;
-    max-height: 50%;
+    max-height: calc(100% - 64px);
     overflow-y: auto;
 }
 

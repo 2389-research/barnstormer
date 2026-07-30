@@ -24,11 +24,10 @@
              hx-trigger="load, sse:agent_step_started, sse:agent_step_finished, refreshAgents from:body"
              hx-swap="innerHTML"></div>
     </div>
-    <span class="tooltip command-bar-tooltip">{{ one_liner }}</span>
 </header>
 {% include "partials/phase_stepper.html" %}
 
-<div class="spec-body">
+<div class="spec-body{% if !has_sidebar_content %} sidebar-empty{% endif %}">
     <main class="canvas" id="canvas"
           hx-get="/web/specs/{{ spec_id }}/chat-panel"
           hx-trigger="load" hx-swap="innerHTML">
@@ -109,6 +108,13 @@
             ['context_attached', 'context_summarized', 'context_summarize_failed', 'context_notes_updated', 'context_removed'].forEach(function(e) {
                 compositor.addEventListener('sse:' + e, function() { notify('context'); });
             });
+            // Reveal the sidebar the moment the first card or context file lands.
+            ['card_created', 'context_attached'].forEach(function(e) {
+                compositor.addEventListener('sse:' + e, function() {
+                    var body = compositor.querySelector('.spec-body');
+                    if (body) body.classList.remove('sidebar-empty');
+                });
+            });
         }
 
         {# Polling fallback: if SSE drops, check phase every 15 seconds.
@@ -157,7 +163,6 @@
              hx-trigger="load, sse:agent_step_started, sse:agent_step_finished, refreshAgents from:body"
              hx-swap="innerHTML"></div>
     </div>
-    <span class="tooltip command-bar-tooltip">{{ one_liner }}</span>
 </header>
 {% include "partials/phase_stepper.html" %}
 <div class="view-toggles-row">
@@ -308,7 +313,6 @@
     </div>
     <div class="command-bar-right">
     </div>
-    <span class="tooltip command-bar-tooltip">{{ one_liner }}</span>
 </header>
 {% include "partials/phase_stepper.html" %}
 
