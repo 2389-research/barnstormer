@@ -29,6 +29,8 @@ pub struct AppState {
     pub event_persisters: Arc<RwLock<HashMap<Ulid, tokio::task::JoinHandle<()>>>>,
     pub barnstormer_home: PathBuf,
     pub provider_status: ProviderStatus,
+    /// Per-session countable-token tranche for each spec swarm. `None` is unlimited.
+    pub token_budget: Option<u64>,
 }
 
 /// Type alias for the Arc-wrapped state used with Axum's State extractor.
@@ -36,13 +38,18 @@ pub type SharedState = Arc<AppState>;
 
 impl AppState {
     /// Create a new AppState with the given home directory, provider status, and an empty actor map.
-    pub fn new(barnstormer_home: PathBuf, provider_status: ProviderStatus) -> Self {
+    pub fn new(
+        barnstormer_home: PathBuf,
+        provider_status: ProviderStatus,
+        token_budget: Option<u64>,
+    ) -> Self {
         Self {
             actors: Arc::new(RwLock::new(HashMap::new())),
             swarms: Arc::new(RwLock::new(HashMap::new())),
             event_persisters: Arc::new(RwLock::new(HashMap::new())),
             barnstormer_home,
             provider_status,
+            token_budget,
         }
     }
 }

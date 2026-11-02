@@ -128,6 +128,7 @@ Copy `.env.example` to `.env` and configure:
 |----------|---------|-------------|
 | `BARNSTORMER_HOME` | `~/.barnstormer` | Data directory for event logs, snapshots, and SQLite index |
 | `BARNSTORMER_BIND` | `127.0.0.1:7331` | Listen address |
+| `BARNSTORMER_TOKEN_BUDGET` | `2000000` | Countable-token tranche per spec session (`0` disables the budget) |
 | `BARNSTORMER_PUBLIC_BASE_URL` | derived from `BARNSTORMER_BIND` | Public base URL |
 | `BARNSTORMER_AUTH_TOKEN` | *(none)* | Bearer token for API auth (optional, enables auth middleware) |
 | `BARNSTORMER_ALLOW_REMOTE` | `false` | Allow non-loopback connections (requires auth token) |

@@ -78,6 +78,7 @@ async fn build_state(runtime_config: &RuntimeConfig) -> anyhow::Result<Arc<AppSt
     let state = Arc::new(AppState::new(
         runtime_config.home.clone(),
         ProviderStatus::detect(),
+        runtime_config.token_budget,
     ));
 
     {

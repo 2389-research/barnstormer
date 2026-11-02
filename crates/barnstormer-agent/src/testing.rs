@@ -16,6 +16,7 @@ use mux::llm::{ContentBlock, LlmClient, Request, Response, StopReason, StreamEve
 #[derive(Debug, Clone)]
 pub struct StubLlmClient {
     response_text: String,
+    usage: Usage,
 }
 
 impl StubLlmClient {
@@ -23,6 +24,7 @@ impl StubLlmClient {
     pub fn new(response_text: &str) -> Self {
         Self {
             response_text: response_text.to_owned(),
+            usage: Usage::default(),
         }
     }
 
@@ -32,6 +34,14 @@ impl StubLlmClient {
     /// agent loop to complete without doing anything interesting.
     pub fn done() -> Self {
         Self::new("Done.")
+    }
+
+    /// Create a stub response with explicit provider token usage.
+    pub fn with_usage(response_text: &str, usage: Usage) -> Self {
+        Self {
+            response_text: response_text.to_owned(),
+            usage,
+        }
     }
 }
 
@@ -43,12 +53,7 @@ impl LlmClient for StubLlmClient {
             content: vec![ContentBlock::text(&self.response_text)],
             stop_reason: StopReason::EndTurn,
             model: "stub-model".to_owned(),
-            usage: Usage {
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
-            },
+            usage: self.usage.clone(),
         })
     }
 
@@ -100,5 +105,26 @@ mod tests {
 
         // Verify there are no tool-use blocks (agent should not loop).
         assert!(!resp.has_tool_use());
+    }
+
+    #[tokio::test]
+    async fn stub_with_usage_returns_configured_usage() {
+        let usage = Usage {
+            input_tokens: 11,
+            output_tokens: 7,
+            cache_read_tokens: 999,
+            cache_write_tokens: 13,
+        };
+        let client = StubLlmClient::with_usage("used tokens", usage.clone());
+
+        let response = client
+            .create_message(&Request::new("stub-model"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.usage.input_tokens, usage.input_tokens);
+        assert_eq!(response.usage.output_tokens, usage.output_tokens);
+        assert_eq!(response.usage.cache_read_tokens, usage.cache_read_tokens);
+        assert_eq!(response.usage.cache_write_tokens, usage.cache_write_tokens);
     }
 }

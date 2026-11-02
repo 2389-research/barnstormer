@@ -41,6 +41,7 @@ fn make_state() -> (SharedState, TempDir) {
     let state = Arc::new(AppState::new(
         tmp.path().to_path_buf(),
         empty_provider_status(),
+        None,
     ));
     (state, tmp)
 }
