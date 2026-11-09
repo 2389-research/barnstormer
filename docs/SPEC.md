@@ -217,7 +217,7 @@ Agents run concurrently, but their write commands funnel through the spec actor.
 - `POST /api/specs` → create spec (title, one_liner, goal)
 - `GET /api/specs/{id}/state` → current materialized state
 - `POST /api/specs/{id}/commands` → submit command(s)
-- `GET /api/specs/{id}/events/stream` → SSE stream of events (or WS at `/ws`)
+- `GET /web/specs/{id}/events/stream` → SSE stream of events (under `/web/*` because browsers cannot attach an Authorization header to EventSource; gated by the same cookie that protects the rendered UI)
 - `POST /api/specs/{id}/agents/pause` / `.../resume`
 - `POST /api/specs/{id}/undo` → apply undo
 
