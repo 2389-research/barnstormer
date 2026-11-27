@@ -247,6 +247,55 @@ mod tests {
     }
 
     #[test]
+    fn recover_trims_oversized_undo_stack_from_snapshot() {
+        use barnstormer_core::state::{UNDO_STACK_CAPACITY, UndoEntry};
+
+        let dir = TempDir::new().unwrap();
+        let spec_dir = make_spec_dir(&dir);
+        let spec_id = Ulid::new();
+
+        let mut snap_state = SpecState::new();
+        let total = UNDO_STACK_CAPACITY + 30;
+        for i in 0..total {
+            let card = Card::new("idea".to_string(), format!("Card {i}"), "human".to_string());
+            snap_state.apply(&make_event(
+                i as u64 + 1,
+                spec_id,
+                EventPayload::CardCreated { card },
+            ));
+        }
+        // Simulate a snapshot written by an older version: undo stack beyond the cap.
+        snap_state.undo_stack = (1..=total)
+            .map(|event_id| UndoEntry {
+                event_id: event_id as u64,
+                inverse: Vec::new(),
+            })
+            .collect();
+        assert!(snap_state.undo_stack.len() > UNDO_STACK_CAPACITY);
+
+        let snap_data = SnapshotData {
+            state: snap_state,
+            last_event_id: total as u64,
+            agent_contexts: HashMap::new(),
+            saved_at: Utc::now(),
+        };
+        save_snapshot(&spec_dir.join("snapshots"), &snap_data).unwrap();
+
+        let (state, _) = recover_spec(&spec_dir).unwrap();
+
+        assert_eq!(
+            state.undo_stack.len(),
+            UNDO_STACK_CAPACITY,
+            "recovered state must not carry an oversized undo stack"
+        );
+        assert_eq!(
+            state.undo_stack.last().unwrap().event_id,
+            total as u64,
+            "newest undo entry should survive recovery"
+        );
+    }
+
+    #[test]
     fn recover_repairs_partial_jsonl() {
         let dir = TempDir::new().unwrap();
         let spec_dir = make_spec_dir(&dir);
