@@ -85,7 +85,10 @@ pub fn load_latest_snapshot(dir: &Path) -> Result<Option<SnapshotData>, Snapshot
     match best {
         Some((_, path)) => {
             let contents = fs::read_to_string(&path)?;
-            let data: SnapshotData = serde_json::from_str(&contents)?;
+            let mut data: SnapshotData = serde_json::from_str(&contents)?;
+            // Snapshots written by older versions may carry an unbounded undo
+            // stack; normalize on load so restored state honors the cap.
+            data.state.trim_undo_stack();
             Ok(Some(data))
         }
         None => Ok(None),
@@ -148,6 +151,43 @@ mod tests {
             .expect("should find snapshot");
 
         assert_eq!(loaded.last_event_id, 20);
+    }
+
+    #[test]
+    fn load_trims_oversized_undo_stack_from_snapshot() {
+        use barnstormer_core::state::{UNDO_STACK_CAPACITY, UndoEntry};
+
+        let dir = TempDir::new().unwrap();
+        let mut snap = make_snapshot(30);
+        let total = UNDO_STACK_CAPACITY + 40;
+        snap.state.undo_stack = (1..=total)
+            .map(|event_id| UndoEntry {
+                event_id: event_id as u64,
+                inverse: Vec::new(),
+            })
+            .collect();
+
+        save_snapshot(dir.path(), &snap).unwrap();
+
+        let loaded = load_latest_snapshot(dir.path())
+            .unwrap()
+            .expect("should find snapshot");
+
+        assert_eq!(
+            loaded.state.undo_stack.len(),
+            UNDO_STACK_CAPACITY,
+            "snapshot state must be capped on load regardless of write-time provenance"
+        );
+        assert_eq!(
+            loaded.state.undo_stack.first().unwrap().event_id,
+            (total - UNDO_STACK_CAPACITY) as u64 + 1,
+            "oldest entries should be evicted on load"
+        );
+        assert_eq!(
+            loaded.state.undo_stack.last().unwrap().event_id,
+            total as u64,
+            "newest entry should be retained on load"
+        );
     }
 
     #[test]

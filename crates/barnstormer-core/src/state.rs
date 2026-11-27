@@ -19,6 +19,13 @@ pub struct UndoEntry {
     pub inverse: Vec<EventPayload>,
 }
 
+/// Maximum number of undo entries retained on the undo stack.
+///
+/// The undo stack is serialized into every snapshot, so an unbounded stack
+/// bloats snapshot writes for undo depth nobody will use. Once the cap is
+/// reached, the oldest entries are evicted (rolling window).
+pub const UNDO_STACK_CAPACITY: usize = 100;
+
 /// A file attached as context to the brainstorming phase of a spec.
 /// Tracks the original upload metadata plus an optional agent-generated
 /// summary and user notes. `removed` is a tombstone flag so event history
@@ -91,6 +98,33 @@ impl SpecState {
         Self::default()
     }
 
+    /// Push an undo entry, evicting the oldest entries beyond
+    /// [`UNDO_STACK_CAPACITY`] so the stack stays a rolling window.
+    /// Takes the stack directly so callers can push while holding a
+    /// mutable borrow of another `SpecState` field.
+    fn push_undo(stack: &mut Vec<UndoEntry>, entry: UndoEntry) {
+        stack.push(entry);
+        Self::trim_undo_stack_to(stack);
+    }
+
+    fn trim_undo_stack_to(stack: &mut Vec<UndoEntry>) {
+        if stack.len() > UNDO_STACK_CAPACITY {
+            let excess = stack.len() - UNDO_STACK_CAPACITY;
+            stack.drain(..excess);
+        }
+    }
+
+    /// Enforce [`UNDO_STACK_CAPACITY`] on the current undo stack, evicting the
+    /// oldest entries.
+    ///
+    /// Pushing already trims, but state hydrated from persistence (a snapshot
+    /// written by an older version) can carry a stack beyond the cap. Callers
+    /// that restore state — see `barnstormer-store`'s snapshot loader and
+    /// recovery — invoke this so the invariant holds regardless of provenance.
+    pub fn trim_undo_stack(&mut self) {
+        Self::trim_undo_stack_to(&mut self.undo_stack);
+    }
+
     /// Apply a single event to mutate this state. Each event payload variant
     /// is handled to update the corresponding state fields. Undo entries are
     /// pushed for reversible mutations.
@@ -161,10 +195,13 @@ impl SpecState {
                 let inverse = vec![EventPayload::CardDeleted {
                     card_id: card.card_id,
                 }];
-                self.undo_stack.push(UndoEntry {
-                    event_id: event.event_id,
-                    inverse,
-                });
+                Self::push_undo(
+                    &mut self.undo_stack,
+                    UndoEntry {
+                        event_id: event.event_id,
+                        inverse,
+                    },
+                );
                 self.cards.insert(card.card_id, card.clone());
             }
 
@@ -184,10 +221,13 @@ impl SpecState {
                         card_type: card_type.as_ref().map(|_| card.card_type.clone()),
                         refs: refs.as_ref().map(|_| card.refs.clone()),
                     }];
-                    self.undo_stack.push(UndoEntry {
-                        event_id: event.event_id,
-                        inverse,
-                    });
+                    Self::push_undo(
+                        &mut self.undo_stack,
+                        UndoEntry {
+                            event_id: event.event_id,
+                            inverse,
+                        },
+                    );
 
                     if let Some(t) = title {
                         card.title = t.clone();
@@ -216,10 +256,13 @@ impl SpecState {
                         lane: card.lane.clone(),
                         order: card.order,
                     }];
-                    self.undo_stack.push(UndoEntry {
-                        event_id: event.event_id,
-                        inverse,
-                    });
+                    Self::push_undo(
+                        &mut self.undo_stack,
+                        UndoEntry {
+                            event_id: event.event_id,
+                            inverse,
+                        },
+                    );
 
                     card.lane = lane.clone();
                     card.order = *order;
@@ -230,10 +273,13 @@ impl SpecState {
             EventPayload::CardDeleted { card_id } => {
                 if let Some(card) = self.cards.remove(card_id) {
                     let inverse = vec![EventPayload::CardCreated { card }];
-                    self.undo_stack.push(UndoEntry {
-                        event_id: event.event_id,
-                        inverse,
-                    });
+                    Self::push_undo(
+                        &mut self.undo_stack,
+                        UndoEntry {
+                            event_id: event.event_id,
+                            inverse,
+                        },
+                    );
                 }
             }
 
@@ -324,10 +370,13 @@ impl SpecState {
                 let inverse = vec![EventPayload::ContextRemoved {
                     attachment_id: attachment.attachment_id,
                 }];
-                self.undo_stack.push(UndoEntry {
-                    event_id: event.event_id,
-                    inverse,
-                });
+                Self::push_undo(
+                    &mut self.undo_stack,
+                    UndoEntry {
+                        event_id: event.event_id,
+                        inverse,
+                    },
+                );
                 self.context_attachments.push(attachment.clone());
             }
 
@@ -372,13 +421,16 @@ impl SpecState {
                     .find(|a| a.attachment_id == *attachment_id)
                 {
                     let prior = att.user_notes.clone().unwrap_or_default();
-                    self.undo_stack.push(UndoEntry {
-                        event_id: event.event_id,
-                        inverse: vec![EventPayload::ContextNotesUpdated {
-                            attachment_id: *attachment_id,
-                            notes: prior,
-                        }],
-                    });
+                    Self::push_undo(
+                        &mut self.undo_stack,
+                        UndoEntry {
+                            event_id: event.event_id,
+                            inverse: vec![EventPayload::ContextNotesUpdated {
+                                attachment_id: *attachment_id,
+                                notes: prior,
+                            }],
+                        },
+                    );
                     att.user_notes = if notes.is_empty() {
                         None
                     } else {
@@ -396,12 +448,15 @@ impl SpecState {
                     // Inverse is ContextAttached with the same attachment (un-removed).
                     let mut restored = att.clone();
                     restored.removed = false;
-                    self.undo_stack.push(UndoEntry {
-                        event_id: event.event_id,
-                        inverse: vec![EventPayload::ContextAttached {
-                            attachment: restored,
-                        }],
-                    });
+                    Self::push_undo(
+                        &mut self.undo_stack,
+                        UndoEntry {
+                            event_id: event.event_id,
+                            inverse: vec![EventPayload::ContextAttached {
+                                attachment: restored,
+                            }],
+                        },
+                    );
                     att.removed = true;
                 }
             }
@@ -867,6 +922,140 @@ mod tests {
             0,
             "undo_stack should be empty after UndoApplied"
         );
+    }
+
+    #[test]
+    fn undo_stack_is_capped_with_oldest_evicted() {
+        let mut state = SpecState::new();
+        let spec_id = make_spec_id();
+        let total = UNDO_STACK_CAPACITY + 25;
+
+        for i in 0..total {
+            let card = Card::new(
+                "idea".to_string(),
+                format!("Card {i}"),
+                "agent-1".to_string(),
+            );
+            state.apply(&make_event(
+                i as u64 + 1,
+                spec_id,
+                EventPayload::CardCreated { card },
+            ));
+        }
+
+        assert_eq!(
+            state.undo_stack.len(),
+            UNDO_STACK_CAPACITY,
+            "undo stack must be capped at {UNDO_STACK_CAPACITY} entries"
+        );
+        assert_eq!(
+            state.undo_stack.first().unwrap().event_id,
+            (total - UNDO_STACK_CAPACITY) as u64 + 1,
+            "oldest entries should be evicted"
+        );
+        assert_eq!(
+            state.undo_stack.last().unwrap().event_id,
+            total as u64,
+            "newest entry should be retained"
+        );
+        // All cards are still materialized — eviction only trims undo history.
+        assert_eq!(state.cards.len(), total);
+    }
+
+    #[test]
+    fn undo_after_eviction_reverses_newest_entry() {
+        let mut state = SpecState::new();
+        let spec_id = make_spec_id();
+        let total = UNDO_STACK_CAPACITY + 5;
+        let mut last_card_id = None;
+
+        for i in 0..total {
+            let card = Card::new(
+                "idea".to_string(),
+                format!("Card {i}"),
+                "agent-1".to_string(),
+            );
+            last_card_id = Some(card.card_id);
+            state.apply(&make_event(
+                i as u64 + 1,
+                spec_id,
+                EventPayload::CardCreated { card },
+            ));
+        }
+
+        let entry = state.undo_stack.last().expect("undo entry retained");
+        let target_event_id = entry.event_id;
+        let inverse_events = entry.inverse.clone();
+        state.apply(&make_event(
+            total as u64 + 1,
+            spec_id,
+            EventPayload::UndoApplied {
+                target_event_id,
+                inverse_events,
+            },
+        ));
+
+        assert_eq!(
+            state.cards.len(),
+            total - 1,
+            "undo should remove the most recent card"
+        );
+        assert!(
+            !state.cards.contains_key(&last_card_id.unwrap()),
+            "most recent card should be undone"
+        );
+        assert_eq!(
+            state.undo_stack.len(),
+            UNDO_STACK_CAPACITY - 1,
+            "undo should pop from the capped stack"
+        );
+    }
+
+    #[test]
+    fn trim_undo_stack_caps_oversized_restored_state() {
+        let mut state = SpecState::new();
+        let total = UNDO_STACK_CAPACITY + 50;
+        state.undo_stack = (1..=total)
+            .map(|event_id| UndoEntry {
+                event_id: event_id as u64,
+                inverse: Vec::new(),
+            })
+            .collect();
+
+        state.trim_undo_stack();
+
+        assert_eq!(
+            state.undo_stack.len(),
+            UNDO_STACK_CAPACITY,
+            "restored state must be capped at {UNDO_STACK_CAPACITY} entries"
+        );
+        assert_eq!(
+            state.undo_stack.first().unwrap().event_id,
+            (total - UNDO_STACK_CAPACITY) as u64 + 1,
+            "oldest entries should be evicted"
+        );
+        assert_eq!(
+            state.undo_stack.last().unwrap().event_id,
+            total as u64,
+            "newest entry should be retained"
+        );
+    }
+
+    #[test]
+    fn trim_undo_stack_is_noop_within_capacity() {
+        let mut state = SpecState::new();
+        let total = UNDO_STACK_CAPACITY - 1;
+        state.undo_stack = (1..=total)
+            .map(|event_id| UndoEntry {
+                event_id: event_id as u64,
+                inverse: Vec::new(),
+            })
+            .collect();
+
+        state.trim_undo_stack();
+
+        assert_eq!(state.undo_stack.len(), total);
+        assert_eq!(state.undo_stack.first().unwrap().event_id, 1);
     }
 
     #[test]
